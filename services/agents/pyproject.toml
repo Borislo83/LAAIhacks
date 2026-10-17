@@ -1,0 +1,29 @@
+[project]
+name = "laai-agents"
+version = "0.1.0"
+description = "Fetch.ai uAgents for LAAI smart glasses: price compare, alternatives, reviews"
+readme = "README.md"
+authors = [
+    { name = "Borislo83", email = "Borislo830@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "python-dotenv>=1.2.4",
+    "uagents>=0.26.1",
+]
+
+[project.scripts]
+laai-agents = "laai_agents.main:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
