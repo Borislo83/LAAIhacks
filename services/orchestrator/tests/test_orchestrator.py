@@ -1,0 +1,297 @@
+import json
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from laai_orchestrator.config import Config
+from laai_orchestrator.main import create_app
+from laai_orchestrator.models import PageContext
+from laai_orchestrator.predictor import predict
+from laai_orchestrator.store import Store
+
+USER = uuid4()
+OTHER_USER = uuid4()
+PAGE = {"url": "https://shop.example/sony", "product": "Sony XM5", "current_price": 399}
+DEFAULTS = {
+    "enabled_agents": ["price", "alternatives", "reviews"],
+    "require_confirmation": True,
+    "projection_enabled": True,
+    "text_scale": 1,
+}
+
+
+def config(**overrides):
+    return Config(
+        _env_file=None,
+        **{
+            "supabase_url": "https://supabase.example",
+            "supabase_publishable_key": "public-test",
+            "supabase_secret_key": "secret-test",
+            **overrides,
+        },
+    )
+
+
+class Backend:
+    """HTTP fixture; PostgreSQL invariants are tested separately with PGlite."""
+
+    def __init__(self):
+        self.settings = DEFAULTS.copy()
+        self.rows = {}
+        self.agent_calls = []
+        self.agent_error = False
+        self.storage_error = False
+        self.calls = []
+
+    def handle(self, request):
+        self.calls.append(request)
+        path = request.url.path
+        body = json.loads(request.content) if request.content else {}
+        if path == "/auth/v1/user":
+            token = request.headers.get("authorization")
+            if token == "Bearer valid":
+                return httpx.Response(200, json={"id": str(USER)})
+            if token == "Bearer other":
+                return httpx.Response(200, json={"id": str(OTHER_USER)})
+            return httpx.Response(401, json={})
+        if self.storage_error and path.startswith("/rest/"):
+            return httpx.Response(500, json={"message": "private storage details"})
+        if path == "/rest/v1/rpc/laai_get_settings":
+            return httpx.Response(200, json=self.settings)
+        if path == "/rest/v1/laai_settings":
+            assert "resolution=merge-duplicates" in request.headers["prefer"]
+            self.settings = {k: v for k, v in body.items() if k != "user_id"}
+            return httpx.Response(201, json=[body])
+        if path == "/rest/v1/rpc/laai_create_context":
+            context_id = str(uuid4())
+            tasks = []
+            for item in body["p_tasks"]:
+                row = {
+                    "id": str(uuid4()),
+                    "context_id": context_id,
+                    "user_id": body["p_user_id"],
+                    "status": "predicted",
+                    "created_at": datetime.now(UTC).isoformat(),
+                    **item,
+                }
+                self.rows[row["id"]] = row
+                tasks.append(row)
+            return httpx.Response(
+                200,
+                json={
+                    "context_id": context_id,
+                    "prediction_source": body["p_source"],
+                    "tasks": tasks,
+                },
+            )
+        if path == "/rest/v1/laai_tasks":
+            params = request.url.params
+            rows = [r for r in self.rows.values() if f"eq.{r['user_id']}" == params["user_id"]]
+            if "id" in params:
+                rows = [r for r in rows if f"eq.{r['id']}" == params["id"]]
+            return httpx.Response(200, json=rows)
+        if path == "/rest/v1/rpc/laai_claim_task":
+            row = self.rows.get(body["p_task_id"])
+            if not row or row["user_id"] != body["p_user_id"]:
+                return httpx.Response(404, json={"code": "PT404"})
+            if row["kind"] not in self.settings["enabled_agents"] or (
+                self.settings["require_confirmation"] and not body["p_confirmed"]
+            ):
+                return httpx.Response(403, json={"code": "PT403"})
+            if row["status"] != "predicted":
+                return httpx.Response(409, json={"code": "PT409"})
+            row["status"] = "running"
+            return httpx.Response(200, json=row)
+        if path == "/rest/v1/rpc/laai_finish_task":
+            row = self.rows[body["p_task_id"]]
+            row.update(
+                status="failed" if body["p_error"] else "succeeded",
+                result=body["p_result"],
+                error=body["p_error"],
+            )
+            return httpx.Response(200, json=row)
+        if request.url.host == "127.0.0.1":
+            self.agent_calls.append((path, body))
+            if self.agent_error:
+                return httpx.Response(502, json={"error": "private upstream details"})
+            return httpx.Response(200, json={"summary": "Best price is $299", "offers": []})
+        raise AssertionError(f"Unexpected URL: {request.url}")
+
+
+@pytest.fixture
+def api():
+    backend = Backend()
+    http = httpx.AsyncClient(transport=httpx.MockTransport(backend.handle))
+    with TestClient(create_app(config(), http)) as client:
+        client.headers["Authorization"] = "Bearer valid"
+        yield client, backend
+
+
+def task_id(client):
+    response = client.post("/v1/contexts", json=PAGE)
+    assert response.status_code == 201
+    return response.json()["tasks"][0]["id"]
+
+
+def test_prediction_dispatch_and_restart_history(api):
+    client, backend = api
+    task = task_id(client)
+    result = client.post(f"/v1/tasks/{task}/dispatch", json={"confirmed": True})
+    assert result.status_code == 200
+    assert result.json()["status"] == "succeeded"
+    assert backend.agent_calls == [
+        (
+            "/price",
+            {
+                "product": "Sony XM5",
+                "current_store": None,
+                "current_price": 399,
+            },
+        )
+    ]
+    # A new application instance uses the same persisted Supabase records.
+    http = httpx.AsyncClient(transport=httpx.MockTransport(backend.handle))
+    with TestClient(create_app(config(), http)) as restarted:
+        response = restarted.get(f"/v1/tasks/{task}", headers={"Authorization": "Bearer valid"})
+        assert response.json()["result"]["summary"] == "Best price is $299"
+
+
+def test_confirmation_permission_revocation_and_duplicate_dispatch(api):
+    client, backend = api
+    task = task_id(client)
+    assert client.post(f"/v1/tasks/{task}/dispatch", json={}).status_code == 403
+    backend.settings["enabled_agents"] = []
+    assert client.post(f"/v1/tasks/{task}/dispatch", json={"confirmed": True}).status_code == 403
+    assert backend.agent_calls == []
+    backend.settings["enabled_agents"] = ["price"]
+    assert client.post(f"/v1/tasks/{task}/dispatch", json={"confirmed": True}).status_code == 200
+    assert client.post(f"/v1/tasks/{task}/dispatch", json={"confirmed": True}).status_code == 409
+    assert len(backend.agent_calls) == 1
+
+
+def test_user_isolation_and_spoofed_identity(api):
+    client, backend = api
+    task = task_id(client)
+    client.headers["Authorization"] = "Bearer other"
+    assert client.get("/v1/tasks").json() == []
+    assert client.get(f"/v1/tasks/{task}").status_code == 404
+    assert client.post(f"/v1/tasks/{task}/dispatch", json={"confirmed": True}).status_code == 404
+    assert client.post("/v1/contexts", json={**PAGE, "user_id": str(USER)}).status_code == 422
+    assert backend.agent_calls == []
+
+
+def test_auth_and_input_validation(api):
+    client, _ = api
+    assert client.get("/health").status_code == 200
+    client.headers.pop("Authorization")
+    assert client.get("/v1/settings").status_code == 401
+    client.headers["Authorization"] = "Bearer invalid"
+    assert client.get("/v1/settings").status_code == 401
+    client.headers["Authorization"] = "Bearer valid"
+    assert client.post("/v1/contexts", json={**PAGE, "current_price": -1}).status_code == 422
+    assert client.get("/v1/tasks?limit=101").status_code == 422
+
+
+def test_settings_and_non_shopping_context(api):
+    client, _ = api
+    settings = {**DEFAULTS, "enabled_agents": ["reviews"], "text_scale": 1.5}
+    assert client.put("/v1/settings", json=settings).json() == settings
+    assert client.get("/v1/settings").json() == settings
+    tasks = client.post("/v1/contexts", json=PAGE).json()["tasks"]
+    assert [t["kind"] for t in tasks] == ["reviews"]
+    page = {"url": "https://books.example/chapter-1", "title": "Chapter one"}
+    assert client.post("/v1/contexts", json=page).json()["tasks"] == []
+
+
+def test_agent_failure_is_persisted(api):
+    client, backend = api
+    task = task_id(client)
+    backend.agent_error = True
+    response = client.post(f"/v1/tasks/{task}/dispatch", json={"confirmed": True})
+    assert response.json()["status"] == "failed"
+    assert "private" not in response.text
+    assert client.get(f"/v1/tasks/{task}").json()["status"] == "failed"
+
+
+def test_storage_failure_stops_execution(api):
+    client, backend = api
+    task = task_id(client)
+    backend.storage_error = True
+    response = client.post(f"/v1/tasks/{task}/dispatch", json={"confirmed": True})
+    assert response.status_code == 503
+    assert "private" not in response.text
+    assert backend.agent_calls == []
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"product": "Sony XM5", "tasks": ["execute_shell"]},
+        {"product": "Sony XM5", "tasks": ["reviews"], "url": "https://evil.example"},
+        "invalid-json",
+    ],
+)
+async def test_invalid_llm_prediction_falls_back(reply):
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": reply if isinstance(reply, str) else json.dumps(reply)}}
+                ],
+            },
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as http:
+        prediction, source = await predict(
+            PageContext(**PAGE), config(asi_one_api_key="test"), http
+        )
+    assert source == "rules"
+    assert prediction.product == "Sony XM5"
+    assert len(prediction.tasks) == 3
+
+
+async def test_llm_routing_deduplicates_and_preserves_explicit_product():
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "product": "Different product",
+                                    "tasks": ["reviews", "reviews"],
+                                }
+                            )
+                        }
+                    }
+                ],
+            },
+        )
+    )
+    async with httpx.AsyncClient(transport=transport) as http:
+        prediction, source = await predict(
+            PageContext(**PAGE), config(asi_one_api_key="test"), http
+        )
+    assert source == "asi_one"
+    assert prediction.product == "Sony XM5"
+    assert prediction.tasks == ["reviews"]
+
+
+async def test_secret_key_never_replaces_auth_user_token():
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json=[])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        await Store(config(), http).tasks(USER, 20, 0)
+    assert requests[0].headers["apikey"] == "secret-test"
+    assert "authorization" not in requests[0].headers
+    assert requests[0].url.params["user_id"] == f"eq.{USER}"
