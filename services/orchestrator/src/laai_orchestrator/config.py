@@ -12,3 +12,5 @@ class Config(BaseSettings):
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
     asi_one_api_key: SecretStr = SecretStr("")
     asi_one_model: str = "asi1-mini"
+    # Local prototyping only: lets /v1/chat run without a Supabase sign-in.
+    chat_auth_required: bool = True

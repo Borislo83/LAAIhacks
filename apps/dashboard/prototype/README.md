@@ -17,3 +17,15 @@ The Paper file "Focal — Design" holds the static E2 frame (still in the older 
   - Price: dashes slide along scanlines
   - Reader: bars flicker
 - **Motion:** orbs loop. The glance sequence (gaze → intent → agent → answer, counting to 0.8 s) plays once on load and on "Replay the glance". Reduced-motion settings turn all of it off.
+
+## Agent dashboard
+
+`dashboard.html` is a simple Studio page for talking to the Fetch.ai agents, in the same style.
+
+- **Chat:** plain-language questions go to the orchestrator's `POST /v1/chat` (:8001), which picks the agents.
+- **Direct:** fill in the fields and call the agents' REST routes on the Bureau (:8000) yourself.
+- Usage (calls, average time, errors) is counted in this browser only.
+
+Run `uv run laai-agents` in `services/agents` and `uv run laai-orchestrator` in `services/orchestrator`
+(with `CHAT_AUTH_REQUIRED=false` and `http://localhost:5173` in `CORS_ORIGINS` in its `.env`). Then serve this
+folder over HTTP, for example `python3 -m http.server 5173`, and open `/dashboard.html`. Opening it as a file can't reach the agents.

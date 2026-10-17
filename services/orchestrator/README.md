@@ -41,6 +41,13 @@ Request bodies cannot supply a user ID. Expired tokens return 401; clients refre
 | GET | `/v1/tasks?limit=20&offset=0` | Newest tasks and results for the current user |
 | GET | `/v1/tasks/{id}` | Poll a task and retrieve its result |
 | POST | `/v1/tasks/{id}/dispatch` | Claim a predicted task and await its agent result |
+| POST | `/v1/chat` | Plain-language chat; ASI:One picks which agents to call |
+
+`/v1/chat` takes `{"messages": [{"role": "user", "content": "..."}]}` (up to 20 turns) and returns
+`reply`, `source` (`asi_one` or `rules`), and `calls`: each agent's `kind`, `payload`, `result`,
+`error`, and `ms`. ASI:One chooses tools, and the backend validates every argument before calling
+an agent. A store or price the user never typed is dropped. Without a key, keywords choose agents.
+Chat saves nothing. For local prototyping only, `CHAT_AUTH_REQUIRED=false` skips the sign-in.
 
 Example context body:
 

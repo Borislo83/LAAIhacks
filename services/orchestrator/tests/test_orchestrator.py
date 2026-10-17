@@ -295,3 +295,104 @@ async def test_secret_key_never_replaces_auth_user_token():
     assert requests[0].headers["apikey"] == "secret-test"
     assert "authorization" not in requests[0].headers
     assert requests[0].url.params["user_id"] == f"eq.{USER}"
+
+
+def asi_tool_call(name, arguments):
+    message = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {"id": "t1", "type": "function", "function": {"name": name, "arguments": arguments}}
+        ],
+    }
+    return httpx.Response(200, json={"choices": [{"message": message}]})
+
+
+def asi_text(text):
+    return httpx.Response(
+        200, json={"choices": [{"message": {"role": "assistant", "content": text}}]}
+    )
+
+
+def chat_client(backend, llm=None, **overrides):
+    def handle(request):
+        if request.url.host == "api.asi1.ai":
+            return llm(json.loads(request.content))
+        return backend.handle(request)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    return TestClient(create_app(config(**overrides), http))
+
+
+def test_chat_requires_auth_unless_disabled():
+    backend = Backend()
+    body = {"messages": [{"role": "user", "content": "Sony XM5 reviews"}]}
+    with chat_client(backend) as client:
+        assert client.post("/v1/chat", json=body).status_code == 401
+    with chat_client(backend, chat_auth_required=False) as client:
+        assert client.post("/v1/chat", json=body).status_code == 200
+
+
+def test_chat_llm_routes_tools_to_agents():
+    backend = Backend()
+    seen = []
+
+    def llm(request):
+        seen.append(request)
+        if len(seen) == 1:
+            return asi_tool_call("get_reviews", '{"product": "Sony WH-1000XM5", "url": "http://x"}')
+        assert request["messages"][-1]["role"] == "tool"
+        return asi_text("Rated 4.6.")
+
+    with chat_client(backend, llm, asi_one_api_key="k") as client:
+        response = client.post(
+            "/v1/chat",
+            json={"messages": [{"role": "user", "content": "are the xm5 any good?"}]},
+            headers={"Authorization": "Bearer valid"},
+        )
+    data = response.json()
+    assert data["source"] == "asi_one" and data["reply"] == "Rated 4.6."
+    assert backend.agent_calls == [("/reviews", {"product": "Sony WH-1000XM5"})]
+    assert data["calls"][0]["kind"] == "reviews"
+
+
+def test_chat_ignores_unknown_tools_and_falls_back_without_llm():
+    backend = Backend()
+    calls = 0
+
+    def llm(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return asi_tool_call("fetch_url", '{"product": "x"}')
+        return asi_text("Sorry.")
+
+    with chat_client(backend, llm, asi_one_api_key="k", chat_auth_required=False) as client:
+        body = {"messages": [{"role": "user", "content": "hi"}]}
+        assert client.post("/v1/chat", json=body).json()["reply"] == "Sorry."
+    assert backend.agent_calls == []
+
+    with chat_client(backend, chat_auth_required=False) as client:
+        body = {"messages": [{"role": "user", "content": "Sony XM5 price"}]}
+        data = client.post("/v1/chat", json=body).json()
+    assert data["source"] == "rules"
+    assert [path for path, _ in backend.agent_calls] == ["/price"]
+
+
+def test_chat_drops_prices_and_stores_the_user_never_said():
+    backend = Backend()
+    seen = []
+
+    def llm(request):
+        seen.append(request)
+        if len(seen) == 1:
+            args = '{"product": "AirPods Pro 2", "current_store": "Best Buy", "current_price": 249}'
+            return asi_tool_call("compare_prices", args)
+        return asi_text("Cheaper at Amazon.")
+
+    with chat_client(backend, llm, asi_one_api_key="k", chat_auth_required=False) as client:
+        text = "I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?"
+        client.post("/v1/chat", json={"messages": [{"role": "user", "content": text}]})
+    assert backend.agent_calls == [
+        ("/price", {"product": "AirPods Pro 2", "current_store": "Best Buy", "current_price": None})
+    ]
