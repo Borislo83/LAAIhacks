@@ -129,6 +129,22 @@ h2 em{color:var(--muted);font-size:1.12em}
 .mini .bd{display:grid;grid-template-columns:1fr 240px;gap:14px;padding:12px 14px}
 .mini .list{margin-top:0}
 .mini .pc{margin-top:0}
+.sources{grid-column:1/-1;border-top:1px solid var(--hair);margin-top:4px;padding-top:8px;font-size:12px;color:var(--muted)}
+.sources summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:4px 0;user-select:none}
+.sources summary::-webkit-details-marker{display:none}
+.sources summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+.sources[open] summary::before{transform:rotate(45deg)}
+.sources summary:hover{color:var(--ink)}
+.sources .when{margin-left:auto;font-family:var(--mono);font-size:11px}
+.sources .note{margin:6px 0 4px;line-height:18px}
+.sources ul{list-style:none;margin:0;padding:0}
+.sources li{border-top:1px solid var(--hair)}
+.sources li a{display:flex;justify-content:space-between;gap:12px;padding:7px 0;color:var(--ink);text-decoration:none}
+.sources li a span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sources li a:hover span:first-child{text-decoration:underline}
+.sources .host{font-family:var(--mono);font-size:11px;color:var(--muted);flex-shrink:0}
+.warn-note{grid-column:1/-1;font-size:12px;color:var(--warn)}
+.mini .hd .tag{font-weight:400;color:var(--muted)}
 .composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--hair)}
 .composer input{flex:1;min-width:0;font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
 .starters{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 4px}
@@ -265,24 +281,41 @@ function renderUsage(){
 $("#reset").onclick=()=>{usage=freshUsage();store.set("focal.usage",usage);renderUsage()};
 
 /* calls */
-async function call(k,body){
+const ATTEMPTS=3;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// POST JSON, retrying unreachable or server errors up to ATTEMPTS times.
+async function postJSON(url,body,onRetry){
+  let last;
+  for(let i=0;i<ATTEMPTS;i++){
+    if(i){onRetry?.(i+1);await sleep(1000*i)}
+    try{
+      const r=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+      if(r.status>=400&&r.status<500)throw Object.assign(new Error(`HTTP ${r.status}`),{final:true});
+      if(!r.ok)throw new Error(`HTTP ${r.status}`);
+      return await r.json();
+    }catch(e){last=e;if(e.final)break}
+  }
+  throw last;
+}
+async function call(k,body,onRetry){
   const t0=performance.now();
   try{
-    const r=await fetch(base.value.replace(/\/$/,"")+AGENTS[k].route,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
-    const data=await r.json();
-    return {ok:true,data,ms:performance.now()-t0};
-  }catch(e){return {ok:false,error:e.message||String(e),ms:performance.now()-t0}}
+    const data=await postJSON(base.value.replace(/\/$/,"")+AGENTS[k].route,body,onRetry);
+    return {ok:true,reachable:true,data,ms:performance.now()-t0};
+  }catch(e){return {ok:false,error:`${e.message||e} after ${ATTEMPTS} tries`,ms:performance.now()-t0}}
 }
 function record(k,res){
-  const u=usage.agents[k]; u.calls++; u.ms+=res.ms; if(!res.ok)u.errors++;
+  const u=usage.agents[k]; u.calls++; u.ms+=res.ms; if(!res.ok||res.data?.error)u.errors++;
   store.set("focal.usage",usage); renderUsage();
-  health[k]=res.ok; renderRoster();
+  // A failed web search is a result, not an outage.
+  health[k]=res.reachable??res.ok; renderRoster();
 }
 async function checkAll(){
   KEYS.forEach(k=>delete health[k]); renderRoster();
-  await Promise.all(KEYS.map(async k=>{const r=await call(k,{product:"ping"});health[k]=r.ok}));
-  renderRoster();
+  // Any HTTP answer means the Bureau is up; no live search is spent on a ping.
+  let up=false;
+  try{await fetch(base.value.replace(/\/$/,"")+"/",{signal:AbortSignal.timeout(4000)});up=true}catch{}
+  KEYS.forEach(k=>health[k]=up); renderRoster();
 }
 $("#ping").onclick=checkAll;
 
@@ -298,8 +331,8 @@ const VIEW={
   },
   alternatives(d){
     const a=d.alternatives[0];
-    const rows=d.alternatives.map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.product)} <span class="muted" style="font-size:12px">· ${esc(x.reason)}</span></span><span class="p">${money(x.price)} ${x.rating!=null?`· ${x.rating}★`:""}</span></a>`).join("");
-    return {lens:lens(d.product,a?`Try ${a.product}`:"No candidate established",a?`${money(a.price)} ${a.rating!=null?`· ${a.rating}★`:""} · open source`:"review sources or adjust the budget"),body:rows?`<div class="list">${rows}</div>`:`<p class="muted">${esc(d.summary)}</p>`};
+    const rows=d.alternatives.map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.product)} <span class="muted" style="font-size:12px">· ${esc(x.reason)}</span></span><span class="p">${x.price==null?"price ↗":money(x.price)} ${x.rating!=null?`· ${x.rating}★`:""}</span></a>`).join("");
+    return {lens:lens(d.product,a?`Try ${a.product}`:"No candidate established",a?`${a.price==null?"check price":money(a.price)} ${a.rating!=null?`· ${a.rating}★`:""} · open source`:"review sources or adjust the budget"),body:rows?`<div class="list">${rows}</div>`:`<p class="muted">${esc(d.summary)}</p>`};
   },
   reviews(d){
     const pc=(d.pros.length||d.cons.length)?`<div class="pc"><div><h4>Pros</h4><ul>${d.pros.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div><div><h4>Cons</h4><ul>${d.cons.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div></div>`:"";
@@ -309,8 +342,13 @@ const VIEW={
 };
 
 function evidence(d){
-  const links=(d.sources||[]).filter(s=>{try{return new URL(s.url).protocol==="https:"}catch{return false}}).slice(0,8).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)} ↗</a>`).join("<br>");
-  return `<div class="muted" style="font-size:12px;margin-top:12px">${esc(d.notice||"")}<br>${esc(d.data_source||"")} ${esc(d.fetched_at||"")}<br>${links}</div>`;
+  const seen=new Set();
+  const items=(d.sources||[]).map(s=>{try{const u=new URL(s.url);return u.protocol==="https:"?{s,u}:null}catch{return null}})
+    .filter(x=>x&&!seen.has(x.u.href)&&seen.add(x.u.href)).slice(0,10);
+  if(!items.length&&!d.notice)return "";
+  const when=d.fetched_at?new Date(d.fetched_at).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}):"";
+  const links=items.map(({s,u})=>`<li><a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"><span>${esc(s.title.split(/\.\.\.|…/)[0].trim()||u.hostname)}</span><span class="host">${esc(u.hostname.replace(/^www\./,""))} ↗</span></a></li>`).join("");
+  return `<details class="sources"><summary>Sources (${items.length})<span class="when">${esc(d.data_source||"")}${when?" · "+esc(when):""}</span></summary>${d.notice?`<p class="note">${esc(d.notice)}</p>`:""}<ul>${links}</ul></details>`;
 }
 
 function cardShell(k){
@@ -324,7 +362,7 @@ function fill(k,res){
   const box=el.querySelector(".thinking");
   if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the Bureau running at ${esc(base.value)}?</p></div>`;return}
   const v=VIEW[k](res.data);
-  box.outerHTML=`<div class="bd"><div><p class="summary">${esc(res.data.summary)}</p>${v.body}${evidence(res.data)}</div>${v.lens}</div>`;
+  box.outerHTML=`<div class="bd"><div><p class="summary">${esc(res.data.summary)}</p>${v.body}</div>${v.lens}${evidence(res.data)}</div>`;
 }
 
 /* form */
@@ -342,7 +380,9 @@ $("#ask").onsubmit=async e=>{
   const ks=KEYS.filter(k=>selected.has(k));
   $("#results").innerHTML=ks.map(cardShell).join("");
   $("#go").disabled=true;
-  await Promise.all(ks.map(async k=>{const r=await call(k,bodies[k]);record(k,r);fill(k,r)}));
+  await Promise.all(ks.map(async k=>{
+    const r=await call(k,bodies[k],n=>{const t=$("#card-"+k+" .thinking");if(t)t.textContent=`${AGENTS[k].name}: retrying (${n} of ${ATTEMPTS})…`});
+    record(k,r);fill(k,r)}));
   $("#go").disabled=false;
 };
 
@@ -371,12 +411,14 @@ function bubble(html,cls){
   const el=document.createElement("div"); el.className="msg "+cls; el.innerHTML=html;
   $("#thread").appendChild(el); el.scrollIntoView({block:"end",behavior:"smooth"}); return el;
 }
-function miniCard(c){
+function miniCard(c,i,all){
   const a=AGENTS[c.kind];
-  const head=`<div class="hd">${orb(a.v,22,true)}<b>${a.name}</b><span class="ms">${c.ms} ms</span></div>`;
+  const tag=c.kind==="reviews"&&all.filter(x=>x.kind==="reviews").length>1?` <span class="tag">· ${esc(c.result?.product||c.payload?.product||"")}</span>`:"";
+  const head=`<div class="hd">${orb(a.v,22,true)}<b>${a.name}${tag}</b><span class="ms">${c.ms} ms</span></div>`;
   if(!c.result)return `<div class="mini">${head}<div class="bd" style="grid-template-columns:1fr"><p class="err">${esc(c.error||"No result")}</p></div></div>`;
   const v=VIEW[c.kind](c.result);
-  return `<div class="mini">${head}<div class="bd"><div>${v.body||`<p class="muted" style="font-size:14px">${esc(c.result.summary)}</p>`}</div>${v.lens}${evidence(c.result)}</div></div>`;
+  const warn=c.result.error?`<p class="warn-note">${esc(c.result.error)}. The agent is fine; the free web search refused this request. Try again in a moment.</p>`:"";
+  return `<div class="mini">${head}<div class="bd"><div>${v.body||`<p class="muted" style="font-size:14px">${esc(c.result.summary)}</p>`}</div>${v.lens}${warn}${evidence(c.result)}</div></div>`;
 }
 $("#chat-form").onsubmit=async e=>{
   e.preventDefault();
@@ -386,16 +428,15 @@ $("#chat-form").onsubmit=async e=>{
   convo.push({role:"user",content:text});
   const pending=bubble(`${orb(2,28)}<div class="body"><p class="muted">Choosing agents…</p></div>`,"bot");
   try{
-    const r=await fetch(orch.value.replace(/\/$/,"")+"/v1/chat",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({messages:convo.slice(-20)})});
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
-    const d=await r.json();
-    d.calls.forEach(c=>record(c.kind,{ok:!c.error,ms:c.ms}));
+    const d=await postJSON(orch.value.replace(/\/$/,"")+"/v1/chat",{messages:convo.slice(-20)},
+      n=>pending.querySelector(".body").innerHTML=`<p class="muted">Couldn't reach the orchestrator, retrying (${n} of ${ATTEMPTS})…</p>`);
+    d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
     const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
     pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
   }catch(err){
     convo.pop();
-    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">Couldn't reach the orchestrator at ${esc(orch.value)} (${esc(err.message)}). Is it running?</p></div>`;
+    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">Couldn't reach the orchestrator at ${esc(orch.value)} after ${ATTEMPTS} tries (${esc(err.message)}). Is it running?</p></div>`;
   }
   pending.scrollIntoView({block:"end",behavior:"smooth"});
   $("#send").disabled=false; input.focus();

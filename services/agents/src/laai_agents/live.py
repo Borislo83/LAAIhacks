@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from urllib.parse import quote_plus
 
 from . import catalog
 from .models import (
@@ -30,34 +31,44 @@ def matches_product(title: str, product: str) -> bool:
     )
 
 
-async def compare(req):
-    from .merchants import best_offer, fetch_offers, rank, snippet_offer
+async def _candidates(sources, name):
+    from .merchants import fetch_offers, snippet_offer
 
-    name = product_name(req.product)
-    # Stage 1: two queries widen the pool; every result naming the product is a candidate.
-    sources, meta = await search(f"{name} price USD")
-    try:
-        more, _ = await search(f"buy {name} online store")
-    except SearchUnavailable:
-        more = []
-    seen = {s.url for s in sources}
-    sources += [s for s in more if s.url not in seen]
-    meta["sources"] = sources
     leads = [s for s in sources if matches_product(f"{s.title} {s.snippet}", name)]
-    urls = list(dict.fromkeys(s.url for s in leads))[:8]
+    urls = list(dict.fromkeys(s.url for s in leads))[:5]
     page_offers = [
         offer
         for group in await asyncio.gather(*(fetch_offers(url, name) for url in urls))
         for offer in group
     ]
     read = {o.url for o in page_offers}
-    snippet_offers = [
+    return page_offers + [
         offer
         for s in leads
         if s.url not in read and (offer := snippet_offer(s, name))
     ]
+
+
+async def compare(req):
+    from .merchants import best_offer, rank
+
+    name = product_name(req.product)
+    # Stage 1: every result naming the product is a candidate, from any store.
+    sources, meta = await search(f"{name} price USD")
+    offers = await _candidates(sources, name)
+    if not offers:
+        # A second, store-focused query widens the pool only when the first found nothing.
+        try:
+            more, _ = await search(f"buy {name} online store")
+        except SearchUnavailable:
+            more = []
+        seen = {s.url for s in sources}
+        more = [s for s in more if s.url not in seen]
+        sources += more
+        offers = await _candidates(more, name)
+    meta["sources"] = sources
     # Stage 2: rank by trust, then price; only clear mismatches were dropped.
-    offers = rank(page_offers + snippet_offers)
+    offers = rank(offers)
     best = best_offer(offers)
     if best is None:
         summary = (
@@ -103,14 +114,23 @@ async def alternatives(req):
         *(compare(PriceCompareRequest(product=p.name)) for p in candidates[:3]),
         return_exceptions=True,
     )
-    options = []
-    for result in results:
-        if isinstance(result, Exception) or not result.best:
+    priced, unpriced = [], []
+    for product, result in zip(candidates, results):
+        best = None if isinstance(result, Exception) else result.best
+        if best is None:
+            # Stores often block automated reads; keep the candidate, flag the price.
+            unpriced.append(
+                Alternative(
+                    product=product.name,
+                    price=None,
+                    url=_research_url(product.name),
+                    reason="Same category; no store price could be read, check it yourself",
+                )
+            )
             continue
-        best = result.best
         if req.max_price is not None and best.price >= req.max_price:
             continue
-        options.append(
+        priced.append(
             Alternative(
                 product=best.product,
                 price=best.price,
@@ -119,14 +139,23 @@ async def alternatives(req):
             )
         )
         sources.extend(result.sources)
-    options.sort(key=lambda a: a.price)
-    summary = (
-        f"Candidate {budget}: {options[0].product} at ${options[0].price:.2f}. "
-        "Check availability and final checkout price at the source."
-        if options
-        else f"Found alternative research sources {budget}. No matching alternative "
-        "price was established; review the linked sources before choosing."
-    )
+    priced.sort(key=lambda a: a.price)
+    options = priced + unpriced
+    if priced:
+        summary = (
+            f"Candidate {budget}: {priced[0].product} at ${priced[0].price:.2f}. "
+            "Check availability and final checkout price at the source."
+        )
+    elif unpriced:
+        summary = (
+            f"Alternatives to consider: {', '.join(a.product for a in unpriced)}. "
+            f"Stores didn't share prices with the search, so check each is {budget}."
+        )
+    else:
+        summary = (
+            f"Found alternative research sources {budget}, but no known products in the "
+            "same category; review the linked sources before choosing."
+        )
     meta["sources"] = list({s.url: s for s in sources}.values())[:20]
     return AlternativesResponse(
         product=name,
@@ -134,6 +163,10 @@ async def alternatives(req):
         summary=summary,
         **meta,
     )
+
+
+def _research_url(product: str) -> str:
+    return "https://duckduckgo.com/?q=" + quote_plus(f"{product} price")
 
 
 async def reviews(req):

@@ -56,6 +56,101 @@ async def test_coordinator_delegates_all_specialists_and_budget():
     assert await coordinator.parse_request("consider this product") is None
 
 
+async def test_coordinator_retries_failed_specialists_three_times(monkeypatch):
+    monkeypatch.setattr(coordinator, "RETRY_DELAY", 0)
+    tries = {}
+
+    class Context:
+        async def send_and_receive(self, destination, message, response_type, timeout):
+            tries[destination] = tries.get(destination, 0) + 1
+            if destination == "price":
+                raise TimeoutError  # never answers
+            extra = {"alternatives": []} if response_type is AlternativesResponse else {}
+            error = "search down" if tries[destination] < 3 else None
+            return response_type(product="x", summary="s", error=error, **extra), None
+
+    result = await coordinator.consider(
+        Context(),
+        {"laai-price-compare": "price", "laai-reviews": "reviews", "laai-alternatives": "alts"},
+        ConsiderRequest(product="Sony WH-1000XM5"),
+    )
+    assert tries == {"price": 3, "reviews": 3, "alts": 3}
+    assert result.reviews.error is None and result.alternatives.error is None
+    assert result.price is None and "price" in result.errors
+
+
+async def test_coordinator_compares_reviews_with_top_alternative():
+    from laai_agents.models import Alternative, ReviewsResponse
+
+    class Context:
+        def __init__(self):
+            self.reviewed = []
+
+        async def send_and_receive(self, destination, message, response_type, timeout):
+            if response_type is AlternativesResponse:
+                return response_type(
+                    product="Sony WH-1000XM5",
+                    summary="alts",
+                    alternatives=[
+                        Alternative(product="Bose QuietComfort Ultra", url="https://x.example", reason="r")
+                    ],
+                ), None
+            if response_type is ReviewsResponse:
+                self.reviewed.append(message.product)
+                return response_type(product=message.product, summary="r"), None
+            return response_type(product=message.product, summary="p", offers=[]), None
+
+    ctx = Context()
+    result = await coordinator.consider(
+        ctx,
+        {"laai-price-compare": "p", "laai-reviews": "r", "laai-alternatives": "a"},
+        ConsiderRequest(product="Sony WH-1000XM5", max_price=300),
+    )
+    assert sorted(ctx.reviewed) == ["Bose QuietComfort Ultra", "Sony WH-1000XM5"]
+    assert result.alternative_reviews.product == "Bose QuietComfort Ultra"
+    assert "Reviews compared" in result.summary
+
+
+async def test_alternatives_keep_candidates_when_stores_hide_prices(monkeypatch):
+    async def search(query):
+        return [], {"sources": [], "data_source": "ddgs", "notice": "n"}
+
+    async def no_price(req):
+        return PriceCompareResponse(product=req.product, offers=[], summary="none")
+
+    monkeypatch.setattr(live, "search", search)
+    monkeypatch.setattr(live, "compare", no_price)
+    from laai_agents.models import AlternativesRequest
+
+    result = await live.alternatives(AlternativesRequest(product="Sony XM5", max_price=300))
+    assert result.alternatives and all(a.price is None for a in result.alternatives)
+    assert "Alternatives to consider" in result.summary
+
+
+async def test_free_search_retries_other_backends_and_caches(monkeypatch):
+    import ddgs
+
+    from laai_agents import search as search_module
+
+    calls = []
+
+    class FakeDDGS:
+        def __init__(self, timeout):
+            pass
+
+        def text(self, query, region, max_results, backend):
+            calls.append(backend)
+            if backend == search_module.BACKENDS[0]:
+                raise ddgs.exceptions.DDGSException("rate limited")
+            return [{"title": "t", "href": "https://a.example/p", "body": "b"}]
+
+    monkeypatch.setattr(ddgs, "DDGS", FakeDDGS)
+    monkeypatch.setattr(search_module, "_CACHE", {})
+    first = await search_module.free_search("cache me")
+    second = await search_module.free_search("cache me")
+    assert first == second and calls == list(search_module.BACKENDS[:2])
+
+
 async def test_live_prices_keep_snippet_leads_but_reject_variants_and_ambiguity(
     monkeypatch,
 ):
