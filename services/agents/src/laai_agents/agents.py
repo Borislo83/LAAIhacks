@@ -31,7 +31,9 @@ def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
     if port is not None:
         kwargs = {"port": port, "endpoint": [f"http://127.0.0.1:{port}/submit"]}
     # Set AGENTVERSE_MAILBOX=1 to reach the agent through Agentverse (needed for ASI:One).
-    if os.getenv("AGENTVERSE_MAILBOX") == "1":
+    if os.getenv("AGENTVERSE_MAILBOX") == "1" or (
+        name == "focal-shopping-assistant" and os.getenv("COORDINATOR_AGENTVERSE_MAILBOX") == "1"
+    ):
         kwargs = {"port": port, "mailbox": True} if port else {"mailbox": True}
     return Agent(name=name, seed=seed, publish_agent_details=True, **kwargs)
 

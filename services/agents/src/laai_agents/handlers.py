@@ -1,6 +1,18 @@
 """Agent logic as plain async functions, independent of the uAgents runtime."""
 
+import os
+
 from . import catalog, llm
+from .search import SearchUnavailable
+
+
+def demo_mode() -> bool:
+    mode = os.getenv("PRODUCT_DATA_MODE", "live")
+    if mode not in {"live", "demo"}:
+        raise ValueError("PRODUCT_DATA_MODE must be live or demo")
+    return mode == "demo"
+
+
 from .models import (
     Alternative,
     AlternativesRequest,
@@ -18,13 +30,34 @@ def _not_found(product: str) -> str:
 
 
 async def compare_prices(req: PriceCompareRequest) -> PriceCompareResponse:
+    if not demo_mode():
+        from .live import compare
+
+        try:
+            return await compare(req)
+        except SearchUnavailable:
+            return PriceCompareResponse(
+                product=req.product,
+                offers=[],
+                data_source="unavailable",
+                notice=None,
+                error="Live price search unavailable",
+                summary="Live price search unavailable; no prices were substituted.",
+            )
     product = catalog.find_product(req.product)
     if product is None:
-        return PriceCompareResponse(product=req.product, offers=[], summary=_not_found(req.product))
+        return PriceCompareResponse(
+            product=req.product, offers=[], summary=_not_found(req.product)
+        )
 
     offers = sorted(
         (
-            Offer(product=product.name, store=store, price=price, url=catalog.offer_url(store, product))
+            Offer(
+                product=product.name,
+                store=store,
+                price=price,
+                url=catalog.offer_url(store, product),
+            )
             for store, price in product.offers.items()
         ),
         key=lambda o: o.price,
@@ -47,9 +80,25 @@ async def compare_prices(req: PriceCompareRequest) -> PriceCompareResponse:
 
 
 async def find_alternatives(req: AlternativesRequest) -> AlternativesResponse:
+    if not demo_mode():
+        from .live import alternatives
+
+        try:
+            return await alternatives(req)
+        except SearchUnavailable:
+            return AlternativesResponse(
+                product=req.product,
+                alternatives=[],
+                data_source="unavailable",
+                notice=None,
+                error="Live alternative search unavailable",
+                summary="Live alternative search unavailable; no recommendation was fabricated.",
+            )
     product = catalog.find_product(req.product)
     if product is None:
-        return AlternativesResponse(product=req.product, alternatives=[], summary=_not_found(req.product))
+        return AlternativesResponse(
+            product=req.product, alternatives=[], summary=_not_found(req.product)
+        )
 
     base_price = min(product.offers.values())
     alternatives = []
@@ -75,10 +124,25 @@ async def find_alternatives(req: AlternativesRequest) -> AlternativesResponse:
         summary = f"Consider {top.product} (${top.price:.2f}): {top.reason}."
     else:
         summary = f"{product.name} is already the best value in its category."
-    return AlternativesResponse(product=product.name, alternatives=alternatives, summary=summary)
+    return AlternativesResponse(
+        product=product.name, alternatives=alternatives, summary=summary
+    )
 
 
 async def get_reviews(req: ReviewsRequest) -> ReviewsResponse:
+    if not demo_mode():
+        from .live import reviews
+
+        try:
+            return await reviews(req)
+        except SearchUnavailable:
+            return ReviewsResponse(
+                product=req.product,
+                data_source="unavailable",
+                notice=None,
+                error="Live review search unavailable",
+                summary="Live review search unavailable; no ratings were substituted.",
+            )
     product = catalog.find_product(req.product)
     if product is None:
         return ReviewsResponse(product=req.product, summary=_not_found(req.product))

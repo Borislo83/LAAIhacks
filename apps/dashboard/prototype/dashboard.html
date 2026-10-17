@@ -180,7 +180,7 @@ h2 em{color:var(--muted);font-size:1.12em}
       <section id="pane-chat">
         <div class="chat">
           <div class="thread" id="thread" aria-live="polite">
-            <div class="msg bot"><span data-orb-logo></span><div class="body"><p>Ask me about something you're looking at. I'll check prices, alternatives or reviews, whichever helps.</p></div></div>
+            <div class="msg bot"><span data-orb-logo></span><div class="body"><p>Ask me to consider a product. I’ll check prices, reviews, and alternatives within your budget.</p></div></div>
           </div>
           <div class="starters" id="starters"></div>
           <form class="composer" id="chat-form"><input id="chat-input" placeholder="Is the Sony XM5 worth it, or is there something cheaper?" autocomplete="off" required><button class="btn dark" id="send">Send</button></form>
@@ -294,12 +294,12 @@ const VIEW={
     const rows=d.offers.map(o=>`<a href="${esc(o.url)}" target="_blank" rel="noopener" class="${best&&o.store===best.store?"best":""}"><span>${esc(o.store)}</span><span class="p">${money(o.price)}</span></a>`).join("");
     const main=best?`${money(best.price)} at ${best.store}`:"No offers";
     const sub=d.savings>0?`${money(d.savings)} less than here · nod to open`:d.savings!=null?"already the best price":`${d.offers.length} sellers checked`;
-    return {lens:lens(d.product,main,sub),body:rows?`<div class="list">${rows}</div>`:""};
+    return {lens:lens(d.product,main,sub),body:rows?`<div class="list">${rows}</div>`:`<p class="muted">${esc(d.summary)}</p>`};
   },
   alternatives(d){
     const a=d.alternatives[0];
-    const rows=d.alternatives.map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.product)} <span class="muted" style="font-size:12px">· ${esc(x.reason)}</span></span><span class="p">${money(x.price)} · ${x.rating}★</span></a>`).join("");
-    return {lens:lens(d.product,a?`Try ${a.product}`:"Nothing better found",a?`${money(a.price)} · ${a.rating}★ · tilt to open`:"you picked well"),body:rows?`<div class="list">${rows}</div>`:""};
+    const rows=d.alternatives.map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.product)} <span class="muted" style="font-size:12px">· ${esc(x.reason)}</span></span><span class="p">${money(x.price)} ${x.rating!=null?`· ${x.rating}★`:""}</span></a>`).join("");
+    return {lens:lens(d.product,a?`Try ${a.product}`:"No candidate established",a?`${money(a.price)} ${a.rating!=null?`· ${a.rating}★`:""} · open source`:"review sources or adjust the budget"),body:rows?`<div class="list">${rows}</div>`:`<p class="muted">${esc(d.summary)}</p>`};
   },
   reviews(d){
     const pc=(d.pros.length||d.cons.length)?`<div class="pc"><div><h4>Pros</h4><ul>${d.pros.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div><div><h4>Cons</h4><ul>${d.cons.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div></div>`:"";
@@ -307,6 +307,11 @@ const VIEW={
     return {lens:lens(d.product,d.rating!=null?`${d.rating}★ from ${d.review_count.toLocaleString()} reviews`:"No reviews found",d.pros[0]?`“${d.pros[0].toLowerCase()}” · glance down`:""),body:pc+link};
   },
 };
+
+function evidence(d){
+  const links=(d.sources||[]).filter(s=>{try{return new URL(s.url).protocol==="https:"}catch{return false}}).slice(0,8).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)} ↗</a>`).join("<br>");
+  return `<div class="muted" style="font-size:12px;margin-top:12px">${esc(d.notice||"")}<br>${esc(d.data_source||"")} ${esc(d.fetched_at||"")}<br>${links}</div>`;
+}
 
 function cardShell(k){
   const a=AGENTS[k];
@@ -319,7 +324,7 @@ function fill(k,res){
   const box=el.querySelector(".thinking");
   if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the Bureau running at ${esc(base.value)}?</p></div>`;return}
   const v=VIEW[k](res.data);
-  box.outerHTML=`<div class="bd"><div><p class="summary">${esc(res.data.summary)}</p>${v.body}</div>${v.lens}</div>`;
+  box.outerHTML=`<div class="bd"><div><p class="summary">${esc(res.data.summary)}</p>${v.body}${evidence(res.data)}</div>${v.lens}</div>`;
 }
 
 /* form */
@@ -358,7 +363,7 @@ orch.onchange=()=>store.set("focal.orch",orch.value.trim());
 const logoOrb=()=>`<svg class="orb" width="28" height="28" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>`;
 document.querySelectorAll("[data-orb-logo]").forEach(e=>e.outerHTML=logoOrb());
 const convo=[];
-const STARTERS=["Is the Sony XM5 worth it?","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100"];
+const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100"];
 $("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
 document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
 
@@ -371,7 +376,7 @@ function miniCard(c){
   const head=`<div class="hd">${orb(a.v,22,true)}<b>${a.name}</b><span class="ms">${c.ms} ms</span></div>`;
   if(!c.result)return `<div class="mini">${head}<div class="bd" style="grid-template-columns:1fr"><p class="err">${esc(c.error||"No result")}</p></div></div>`;
   const v=VIEW[c.kind](c.result);
-  return `<div class="mini">${head}<div class="bd"><div>${v.body||`<p class="muted" style="font-size:14px">${esc(c.result.summary)}</p>`}</div>${v.lens}</div></div>`;
+  return `<div class="mini">${head}<div class="bd"><div>${v.body||`<p class="muted" style="font-size:14px">${esc(c.result.summary)}</p>`}</div>${v.lens}${evidence(c.result)}</div></div>`;
 }
 $("#chat-form").onsubmit=async e=>{
   e.preventDefault();
@@ -386,7 +391,7 @@ $("#chat-form").onsubmit=async e=>{
     const d=await r.json();
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
-    const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
+    const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
     pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
   }catch(err){
     convo.pop();
