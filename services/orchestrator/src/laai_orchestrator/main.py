@@ -5,11 +5,13 @@ from uuid import UUID
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .chat import call_agent, chat
+from .chat import buyer_call, call_agent, chat
 from .config import Config
 from .models import (
+    BuyerPreparation,
     ChatReply,
     ChatRequest,
     ContextResponse,
@@ -22,8 +24,8 @@ from .models import (
     agent_payload,
 )
 from .predictor import predict
-from .preferences import read_preferences
-from .preferences import router as preferences_router
+from .preferences import read_preferences, router as preferences_router
+from .progress import event_stream
 from .store import Store
 from .workflow import install_workflow
 
@@ -53,12 +55,7 @@ async def current_user(
         roles = identity.get("app_metadata", {}).get("laai_roles", ["web"])
         if not isinstance(roles, list):
             roles = []
-        request.state.actor_roles = {role for role in roles if isinstance(role, str)} & {
-            "web",
-            "agent",
-            "g2",
-            "executor",
-        }
+        request.state.actor_roles = {role for role in roles if isinstance(role, str)} & {"web", "agent", "g2", "executor"}
         return UUID(identity["id"])
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
         raise HTTPException(503, "Supabase authentication unavailable") from exc
@@ -177,7 +174,58 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
         if body.messages[-1].role != "user":
             raise HTTPException(422, "Last message must be from the user")
         preferences = await read_preferences(request, user) if user else None
-        return await chat(body.messages, config, request.app.state.http, preferences=preferences)
+        return await chat(
+            body.messages,
+            config,
+            request.app.state.http,
+            purchase_confirmation=body.purchase_confirmation,
+            preferences=preferences,
+        )
+
+    @app.post("/v1/chat/stream", response_class=StreamingResponse)
+    async def stream_chat(
+        body: ChatRequest, request: Request, user: Annotated[UUID, Depends(current_user)]
+    ):
+        if body.messages[-1].role != "user":
+            raise HTTPException(422, "Last message must be from the user")
+        preferences = await read_preferences(request, user)
+        return StreamingResponse(
+            event_stream(
+                lambda emit: chat(
+                    body.messages, config, request.app.state.http, emit, body.purchase_confirmation,
+                    preferences=preferences
+                )
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/v1/agents/{kind}/stream", response_class=StreamingResponse)
+    async def stream_agent(
+        kind: TaskKind,
+        body: ToolArgs,
+        request: Request,
+        _: Annotated[UUID | None, Depends(current_user)],
+    ):
+        return StreamingResponse(
+            event_stream(lambda emit: call_agent(kind, body, config, request.app.state.http, emit)),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/v1/buyer/prepare/stream", response_class=StreamingResponse)
+    async def stream_buyer(
+        body: BuyerPreparation, request: Request, _: Annotated[UUID | None, Depends(current_user)]
+    ):
+        if not body.product and not body.url:
+            raise HTTPException(422, "Supply a product name or Amazon product URL")
+        return StreamingResponse(
+            event_stream(
+                lambda emit: buyer_call(body.model_dump(), config, request.app.state.http, emit)
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     app.include_router(preferences_router(current_user))
     install_workflow(app, current_user)

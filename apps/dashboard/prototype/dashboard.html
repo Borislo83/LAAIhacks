@@ -141,6 +141,12 @@ body[data-density="compact"] .agent{padding:10px}
 .composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--hair)}
 .composer input{flex:1;min-width:0;font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
 .starters{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 4px}
+.work{border:1px solid var(--hair);border-radius:10px;padding:12px;font-size:13px;background:var(--paper)}
+.work-row{display:flex;gap:9px;align-items:center;padding:9px 0;border-bottom:1px solid var(--hair)}
+.work-row:last-child{border-bottom:0}.work-row .detail{flex:1;min-width:0}.work-row small{display:block;color:var(--muted);overflow-wrap:anywhere}
+.work-row .phase{font:11px var(--mono);color:var(--muted)}.work-row[data-state="completed"] .phase{color:#139A4E}.work-row[data-state="failed"] .phase{color:#B83A32}
+.work-history{margin-top:10px;color:var(--muted);font-size:11px;max-height:180px;overflow:auto}.work-history p{margin:4px 0}
+.demo-checkout{padding:14px;border:1px solid var(--hair);border-radius:10px;display:flex;flex-direction:column;gap:10px}.demo-checkout strong{color:#139A4E}
 
 @media (max-width:980px){
   .mini .bd{grid-template-columns:1fr}
@@ -182,6 +188,7 @@ body[data-density="compact"] .agent{padding:10px}
       </div>
       <div class="row"><button class="btn dark" id="sign-in" type="submit">Sign in</button><button class="btn" id="sign-up" type="submit">Create account</button></div>
     </form>
+    </details>
     <p id="auth-message" role="status" style="margin-top:12px;font-size:14px"></p>
     <button type="button" class="linkbtn" id="auth-retry" hidden>Reconnect</button>
   </section>
@@ -231,10 +238,12 @@ body[data-density="compact"] .agent{padding:10px}
       <div class="ask">
         <form id="ask">
           <div class="row">
-            <div class="field big"><label for="product">Product you're looking at</label><input id="product" required placeholder="e.g. Sony XM5" autocomplete="off"></div>
+            <div class="field big"><label for="product">Product you're looking at</label><input id="product" placeholder="e.g. Sony XM5" autocomplete="off"></div>
             <div class="field"><label for="store">Current store</label><input id="store" placeholder="Best Buy" autocomplete="off"></div>
             <div class="field"><label for="price">Current price</label><input id="price" type="number" step="0.01" min="0" placeholder="$"></div>
             <div class="field"><label for="max">Max for alternatives</label><input id="max" type="number" step="0.01" min="0" placeholder="$"></div>
+            <div class="field big"><label for="amazon-url">Amazon product link (real cart)</label><input id="amazon-url" type="url" placeholder="https://www.amazon.com/dp/…"></div>
+            <div class="field"><label for="quantity">Quantity</label><input id="quantity" type="number" min="1" max="20" value="1"></div>
           </div>
           <div class="row" style="justify-content:space-between;align-items:center">
             <div class="chips"><span>Try</span></div>
@@ -255,6 +264,7 @@ const AGENTS={
   price:{v:3,name:"Price agent",id:"laai-price-compare",route:"/price",what:"Prices across stores"},
   alternatives:{v:2,name:"Alternatives agent",id:"laai-alternatives",route:"/alternatives",what:"Cheaper or better-rated picks"},
   reviews:{v:1,name:"Reviews agent",id:"laai-reviews",route:"/reviews",what:"Rating, pros and cons"},
+  buyer:{v:3,name:"Amazon cart agent",id:"focal-amazon-buyer-demo",route:"/buy/prepare",what:"Real cart · stops before checkout"},
 };
 const KEYS=Object.keys(AGENTS);
 const TRY=["Sony XM5","AirPods Pro 2","Bose QC Ultra","Nothing Ear (a)"];
@@ -282,9 +292,10 @@ document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=`<svg width="22"
 
 /* state */
 let auth, preferences;
-let selected=new Set(store.get("focal.selected",KEYS));
+let selected=new Set(store.get("focal.selected",["price","alternatives","reviews"]));
 const health={};
 let usage=store.get("focal.usage",null)||freshUsage();
+KEYS.forEach(k=>usage.agents[k]??={calls:0,ms:0,errors:0});
 function freshUsage(){return {since:Date.now(),agents:Object.fromEntries(KEYS.map(k=>[k,{calls:0,ms:0,errors:0}]))}}
 
 function renderRoster(){
@@ -305,14 +316,13 @@ function renderUsage(){
 $("#reset").onclick=()=>{usage=freshUsage();store.set("focal.usage",usage);renderUsage()};
 
 /* calls */
-async function call(k,body){
+async function call(k,body,onProgress){
   const t0=performance.now();
   try{
-    const r=await auth.request("/v1/agents/"+k,{method:"POST",body:JSON.stringify(body)});
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
-    const data=await r.json();
-    if(data.error||!data.result)throw new Error(data.error||"No result");
-    return {ok:true,data:data.result,ms:performance.now()-t0};
+    const path=k==="buyer"?"/v1/buyer/prepare/stream":`/v1/agents/${k}/stream`;
+    const result=await readEvents(path,body,onProgress||(()=>{}));
+    if(result.result?.confirmation_token)activePurchase=result.result.confirmation_token;
+    return {ok:!!result.result&&!result.error,data:result.result,error:result.error,ms:performance.now()-t0};
   }catch(e){return {ok:false,error:e.message||String(e),ms:performance.now()-t0}}
 }
 function record(k,res){
@@ -330,6 +340,11 @@ $("#ping").onclick=checkAll;
 /* rendering answers */
 function lens(top,main,sub){return `<div class="lensbox"><span class="l1">${esc(top)}</span><span class="l2">${esc(main)}</span><span>${esc(sub)}</span></div>`}
 const VIEW={
+  buyer(d){
+    const candidates=(d.candidates||[]).map(c=>`<button type="button" class="chip" data-buy-link="${esc(c.url)}" data-product="${esc(d.product)}" data-quantity="${d.quantity}">${esc(c.title)} →</button>`).join("");
+    const confirm=d.status==="cart_review"?`<button type="button" class="btn dark" data-confirm-buy="${esc(d.confirmation_token)}">Add to real Amazon cart</button>`:"";
+    return {lens:lens("AMAZON · CART ONLY",d.status==="cart_added"?"Verified in Amazon cart":"Review cart addition", "No real order or payment"),body:`<div class="demo-checkout"><strong>REAL AMAZON CART · no checkout</strong><p>${esc(d.product)} · quantity ${d.quantity}</p><p>${esc(d.summary)}</p>${d.selected_url?`<a href="${esc(d.selected_url)}" target="_blank" rel="noopener noreferrer">View Amazon listing ↗</a>`:""}${candidates}${d.search_url?`<a href="${esc(d.search_url)}" target="_blank" rel="noopener noreferrer">Search Amazon ↗</a>`:""}${confirm}${d.cart_url?`<p>Verified in the Amazon agent’s Chrome window. Use that window to review your cart.</p>`:""}</div>`};
+  },
   price(d){
     const best=d.best;
     const rows=d.offers.map(o=>`<a href="${esc(o.url)}" target="_blank" rel="noopener" class="${best&&o.store===best.store?"best":""}"><span>${esc(o.store)}</span><span class="p">${money(o.price)}</span></a>`).join("");
@@ -373,17 +388,21 @@ $(".chips").insertAdjacentHTML("beforeend",TRY.map(t=>`<button type="button" cla
 document.querySelectorAll("[data-try]").forEach(b=>b.onclick=()=>{$("#product").value=b.dataset.try;$("#ask").requestSubmit()});
 $("#ask").onsubmit=async e=>{
   e.preventDefault();
-  const product=$("#product").value.trim(); if(!product||!selected.size)return;
+  const product=$("#product").value.trim(),amazonUrl=$("#amazon-url").value.trim();
+  if(!product&&!amazonUrl)return;
+  if(!product&&amazonUrl){selected=new Set(["buyer"]);renderRoster()}
+  if(!selected.size)return;
   const num=id=>{const v=$(id).value;return v===""?null:Number(v)};
   const bodies={
     price:{product,current_store:$("#store").value.trim()||null,current_price:num("#price")},
     alternatives:{product,max_price:num("#max")},
     reviews:{product},
+    buyer:{product:product||null,url:amazonUrl||null,quantity:Number($("#quantity").value)||1},
   };
   const ks=KEYS.filter(k=>selected.has(k));
   $("#results").innerHTML=ks.map(cardShell).join("");
   $("#go").disabled=true;
-  await Promise.all(ks.map(async k=>{const r=await call(k,bodies[k]);record(k,r);fill(k,r)}));
+  await Promise.all(ks.map(async k=>{const progress=makeProgress($("#card-"+k+" .thinking"));const r=await call(k,bodies[k],progress.update);progress.finish(r.ok);record(k,r);fill(k,r);$("#card-"+k).append(progress.el)}));
   $("#go").disabled=false;
 };
 
@@ -404,6 +423,7 @@ orch.onchange=()=>store.set("focal.orch",orch.value.trim());
 const logoOrb=()=>`<svg class="orb" width="28" height="28" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>`;
 document.querySelectorAll("[data-orb-logo]").forEach(e=>e.outerHTML=logoOrb());
 const convo=[];
+let activePurchase=null;
 const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100"];
 $("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
 document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
@@ -419,28 +439,79 @@ function miniCard(c){
   const v=VIEW[c.kind](c.result);
   return `<div class="mini">${head}<div class="bd"><div>${v.body||`<p class="muted" style="font-size:14px">${esc(c.result.summary)}</p>`}</div>${v.lens}${evidence(c.result)}</div></div>`;
 }
+async function readEvents(path,body,onProgress){
+  const response=await auth.request(path,{method:"POST",headers:{"accept":"text/event-stream"},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)});
+  if(!response.ok)throw new Error(`HTTP ${response.status}`);
+  if(!response.body)throw new Error("Streaming is unavailable in this browser");
+  const reader=response.body.getReader(),decoder=new TextDecoder();let buffer="",result=null;
+  function consume(frame){
+    const raw=frame.split("\n").filter(line=>line.startsWith("data:")).map(line=>line.slice(5).trimStart()).join("\n");
+    if(!raw)return;
+    const event=JSON.parse(raw);
+    if(event.type==="progress")onProgress(event);
+    if(event.type==="error")throw new Error(event.message);
+    if(event.type==="result")result=event.data;
+  }
+  try{
+    while(true){const {value,done}=await reader.read();buffer+=decoder.decode(value,{stream:!done}).replace(/\r\n/g,"\n");let split;while((split=buffer.indexOf("\n\n"))!==-1){consume(buffer.slice(0,split));buffer=buffer.slice(split+2)}if(done)break}
+    if(buffer.trim())consume(buffer);
+    if(!result)throw new Error("Connection interrupted before completion; the request was not retried");
+    return result;
+  }finally{await reader.cancel().catch(()=>{});reader.releaseLock();response.authComplete?.()}
+}
+function makeProgress(container){
+  const started=performance.now(),rows=new Map();
+  const el=document.createElement("div");el.className="work";el.setAttribute("aria-live","polite");
+  el.innerHTML='<b class="work-title">Live agent activity</b><div class="work-rows"></div><details class="work-history"><summary>Activity log</summary><div></div></details>';
+  container.replaceChildren(el);
+  function update(event){
+    const key=event.kind;if(key!=="coordinator"&&!AGENTS[key])return;
+    let row=rows.get(key);
+    if(!row){row=document.createElement("div");row.className="work-row";row.innerHTML=`${orb(AGENTS[key]?.v||2,24)}<span class="detail"><b></b><small></small></span><span class="phase"></span>`;row.querySelector("b").textContent=key==="coordinator"?"Focal coordinator":AGENTS[key].name;el.querySelector(".work-rows").append(row);rows.set(key,row)}
+    row.dataset.state=event.stage;row.querySelector("small").textContent=event.message||"";row.querySelector(".phase").textContent=event.stage.replaceAll("_"," ");row.querySelector(".orb").classList.toggle("idle",["completed","failed","review_ready"].includes(event.stage));
+    const line=document.createElement("p");line.textContent=`${((performance.now()-started)/1000).toFixed(1)}s · ${key} · ${event.message}`;el.querySelector(".work-history div").append(line);
+    if(el.querySelector(".work-history div").children.length>100)el.querySelector(".work-history div").firstChild.remove();
+    if(event.result&&AGENTS[key]){let slot=el.querySelector(`[data-partial="${key}"]`);if(!slot){slot=document.createElement("div");slot.dataset.partial=key;el.append(slot)}slot.innerHTML=miniCard({kind:key,result:event.result,error:event.result.error,ms:event.ms||0})}
+  }
+  function finish(ok){el.querySelector(".work-title").textContent=`${ok?"Request finished":"Request interrupted"} · ${((performance.now()-started)/1000).toFixed(1)}s`;rows.forEach((row,key)=>{if(!["completed","failed","review_ready"].includes(row.dataset.state)){row.querySelector(".phase").textContent=ok&&key==="coordinator"?"completed":ok?"finished":"interrupted";row.querySelector(".orb").classList.add("idle")}});el.querySelectorAll("[data-partial]").forEach(slot=>slot.remove())}
+  return {el,update,finish};
+}
 $("#chat-form").onsubmit=async e=>{
   e.preventDefault();
   const input=$("#chat-input"), text=input.value.trim(); if(!text)return;
   input.value=""; $("#send").disabled=true; $("#starters").hidden=true;
   bubble(esc(text),"user");
   convo.push({role:"user",content:text});
-  const pending=bubble(`${orb(2,28)}<div class="body"><p class="muted">Choosing agents…</p></div>`,"bot");
+  const pending=bubble(`${logoOrb()}<div class="body"><div class="progress-host"></div></div>`,"bot");
+  const progress=makeProgress(pending.querySelector(".progress-host"));
+  progress.update({kind:"coordinator",stage:"connecting",message:"Connecting to the agent workflow"});
   try{
-    const r=await auth.request("/v1/chat",{method:"POST",body:JSON.stringify({messages:convo.slice(-20)})});
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
-    const d=await r.json();
+    const d=await readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update);
+    d.calls.forEach(c=>{if(c.result?.confirmation_token)activePurchase=c.result.confirmation_token;if(c.result?.status==="cart_added")activePurchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
+    progress.finish(true);
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
-    const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
+    const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
     pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
+    pending.querySelector(".body").append(progress.el);
   }catch(err){
     convo.pop();
-    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">Couldn't reach the orchestrator at ${esc(orch.value)} (${esc(err.message)}). Is it running?</p></div>`;
+    progress.finish(false);
+    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">${esc(err.message)}. No automatic retry was sent.</p></div>`;
+    pending.querySelector(".body").append(progress.el);
   }
   pending.scrollIntoView({block:"end",behavior:"smooth"});
   $("#send").disabled=false; input.focus();
 };
+
+document.addEventListener("click",e=>{
+  const listing=e.target.closest("[data-buy-link]"),confirmation=e.target.closest("[data-confirm-buy]");
+  if(!listing&&!confirmation)return;if($("#send").disabled)return;
+  setMode("chat");
+  if(confirmation){activePurchase=confirmation.dataset.confirmBuy;$("#chat-input").value="confirm add to cart"}
+  else{$("#chat-input").value=`Prepare Amazon cart addition for ${listing.dataset.product}, quantity ${listing.dataset.quantity}: ${listing.dataset.buyLink}`}
+  $("#chat-form").requestSubmit();
+});
 
 renderRoster(); renderUsage();
 auth=setupAuth({
@@ -448,6 +519,7 @@ auth=setupAuth({
   onUserChange(session){
     preferences?.setUser(session?.user?.id);
     convo.length=0;
+    activePurchase=null;
     $("#thread").innerHTML='<div class="msg bot"><div class="body"><p>Ask me to consider a product. I’ll check prices, reviews, and alternatives within your budget.</p></div></div>';
     $("#results").innerHTML='<div class="empty">Answers from the agents show up here.</div>';
     $("#starters").hidden=false;
@@ -455,7 +527,6 @@ auth=setupAuth({
     $("#product").value="";
   }
 });
-
 preferences=setupPreferences({request:(...args)=>auth.request(...args)});
 </script>
 </body>
