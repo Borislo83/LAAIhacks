@@ -14,8 +14,8 @@ export function setupAuth({endpoint, onUserChange}) {
       generation++;
       pending.forEach(controller => controller.abort());
       pending.clear();
-      onUserChange();
       userId = nextId;
+      onUserChange(session);
     }
     const signedIn = Boolean(nextId);
     el('workspace').hidden = !signedIn;
@@ -124,6 +124,12 @@ export function setupAuth({endpoint, onUserChange}) {
         if (started !== generation) throw new Error('Your session changed. Try again.');
         streaming = response.ok && response.headers.get('content-type')?.includes('text/event-stream');
         response.authComplete = () => pending.delete(controller);
+        const readJSON = response.json.bind(response);
+        response.json = async () => {
+          const value = await readJSON();
+          if (started !== generation) throw new Error('Your session changed. Try again.');
+          return value;
+        };
         return response;
       } finally {if (!streaming) pending.delete(controller);}
     },

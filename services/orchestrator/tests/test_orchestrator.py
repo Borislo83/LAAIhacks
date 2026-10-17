@@ -40,6 +40,8 @@ class Backend:
 
     def __init__(self):
         self.settings = DEFAULTS.copy()
+        self.preferences = {"display_density": "comfortable", "shopping_priority": "balanced",
+            "proactive_enabled": True, "notes": "", "updated_at": "2026-10-17T00:00:00Z"}
         self.rows = {}
         self.agent_calls = []
         self.agent_error = False
@@ -59,6 +61,10 @@ class Backend:
             return httpx.Response(401, json={})
         if self.storage_error and path.startswith("/rest/"):
             return httpx.Response(500, json={"message": "private storage details"})
+        if path == "/rest/v1/rpc/laai_preferences":
+            if body.get("p_preferences") is not None:
+                self.preferences.update(body["p_preferences"])
+            return httpx.Response(200, json=self.preferences)
         if path == "/rest/v1/rpc/laai_get_settings":
             return httpx.Response(200, json=self.settings)
         if path == "/rest/v1/laai_settings":

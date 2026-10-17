@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .chat import chat, call_agent
+from .chat import call_agent, chat
 from .config import Config
 from .models import (
     ChatReply,
@@ -22,6 +22,8 @@ from .models import (
     agent_payload,
 )
 from .predictor import predict
+from .preferences import read_preferences
+from .preferences import router as preferences_router
 from .store import Store
 from .workflow import install_workflow
 
@@ -51,7 +53,12 @@ async def current_user(
         roles = identity.get("app_metadata", {}).get("laai_roles", ["web"])
         if not isinstance(roles, list):
             roles = []
-        request.state.actor_roles = {role for role in roles if isinstance(role, str)} & {"web", "agent", "g2", "executor"}
+        request.state.actor_roles = {role for role in roles if isinstance(role, str)} & {
+            "web",
+            "agent",
+            "g2",
+            "executor",
+        }
         return UUID(identity["id"])
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
         raise HTTPException(503, "Supabase authentication unavailable") from exc
@@ -117,7 +124,8 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
     async def context(page: PageContext, request: Request, user: User):
         store = request.app.state.store
         settings = await store.settings(user)
-        prediction, source = await predict(page, config, request.app.state.http)
+        preferences = await read_preferences(request, user)
+        prediction, source = await predict(page, config, request.app.state.http, preferences)
         tasks = [
             {"kind": kind, "payload": agent_payload(kind, prediction.product, page)}
             for kind in (prediction.tasks if prediction else [])
@@ -164,12 +172,14 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
     async def chat_route(
         body: ChatRequest,
         request: Request,
-        _: Annotated[UUID | None, Depends(chat_user)],
+        user: Annotated[UUID | None, Depends(chat_user)],
     ):
         if body.messages[-1].role != "user":
             raise HTTPException(422, "Last message must be from the user")
-        return await chat(body.messages, config, request.app.state.http)
+        preferences = await read_preferences(request, user) if user else None
+        return await chat(body.messages, config, request.app.state.http, preferences=preferences)
 
+    app.include_router(preferences_router(current_user))
     install_workflow(app, current_user)
     return app
 

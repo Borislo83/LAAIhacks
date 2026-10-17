@@ -72,7 +72,16 @@ h2 em{color:var(--muted);font-size:1.12em}
 .row{display:flex;gap:10px;flex-wrap:wrap}
 .field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:140px}
 .field label{font-size:12px;color:var(--muted)}
-.field input{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
+.field input,.field select,.field textarea{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
+.field textarea{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
+.field textarea{resize:vertical;line-height:1.5;width:100%}
+.preference-form{display:flex;flex-direction:column;gap:14px;margin-top:16px}
+.preference-form fieldset{border:0;display:flex;flex-direction:column;gap:14px}
+.preference-form legend{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.preference-toggle{font-size:13px;display:flex;align-items:center;gap:8px}
+body[data-density="compact"] .thread{gap:12px;padding:14px}
+body[data-density="compact"] .card .bd{padding:12px}
+body[data-density="compact"] .agent{padding:10px}
 .field.big{flex:3;min-width:240px}
 .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .chips span{font-size:12px;color:var(--muted)}
@@ -188,6 +197,21 @@ h2 em{color:var(--muted);font-size:1.12em}
         <table><thead><tr><th>Agent</th><th class="n">Calls</th><th class="n">Avg</th><th class="n">Errors</th></tr></thead><tbody id="usage"></tbody></table>
         <div class="foot"><span id="usage-since"></span><button class="linkbtn" id="reset" type="button">Reset</button></div>
       </div>
+      <section class="usage" aria-labelledby="preferences-title">
+        <h2 id="preferences-title">Your <em>preferences.</em></h2>
+        <form id="preferences-form" class="preference-form">
+          <fieldset id="preferences-fields" disabled>
+            <legend>Saved account preferences</legend>
+            <div class="field"><label for="display-density">Display density</label><select id="display-density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></div>
+            <div class="field"><label for="shopping-priority">Shopping priority</label><select id="shopping-priority"><option value="balanced">Balance price and quality</option><option value="price">Find the best value</option><option value="quality">Prioritize quality</option></select></div>
+            <label class="preference-toggle"><input id="proactive-enabled" type="checkbox">Suggest tasks from page content</label>
+            <div class="field"><label for="user-notes">Private notes</label><textarea id="user-notes" rows="4" maxlength="10000" placeholder="Anything you want to keep for later"></textarea><small class="muted">Saved to your account. Notes stay out of agent prompts.</small></div>
+            <button type="submit" class="btn dark" id="save-preferences">Save preferences</button>
+          </fieldset>
+          <p id="preferences-status" role="status" class="muted" style="font-size:12px">Sign in to load your preferences.</p>
+          <button type="button" id="preferences-retry" class="linkbtn" hidden>Try loading again</button>
+        </form>
+      </section>
     </aside>
 
     <main>
@@ -226,6 +250,7 @@ h2 em{color:var(--muted);font-size:1.12em}
 
 <script type="module">
 import { setupAuth } from "./auth.js";
+import { setupPreferences } from "./preferences.js";
 const AGENTS={
   price:{v:3,name:"Price agent",id:"laai-price-compare",route:"/price",what:"Prices across stores"},
   alternatives:{v:2,name:"Alternatives agent",id:"laai-alternatives",route:"/alternatives",what:"Cheaper or better-rated picks"},
@@ -256,7 +281,7 @@ function orb(v,size=40,idle=false){
 document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=`<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
 
 /* state */
-let auth;
+let auth, preferences;
 let selected=new Set(store.get("focal.selected",KEYS));
 const health={};
 let usage=store.get("focal.usage",null)||freshUsage();
@@ -420,7 +445,8 @@ $("#chat-form").onsubmit=async e=>{
 renderRoster(); renderUsage();
 auth=setupAuth({
   endpoint:orch,
-  onUserChange(){
+  onUserChange(session){
+    preferences?.setUser(session?.user?.id);
     convo.length=0;
     $("#thread").innerHTML='<div class="msg bot"><div class="body"><p>Ask me to consider a product. I’ll check prices, reviews, and alternatives within your budget.</p></div></div>';
     $("#results").innerHTML='<div class="empty">Answers from the agents show up here.</div>';
@@ -430,6 +456,7 @@ auth=setupAuth({
   }
 });
 
+preferences=setupPreferences({request:(...args)=>auth.request(...args)});
 </script>
 </body>
 </html>
