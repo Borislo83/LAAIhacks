@@ -50,7 +50,8 @@ class AlternativesRequest(Model):
 
 class Alternative(Model):
     product: str
-    price: float
+    # None when no store price could be read; the product is still a valid lead.
+    price: float | None = None
     rating: float | None = None
     url: str
     reason: str
@@ -87,6 +88,8 @@ class ConsiderResponse(Model):
     price: PriceCompareResponse | None = None
     reviews: ReviewsResponse | None = None
     alternatives: AlternativesResponse | None = None
+    # Reviews for the top alternative, so the two products can be compared.
+    alternative_reviews: ReviewsResponse | None = None
     errors: dict[str, str] = Field(default_factory=dict)
     timings_ms: dict[str, int] = Field(default_factory=dict)
     summary: str

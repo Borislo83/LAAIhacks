@@ -255,7 +255,7 @@ def best_offer(offers: list[Offer]) -> Offer | None:
 async def fetch_offers(url: str, product: str) -> list[Offer]:
     try:
         async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=12), headers=HEADERS
+            timeout=aiohttp.ClientTimeout(total=7), headers=HEADERS
         ) as session:
             for _ in range(MAX_REDIRECTS + 1):
                 if not fetchable(url) or not await public_host(urlsplit(url).hostname):

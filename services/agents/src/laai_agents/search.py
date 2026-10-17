@@ -7,6 +7,7 @@ No destination returned by either provider is fetched by this service.
 
 import asyncio
 import os
+import time
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
@@ -70,18 +71,35 @@ async def asi_search(query: str) -> list[Source]:
     return sources[:8]
 
 
+# Public search rate-limits bursts, so queries are cached briefly and run two at a time.
+_CACHE: dict[str, tuple[float, list[Source]]] = {}
+CACHE_SECONDS = 600
+_SLOTS = asyncio.Semaphore(2)
+BACKENDS = ("yahoo,duckduckgo", "google,startpage", "auto")
+
+
 async def free_search(query: str) -> list[Source]:
-    def run():
+    cached = _CACHE.get(query)
+    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+        return cached[1]
+
+    def run(backend):
         from ddgs import DDGS
 
         return DDGS(timeout=8).text(
-            query, region="us-en", max_results=12, backend="yahoo,duckduckgo"
+            query, region="us-en", max_results=12, backend=backend
         )
 
-    try:
-        rows = await asyncio.wait_for(asyncio.to_thread(run), timeout=25)
-    except Exception as exc:
-        raise SearchUnavailable("Free search is temporarily unavailable") from exc
+    rows = []
+    async with _SLOTS:
+        for attempt, backend in enumerate(BACKENDS):
+            try:
+                rows = await asyncio.wait_for(asyncio.to_thread(run, backend), timeout=20)
+            except Exception:  # noqa: BLE001 -- any provider failure means try the next one
+                rows = []
+            if rows:
+                break
+            await asyncio.sleep(0.5 * (attempt + 1))
     sources = [
         Source(
             title=str(row.get("title", "")),
@@ -92,7 +110,8 @@ async def free_search(query: str) -> list[Source]:
         if https_url(row.get("href", ""))
     ]
     if not sources:
-        raise SearchUnavailable("Free search returned no usable sources")
+        raise SearchUnavailable("Free search is temporarily unavailable")
+    _CACHE[query] = (time.monotonic(), sources)
     return sources
 
 

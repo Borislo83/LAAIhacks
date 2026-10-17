@@ -438,3 +438,30 @@ def test_consider_routes_to_fetch_coordinator_and_exposes_partial_failures():
     assert data["calls"][1]["ms"] == 123
     assert data["calls"][2]["payload"]["max_price"] == 300
     assert len(seen) == 1
+
+
+async def test_agent_calls_retry_up_to_three_times(monkeypatch):
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import TaskKind, ToolArgs
+
+    monkeypatch.setattr(chat, "RETRY_DELAY", 0)
+    attempts = []
+
+    def handle(request):
+        attempts.append(request.url.path)
+        if len(attempts) == 1:
+            return httpx.Response(503)
+        if len(attempts) == 2:
+            return httpx.Response(200, json={"summary": "s", "error": "search down"})
+        return httpx.Response(200, json={"summary": "ok"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        call = await chat.call_agent(TaskKind.PRICE, ToolArgs(product="x"), config(), http)
+    assert len(attempts) == 3 and call.result == {"summary": "ok"} and call.error is None
+
+    attempts.clear()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: attempts.append(1) or httpx.Response(503))
+    ) as http:
+        call = await chat.call_agent(TaskKind.PRICE, ToolArgs(product="x"), config(), http)
+    assert len(attempts) == 3 and call.result is None and call.error
