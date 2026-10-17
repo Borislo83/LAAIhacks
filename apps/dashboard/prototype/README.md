@@ -32,5 +32,22 @@ The Paper file "Focal — Design" holds the static E2 frame (still in the older 
   in `services/agents/src/laai_agents/integration.py` and the Glasses Team's API.
 
 Run `uv run laai-agents` in `services/agents` and `uv run laai-orchestrator` in `services/orchestrator`
-(with `CHAT_AUTH_REQUIRED=false` and `http://localhost:5173` in `CORS_ORIGINS` in its `.env`). Then serve this
+(with `CHAT_AUTH_REQUIRED=true` and `http://localhost:5173` in `CORS_ORIGINS` in its `.env`). Then serve this
 folder over HTTP, for example `python3 -m http.server 5173`, and open `/dashboard.html`. Opening it as a file can't reach the agents.
+
+## Dashboard authentication
+
+The Studio uses Supabase email/password sign-in, account creation with email confirmation,
+persistent sessions, automatic token refresh, and sign-out. Enable the Email provider in
+Supabase Auth and allow the exact dashboard URL (for example
+`http://localhost:5173/dashboard.html`) under Authentication → URL Configuration → Redirect URLs.
+Serve the page over HTTP locally or HTTPS when hosted; do not open it as a file.
+
+The dashboard loads only the Supabase URL and publishable key from `GET /v1/auth/config`.
+The service-role/secret key stays on the backend. Chat and Direct requests send
+the signed-in user's bearer token to the orchestrator, which verifies it with Supabase Auth.
+Keep `CHAT_AUTH_REQUIRED=true`; Direct requests always require authentication. The dashboard never calls the Bureau directly. Keep the Bureau
+private; use the orchestrator as the browser's entrypoint.
+
+Sign-out hides the workspace, cancels active requests, and clears the conversation. Changing the backend requires reconnecting before tokens are sent.
+The pinned Supabase browser SDK loads from jsDelivr; allow it in hosting CSP settings.

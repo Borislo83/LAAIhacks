@@ -153,7 +153,7 @@ h2 em{color:var(--muted);font-size:1.12em}
   <nav class="top">
     <div class="logo" data-logo></div>
     <div class="links"><a href="focal.html" style="color:inherit;text-decoration:none">Home</a><span class="on">Agents</span><span>Lens</span></div>
-    <div class="endpoint"><label for="orch">Orchestrator</label><input id="orch" spellcheck="false"><label for="base">Bureau</label><input id="base" spellcheck="false"><button class="chip" id="ping" type="button">Check</button></div>
+    <div class="endpoint"><label for="orch">Orchestrator</label><input id="orch" spellcheck="false"><button class="chip" id="ping" type="button">Check</button></div>
   </nav>
 
   <header class="hero">
@@ -161,7 +161,23 @@ h2 em{color:var(--muted);font-size:1.12em}
     <p class="lede">Ask in plain words. The orchestrator picks which Fetch.ai agents to call, then answers from what they return. Each card shows what would land on the lens.</p>
   </header>
 
-  <div class="grid">
+  <section class="ask" id="account" aria-labelledby="account-title" style="margin-bottom:24px">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div><h2 id="account-title">Your <em>account.</em></h2><p class="muted" id="account-status" role="status" style="margin-top:8px">Connecting…</p></div>
+      <button type="button" class="btn" id="sign-out" hidden>Sign out</button>
+    </div>
+    <form id="auth-form" style="margin-top:18px" hidden>
+      <div class="row">
+        <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></div>
+        <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" minlength="8" required></div>
+      </div>
+      <div class="row"><button class="btn dark" id="sign-in" type="submit">Sign in</button><button class="btn" id="sign-up" type="submit">Create account</button></div>
+    </form>
+    <p id="auth-message" role="status" style="margin-top:12px;font-size:14px"></p>
+    <button type="button" class="linkbtn" id="auth-retry" hidden>Reconnect</button>
+  </section>
+
+  <div class="grid" id="workspace" hidden inert>
     <aside>
       <h2>Agents</h2>
       <p class="muted" style="font-size:13px;margin:6px 0 14px">In chat the orchestrator picks. In Direct, you do.</p>
@@ -208,7 +224,8 @@ h2 em{color:var(--muted);font-size:1.12em}
   </div>
 </div>
 
-<script>
+<script type="module">
+import { setupAuth } from "./auth.js";
 const AGENTS={
   price:{v:3,name:"Price agent",id:"laai-price-compare",route:"/price",what:"Prices across stores"},
   alternatives:{v:2,name:"Alternatives agent",id:"laai-alternatives",route:"/alternatives",what:"Cheaper or better-rated picks"},
@@ -239,9 +256,7 @@ function orb(v,size=40,idle=false){
 document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=`<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
 
 /* state */
-const base=$("#base");
-base.value=store.get("focal.base","http://127.0.0.1:8000");
-base.onchange=()=>{store.set("focal.base",base.value.trim());checkAll()};
+let auth;
 let selected=new Set(store.get("focal.selected",KEYS));
 const health={};
 let usage=store.get("focal.usage",null)||freshUsage();
@@ -268,10 +283,11 @@ $("#reset").onclick=()=>{usage=freshUsage();store.set("focal.usage",usage);rende
 async function call(k,body){
   const t0=performance.now();
   try{
-    const r=await fetch(base.value.replace(/\/$/,"")+AGENTS[k].route,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    const r=await auth.request("/v1/agents/"+k,{method:"POST",body:JSON.stringify(body)});
     if(!r.ok)throw new Error(`HTTP ${r.status}`);
     const data=await r.json();
-    return {ok:true,data,ms:performance.now()-t0};
+    if(data.error||!data.result)throw new Error(data.error||"No result");
+    return {ok:true,data:data.result,ms:performance.now()-t0};
   }catch(e){return {ok:false,error:e.message||String(e),ms:performance.now()-t0}}
 }
 function record(k,res){
@@ -281,7 +297,7 @@ function record(k,res){
 }
 async function checkAll(){
   KEYS.forEach(k=>delete health[k]); renderRoster();
-  await Promise.all(KEYS.map(async k=>{const r=await call(k,{product:"ping"});health[k]=r.ok}));
+  try{const r=await fetch(orch.value.replace(/\/$/,"")+"/health",{redirect:"error"});KEYS.forEach(k=>health[k]=r.ok)}catch{KEYS.forEach(k=>health[k]=false)}
   renderRoster();
 }
 $("#ping").onclick=checkAll;
@@ -322,7 +338,7 @@ function fill(k,res){
   el.querySelector(".hd .orb").classList.add("idle");
   el.querySelector(".ms").textContent=Math.round(res.ms)+" ms";
   const box=el.querySelector(".thinking");
-  if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the Bureau running at ${esc(base.value)}?</p></div>`;return}
+  if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the backend running at ${esc(orch.value)}?</p></div>`;return}
   const v=VIEW[k](res.data);
   box.outerHTML=`<div class="bd"><div><p class="summary">${esc(res.data.summary)}</p>${v.body}${evidence(res.data)}</div>${v.lens}</div>`;
 }
@@ -386,7 +402,7 @@ $("#chat-form").onsubmit=async e=>{
   convo.push({role:"user",content:text});
   const pending=bubble(`${orb(2,28)}<div class="body"><p class="muted">Choosing agents…</p></div>`,"bot");
   try{
-    const r=await fetch(orch.value.replace(/\/$/,"")+"/v1/chat",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({messages:convo.slice(-20)})});
+    const r=await auth.request("/v1/chat",{method:"POST",body:JSON.stringify({messages:convo.slice(-20)})});
     if(!r.ok)throw new Error(`HTTP ${r.status}`);
     const d=await r.json();
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,ms:c.ms}));
@@ -401,7 +417,19 @@ $("#chat-form").onsubmit=async e=>{
   $("#send").disabled=false; input.focus();
 };
 
-renderRoster(); renderUsage(); checkAll();
+renderRoster(); renderUsage();
+auth=setupAuth({
+  endpoint:orch,
+  onUserChange(){
+    convo.length=0;
+    $("#thread").innerHTML='<div class="msg bot"><div class="body"><p>Ask me to consider a product. I’ll check prices, reviews, and alternatives within your budget.</p></div></div>';
+    $("#results").innerHTML='<div class="empty">Answers from the agents show up here.</div>';
+    $("#starters").hidden=false;
+    $("#chat-input").value="";
+    $("#product").value="";
+  }
+});
+
 </script>
 </body>
 </html>

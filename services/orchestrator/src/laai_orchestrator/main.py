@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .chat import chat
+from .chat import chat, call_agent
 from .config import Config
 from .models import (
     ChatReply,
@@ -16,6 +16,8 @@ from .models import (
     DispatchRequest,
     PageContext,
     Task,
+    TaskKind,
+    ToolArgs,
     UserSettings,
     agent_payload,
 )
@@ -83,6 +85,18 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
     @app.get("/health")
     async def health():
         return {"status": "ok"}
+
+    @app.get("/v1/auth/config")
+    async def auth_config():
+        # Only browser-safe credentials. Never return the backend service key.
+        return {
+            "supabase_url": str(config.supabase_url).rstrip("/"),
+            "supabase_publishable_key": config.supabase_publishable_key.get_secret_value(),
+        }
+
+    @app.post("/v1/agents/{kind}")
+    async def direct_agent(kind: TaskKind, body: ToolArgs, request: Request, _: User):
+        return await call_agent(kind, body, config, request.app.state.http)
 
     @app.get("/v1/settings", response_model=UserSettings)
     async def get_settings(request: Request, user: User):
