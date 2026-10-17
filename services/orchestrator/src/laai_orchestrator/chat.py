@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from .config import Config
 from .models import AgentCall, ChatMessage, ChatReply, TaskKind, ToolArgs
 from .preferences import preference_context, preferred_tasks
+from .progress import agent_request
 
 ASI_ONE_URL = "https://api.asi1.ai/v1/chat/completions"
 MAX_ROUNDS = 3
@@ -71,23 +72,41 @@ FIELDS = {
 
 
 async def call_agent(
-    kind: TaskKind, args: ToolArgs, config: Config, http: httpx.AsyncClient
+    kind: TaskKind, args: ToolArgs, config: Config, http: httpx.AsyncClient, emit=None
 ) -> AgentCall:
     payload = args.model_dump(include=set(FIELDS[kind]))
     started = time.perf_counter()
+    if emit:
+        emit(
+            {
+                "type": "progress",
+                "kind": kind.value,
+                "stage": "delegated",
+                "message": "Sending request to specialist",
+            }
+        )
     try:
         # Only an enum can select a route. No URL from chat/LLM data is fetched.
-        response = await http.post(
-            str(config.agents_url).rstrip("/") + "/" + kind.value, json=payload, timeout=45
-        )
+        response = await agent_request(kind.value, payload, config, http, emit, timeout=90)
         response.raise_for_status()
         result = response.json()
         if not isinstance(result, dict) or not isinstance(result.get("summary"), str):
             raise TypeError("Invalid agent result")
-        error = None
+        error = result.get("error")
     except (httpx.HTTPError, ValueError, TypeError):
         result, error = None, "Agent unavailable or returned an invalid response"
     ms = round((time.perf_counter() - started) * 1000)
+    if emit:
+        emit(
+            {
+                "type": "progress",
+                "kind": kind.value,
+                "stage": "failed" if error else "completed",
+                "message": error or "Research complete",
+                "result": result,
+                "ms": ms,
+            }
+        )
     return AgentCall(kind=kind, payload=payload, result=result, error=error, ms=ms)
 
 
@@ -132,7 +151,7 @@ def grounded(args: ToolArgs, user_text: str) -> ToolArgs:
 
 
 async def chat_with_llm(
-    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, preferences=None
+    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, emit=None, preferences=None
 ) -> ChatReply:
     messages: list[dict[str, Any]] = [
         {
@@ -144,6 +163,15 @@ async def chat_with_llm(
     user_text = " ".join(m.content for m in history if m.role == "user")
     calls: list[AgentCall] = []
     for _ in range(MAX_ROUNDS):
+        if emit:
+            emit(
+                {
+                    "type": "progress",
+                    "kind": "coordinator",
+                    "stage": "planning",
+                    "message": "Choosing agents" if not calls else "Combining agent findings",
+                }
+            )
         message = await _complete(messages, config, http)
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
@@ -163,7 +191,7 @@ async def chat_with_llm(
             if kind is None:
                 content = json.dumps({"error": f"Unknown tool or bad arguments: {name}"})
             else:
-                call = await call_agent(kind, grounded(args, user_text), config, http)
+                call = await call_agent(kind, grounded(args, user_text), config, http, emit)
                 calls.append(call)
                 content = _brief(call)
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": content})
@@ -185,7 +213,7 @@ def rules_reply(calls: list[AgentCall]) -> ChatReply:
 
 
 async def chat_with_rules(
-    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, preferences=None
+    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, emit=None, preferences=None
 ) -> ChatReply:
     """No LLM: pick agents by keyword and treat the message as the product name."""
     text = history[-1].content
@@ -194,23 +222,115 @@ async def chat_with_rules(
     kinds = kinds or list(TaskKind)
     if preferences:
         kinds = preferred_tasks(kinds, preferences.shopping_priority)
-    calls = [await call_agent(k, args, config, http) for k in kinds]
+    calls = [await call_agent(k, args, config, http, emit) for k in kinds]
     return rules_reply(calls)
 
 
+async def buyer_call(payload, config, http, emit=None, confirmation=None):
+    started = time.perf_counter()
+    if emit:
+        emit(
+            {
+                "type": "progress",
+                "kind": "buyer",
+                "stage": "planning",
+                "message": "Preparing an Amazon cart action; checkout and payment disabled",
+            }
+        )
+    try:
+        if confirmation:
+            response = await agent_request(
+                "buy/confirm",
+                {
+                    "confirmation_token": confirmation,
+                    "executor_token": config.amazon_cart_executor_token.get_secret_value(),
+                },
+                config,
+                http,
+                emit,
+                timeout=150,
+            )
+        else:
+            response = await agent_request("buy/prepare", payload, config, http, emit, timeout=90)
+        response.raise_for_status()
+        result = response.json()
+        if result.get("purchase_enabled") is not False:
+            raise ValueError("Only cart-only results with purchasing disabled are supported")
+        return AgentCall(
+            kind="buyer",
+            payload=payload,
+            result=result,
+            error=result.get("error"),
+            ms=round((time.perf_counter() - started) * 1000),
+        )
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        return AgentCall(kind="buyer", payload=payload, error="Amazon cart agent unavailable", ms=0)
+
+
 async def chat(
-    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, preferences=None
+    history: list[ChatMessage],
+    config: Config,
+    http: httpx.AsyncClient,
+    emit=None,
+    purchase_confirmation=None,
+    preferences=None,
 ) -> ChatReply:
     text = history[-1].content
+    normalized = re.sub(r"[^a-z ]", "", text.lower()).strip()
+    confirming = normalized in {
+        "yes",
+        "confirm buy",
+        "yes confirm buy",
+        "confirm purchase",
+        "yes confirm purchase",
+        "confirm add to cart",
+        "yes confirm add to cart",
+        "add to cart",
+        "yes add to cart",
+    }
+    amazon_url = re.search(r"https://(?:www\.)?amazon\.com/[^\s]+", text, re.IGNORECASE)
+    buying = (
+        amazon_url
+        or (
+            re.search(r"\b(buy|purchase|order)\b", text, re.IGNORECASE) and "amazon" in text.lower()
+        )
+        or re.match(r"^(?:please\s+)?(?:buy|purchase|order)\s+", text, re.IGNORECASE)
+    )
+    if buying or confirming and purchase_confirmation:
+        quantity = re.search(r"\b(?:quantity|qty)\s*:?\s*(\d+)\b", text, re.IGNORECASE)
+        payload = {
+            "product": text[:500],
+            "url": amazon_url[0].rstrip(".,)") if amazon_url else None,
+            "quantity": int(quantity[1]) if quantity else 1,
+        }
+        call = await buyer_call(
+            payload, config, http, emit, purchase_confirmation if confirming else None
+        )
+        return ChatReply(
+            reply=call.result["summary"] if call.result else call.error,
+            calls=[call],
+            source="buyer",
+        )
+    if confirming and normalized != "yes":
+        return ChatReply(
+            reply="Choose an Amazon product and review the cart addition first. No order was placed.",
+            calls=[],
+            source="buyer",
+        )
     if re.search(r"\b(consider|evaluate|assess)\b", text, re.IGNORECASE) or all(
         re.search(pattern, text, re.IGNORECASE) for pattern in (r"price", r"review", r"alternative")
     ):
         try:
-            response = await http.post(
-                str(config.agents_url).rstrip("/") + "/consider",
-                json={"product": text},
-                timeout=120,
-            )
+            if emit:
+                emit(
+                    {
+                        "type": "progress",
+                        "kind": "coordinator",
+                        "stage": "planning",
+                        "message": "Preparing the product consideration workflow",
+                    }
+                )
+            response = await agent_request("consider", {"product": text}, config, http, emit)
             response.raise_for_status()
             data = response.json()
             calls = []
@@ -243,7 +363,7 @@ async def chat(
             )
     if config.asi_one_api_key.get_secret_value():
         try:
-            return await chat_with_llm(history, config, http, preferences)
+            return await chat_with_llm(history, config, http, emit, preferences)
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
             pass
-    return await chat_with_rules(history, config, http, preferences)
+    return await chat_with_rules(history, config, http, emit, preferences)

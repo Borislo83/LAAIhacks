@@ -400,6 +400,124 @@
         ]
       }
     },
+    "/v1/chat/stream": {
+      "post": {
+        "summary": "Stream Chat",
+        "operationId": "stream_chat_v1_chat_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{kind}/stream": {
+      "post": {
+        "summary": "Stream Agent",
+        "operationId": "stream_agent_v1_agents__kind__stream_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TaskKind"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolArgs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/buyer/prepare/stream": {
+      "post": {
+        "summary": "Stream Buyer",
+        "operationId": "stream_buyer_v1_buyer_prepare_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuyerPreparation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/v1/preferences": {
       "get": {
         "summary": "Get Preferences",
@@ -1100,7 +1218,16 @@
       "AgentCall": {
         "properties": {
           "kind": {
-            "$ref": "#/components/schemas/TaskKind"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskKind"
+              },
+              {
+                "type": "string",
+                "const": "buyer"
+              }
+            ],
+            "title": "Kind"
           },
           "payload": {
             "additionalProperties": true,
@@ -1142,6 +1269,45 @@
           "ms"
         ],
         "title": "AgentCall"
+      },
+      "BuyerPreparation": {
+        "properties": {
+          "product": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Product"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "quantity": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Quantity",
+            "default": 1
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BuyerPreparation"
       },
       "ChatMessage": {
         "properties": {
@@ -1186,7 +1352,8 @@
             "enum": [
               "asi_one",
               "rules",
-              "coordinator"
+              "coordinator",
+              "buyer"
             ],
             "title": "Source"
           }
@@ -1209,6 +1376,19 @@
             "maxItems": 20,
             "minItems": 1,
             "title": "Messages"
+          },
+          "purchase_confirmation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purchase Confirmation"
           }
         },
         "additionalProperties": false,

@@ -14,11 +14,13 @@ load_dotenv()
 
 from . import llm
 from .agents import build_alternatives_agent, build_price_agent, build_reviews_agent
+from .buyer import build_buyer_agent
 
 BUILDERS = {
     "price": build_price_agent,
     "alternatives": build_alternatives_agent,
     "reviews": build_reviews_agent,
+    "buyer": build_buyer_agent,
 }
 
 
