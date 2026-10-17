@@ -23,6 +23,7 @@ from .models import (
 )
 from .predictor import predict
 from .store import Store
+from .workflow import install_workflow
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -45,7 +46,13 @@ async def current_user(
         if response.status_code in (401, 403):
             raise HTTPException(401, "Invalid or expired access token")
         response.raise_for_status()
-        return UUID(response.json()["id"])
+        identity = response.json()
+        # app_metadata is assigned by trusted server administration, unlike user_metadata.
+        roles = identity.get("app_metadata", {}).get("laai_roles", ["web"])
+        if not isinstance(roles, list):
+            roles = []
+        request.state.actor_roles = {role for role in roles if isinstance(role, str)} & {"web", "agent", "g2", "executor"}
+        return UUID(identity["id"])
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
         raise HTTPException(503, "Supabase authentication unavailable") from exc
 
@@ -163,6 +170,7 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
             raise HTTPException(422, "Last message must be from the user")
         return await chat(body.messages, config, request.app.state.http)
 
+    install_workflow(app, current_user)
     return app
 
 
