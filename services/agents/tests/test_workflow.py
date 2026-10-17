@@ -56,7 +56,11 @@ async def test_coordinator_delegates_all_specialists_and_budget():
     assert await coordinator.parse_request("consider this product") is None
 
 
-async def test_live_prices_reject_other_variants_and_ambiguous_prices(monkeypatch):
+async def test_live_prices_keep_snippet_leads_but_reject_variants_and_ambiguity(
+    monkeypatch,
+):
+    from laai_agents import merchants
+
     async def search(query):
         sources = [
             Source(
@@ -79,6 +83,11 @@ async def test_live_prices_reject_other_variants_and_ambiguous_prices(monkeypatc
                 url="https://shop.example/xm5",
                 snippet="Price $279.00",
             ),
+            Source(
+                title="Sony WH-1000XM5 Wireless Headphones",
+                url="https://www.bestbuy.com/site/xm5",
+                snippet="Sale $299.99",
+            ),
         ]
         return sources, {
             "sources": sources,
@@ -86,17 +95,26 @@ async def test_live_prices_reject_other_variants_and_ambiguous_prices(monkeypatc
             "notice": "Search lead",
         }
 
+    async def no_pages(url, product):
+        return []
+
     monkeypatch.setattr(live, "search", search)
+    monkeypatch.setattr(merchants, "fetch_offers", no_pages)
     result = await live.compare(type("Request", (), {"product": "Sony XM5"})())
-    # A search snippet, even a plausible one, is not a structured merchant offer.
-    assert result.offers == [] and result.best is None
+    # Single clear snippet prices are kept as leads; XM4, /mo and ranges are not.
+    assert [(o.store, o.price, o.trust) for o in result.offers] == [
+        ("bestbuy.com", 299.99, "medium"),
+        ("shop.example", 279.0, "low"),
+    ]
+    # A cheaper unknown-store lead doesn't outrank a trusted store.
+    assert result.best.store == "bestbuy.com"
     assert result.data_source == "ddgs"
 
 
-def test_merchant_requires_matching_in_stock_usd_offer():
+def test_merchant_offers_are_broad_but_drop_clear_mismatches():
     import json
 
-    from laai_agents.merchants import allowed, parse_offers
+    from laai_agents.merchants import fetchable, parse_offers, rank
 
     product = {
         "@type": "Product",
@@ -112,27 +130,85 @@ def test_merchant_requires_matching_in_stock_usd_offer():
     def page(node):
         return '<script type="application/ld+json">' + json.dumps(node) + "</script>"
 
-    assert (
-        parse_offers(page(product), "https://www.bestbuy.com/product/test", "Sony XM5")[
-            0
-        ].price
-        == 279.99
+    [offer] = parse_offers(
+        page(product), "https://www.bestbuy.com/product/test", "Sony XM5"
     )
+    assert (offer.price, offer.trust, offer.source) == (279.99, "high", "structured")
+    # Any store is considered; lookalike domains just don't get trusted-store credit.
+    [other] = parse_offers(
+        page(product), "https://www.bestbuy.com.evil.example/p", "Sony XM5"
+    )
+    assert other.trust == "medium"
+    # Aggregate offers and offers without an explicit currency still count.
+    product["offers"] = {"@type": "AggregateOffer", "lowPrice": "259.00"}
+    assert (
+        parse_offers(page(product), "https://www.target.com/p/x", "Sony XM5")[0].price
+        == 259.0
+    )
+    product["offers"] = {"@type": "Offer", "price": "279.99", "priceCurrency": "USD"}
     product["name"] = "Sony WH-1000XM4"
     assert not parse_offers(
         page(product), "https://www.bestbuy.com/product/test", "Sony XM5"
     )
     product["name"] = "Sony WH-1000XM5"
-    product["offers"]["priceCurrency"] = "CAD"
-    assert not parse_offers(
-        page(product), "https://www.bestbuy.com/product/test", "Sony XM5"
+    for key, value in [
+        ("priceCurrency", "CAD"),
+        ("availability", "https://schema.org/OutOfStock"),
+        ("itemCondition", "https://schema.org/UsedCondition"),
+    ]:
+        bad = dict(product, offers=dict(product["offers"], **{key: value}))
+        assert not parse_offers(page(bad), "https://www.bestbuy.com/p", "Sony XM5")
+    meta = (
+        '<meta property="og:title" content="Sony WH-1000XM5 Headphones">'
+        '<meta property="product:price:amount" content="1,299.00">'
+    )
+    assert parse_offers(meta, "https://www.sony.com/p", "Sony XM5")[0].source == (
+        "page_meta"
     )
     assert not parse_offers(
         "<p>Try 30 days for just $1!</p>", "https://www.walmart.com/ip/test", "Sony XM5"
     )
-    assert not allowed("https://www.bestbuy.com.evil.example/product")
-    assert not allowed("https://www.bestbuy.com@127.0.0.1/product")
-    assert not allowed("http://www.bestbuy.com/product")
+    ranked = rank(
+        [
+            offer.copy(update={"price": p, "store": s})
+            for p, s in [(279.99, "a"), (289.0, "b"), (19.99, "c")]
+        ]
+    )
+    assert [o.price for o in ranked] == [279.99, 289.0]  # accessory-priced outlier
+    # A garbled snippet price is dropped when product pages anchor the range.
+    mangled = ranked[0].copy(
+        update={"source": "search_snippet", "store": "e", "price": 27999.0}
+    )
+    assert [o.price for o in rank([ranked[0], mangled])] == [279.99]
+    assert not fetchable("https://www.bestbuy.com@127.0.0.1/product")
+    assert not fetchable("http://www.bestbuy.com/product")
+
+
+@pytest.mark.parametrize(
+    "text, price",
+    [
+        ("Price $249.00 at our store", 249.0),
+        ("Now $1,299.99 with free returns", 1299.99),
+        ("Free standard shipping with $35 orders", None),
+        ("Save $50 today, limited time", None),
+        ("Best earbuds under $300", None),
+        ("$10.00/mo for 24 months", None),
+        ("Was $299.99, now $249.99", None),
+    ],
+)
+def test_snippet_prices_ignore_thresholds_discounts_and_ambiguity(text, price):
+    from laai_agents.merchants import snippet_offer
+
+    offer = snippet_offer(Source(title="x", url="https://shop.example/p", snippet=text), "x")
+    assert (offer.price if offer else None) == price
+
+
+async def test_fetch_refuses_private_network_hosts():
+    from laai_agents.merchants import fetch_offers, public_host
+
+    assert not await public_host("127.0.0.1")
+    assert not await public_host("localhost")
+    assert await fetch_offers("https://127.0.0.1/product", "Sony XM5") == []
 
 
 async def test_live_failure_does_not_return_demo_catalog(monkeypatch):

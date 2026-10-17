@@ -1,4 +1,4 @@
-"""Live search evidence with matching structured merchant offers for USD prices."""
+"""Live search evidence: broad price candidates from any store, ranked by trust."""
 
 import asyncio
 import re
@@ -12,7 +12,7 @@ from .models import (
     ReviewsResponse,
 )
 from .progress import report
-from .search import search
+from .search import SearchUnavailable, search
 
 
 def product_name(query: str) -> str:
@@ -32,30 +32,55 @@ def matches_product(title: str, product: str) -> bool:
 
 
 async def compare(req):
-    from .merchants import allowed, fetch_offers
+    from .merchants import best_offer, fetch_offers, rank, snippet_offer
 
     name = product_name(req.product)
+    # Stage 1: two queries widen the pool; every result naming the product is a candidate.
     sources, meta = await search(f"{name} price USD")
-    urls = list(
-        dict.fromkeys(
-            s.url for s in sources if allowed(s.url) and matches_product(s.title, name)
-        )
-    )[:4]
-    report("validating", f"Checking structured offers on {len(urls)} merchant pages")
-    offers = [
+    try:
+        more, _ = await search(f"buy {name} online store")
+    except SearchUnavailable:
+        more = []
+    seen = {s.url for s in sources}
+    sources += [s for s in more if s.url not in seen]
+    meta["sources"] = sources
+    leads = [s for s in sources if matches_product(f"{s.title} {s.snippet}", name)]
+    urls = list(dict.fromkeys(s.url for s in leads))[:8]
+    report("validating", f"Checking offers on {len(urls)} merchant pages and ranking evidence")
+    page_offers = [
         offer
         for group in await asyncio.gather(*(fetch_offers(url, name) for url in urls))
         for offer in group
     ]
-    offers.sort(key=lambda o: o.price)
-    best = offers[0] if offers else None
-    summary = (
-        f"Lowest structured merchant offer found: ${best.price:.2f} at {best.store}. "
-        "Verify the listing before buying."
-        if best
-        else f"Found sources for {name}, but no matching structured USD merchant offer. "
-        "Open the sources to verify current offers."
-    )
+    read = {o.url for o in page_offers}
+    snippet_offers = [
+        offer
+        for s in leads
+        if s.url not in read and (offer := snippet_offer(s, name))
+    ]
+    # Stage 2: rank by trust, then price; only clear mismatches were dropped.
+    offers = rank(page_offers + snippet_offers)
+    best = best_offer(offers)
+    if best is None:
+        summary = (
+            f"Found sources for {name}, but none quoted a clear USD price. "
+            "Open the sources to check current offers."
+        )
+    elif best.trust == "low":
+        summary = (
+            f"Only unverified price leads found: lowest ${best.price:.2f} at {best.store}. "
+            "Confirm on the store page before relying on it."
+        )
+    else:
+        where = (
+            "read from the product page"
+            if best.source != "search_snippet"
+            else "from the search listing"
+        )
+        summary = (
+            f"Lowest {best.trust}-trust price: ${best.price:.2f} at {best.store} ({where}). "
+            "Verify the listing before buying."
+        )
     return PriceCompareResponse(
         product=name, offers=offers, best=best, savings=None, summary=summary, **meta
     )
@@ -93,7 +118,7 @@ async def alternatives(req):
                 product=best.product,
                 price=best.price,
                 url=best.url,
-                reason="Matching structured merchant USD offer; verify listing",
+                reason=f"{best.trust.capitalize()}-trust price from {best.store}; verify listing",
             )
         )
         sources.extend(result.sources)
