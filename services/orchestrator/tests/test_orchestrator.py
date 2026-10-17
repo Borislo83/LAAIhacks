@@ -136,6 +136,34 @@ def task_id(client):
     return response.json()["tasks"][0]["id"]
 
 
+def test_dashboard_auth_config_exposes_only_public_credentials(api):
+    client, _ = api
+    client.headers.pop("Authorization")
+    response = client.get("/v1/auth/config")
+    assert response.status_code == 200
+    assert response.json() == {
+        "supabase_url": "https://supabase.example",
+        "supabase_publishable_key": "public-test",
+    }
+    assert "secret-test" not in response.text
+
+
+def test_dashboard_direct_calls_require_verified_session(api):
+    client, backend = api
+    client.headers.pop("Authorization")
+    for headers in ({}, {"Authorization": "Bearer invalid"}):
+        response = client.post("/v1/agents/price", json={"product": "Sony XM5"}, headers=headers)
+        assert response.status_code == 401
+    assert backend.agent_calls == []
+    response = client.post(
+        "/v1/agents/price", json={"product": "Sony XM5"},
+        headers={"Authorization": "Bearer valid"},
+    )
+    assert response.status_code == 200
+    assert response.json()["result"]["summary"] == "Best price is $299"
+    assert len(backend.agent_calls) == 1
+
+
 def test_prediction_dispatch_and_restart_history(api):
     client, backend = api
     task = task_id(client)
