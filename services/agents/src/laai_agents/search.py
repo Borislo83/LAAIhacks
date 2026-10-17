@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from .models import Source
+from .progress import report
 
 
 class SearchUnavailable(RuntimeError):
@@ -116,6 +117,7 @@ async def free_search(query: str) -> list[Source]:
 
 
 async def search(query: str) -> tuple[list[Source], dict]:
+    report("searching", f"Searching online: {query}")
     provider = os.getenv("SEARCH_PROVIDER", "auto")
     if provider not in {"auto", "asi", "ddgs"}:
         raise SearchUnavailable("SEARCH_PROVIDER must be auto, asi, or ddgs")
@@ -137,11 +139,13 @@ async def search(query: str) -> tuple[list[Source], dict]:
                 raise SearchUnavailable(
                     "ASI search unavailable; choose auto or ddgs for fallback"
                 )
+            report("fallback", "ASI search unavailable; trying free search")
             sources = await free_search(query)
             provider = "ddgs"
             notice += " ASI search unavailable; used the free search fallback."
     else:
         sources = await free_search(query)
+    report("sources_found", f"Found {len(sources)} online sources")
     return sources, {
         "data_source": provider,
         "fetched_at": datetime.now(UTC).isoformat(),

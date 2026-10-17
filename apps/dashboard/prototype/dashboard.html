@@ -72,7 +72,16 @@ h2 em{color:var(--muted);font-size:1.12em}
 .row{display:flex;gap:10px;flex-wrap:wrap}
 .field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:140px}
 .field label{font-size:12px;color:var(--muted)}
-.field input{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
+.field input,.field select,.field textarea{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
+.field textarea{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
+.field textarea{resize:vertical;line-height:1.5;width:100%}
+.preference-form{display:flex;flex-direction:column;gap:14px;margin-top:16px}
+.preference-form fieldset{border:0;display:flex;flex-direction:column;gap:14px}
+.preference-form legend{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.preference-toggle{font-size:13px;display:flex;align-items:center;gap:8px}
+body[data-density="compact"] .thread{gap:12px;padding:14px}
+body[data-density="compact"] .card .bd{padding:12px}
+body[data-density="compact"] .agent{padding:10px}
 .field.big{flex:3;min-width:240px}
 .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .chips span{font-size:12px;color:var(--muted)}
@@ -148,6 +157,12 @@ h2 em{color:var(--muted);font-size:1.12em}
 .composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--hair)}
 .composer input{flex:1;min-width:0;font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
 .starters{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 4px}
+.work{border:1px solid var(--hair);border-radius:10px;padding:12px;font-size:13px;background:var(--paper)}
+.work-row{display:flex;gap:9px;align-items:center;padding:9px 0;border-bottom:1px solid var(--hair)}
+.work-row:last-child{border-bottom:0}.work-row .detail{flex:1;min-width:0}.work-row small{display:block;color:var(--muted);overflow-wrap:anywhere}
+.work-row .phase{font:11px var(--mono);color:var(--muted)}.work-row[data-state="completed"] .phase{color:#139A4E}.work-row[data-state="failed"] .phase{color:#B83A32}
+.work-history{margin-top:10px;color:var(--muted);font-size:11px;max-height:180px;overflow:auto}.work-history p{margin:4px 0}
+.demo-checkout{padding:14px;border:1px solid var(--hair);border-radius:10px;display:flex;flex-direction:column;gap:10px}.demo-checkout strong{color:#139A4E}
 
 @media (max-width:980px){
   .mini .bd{grid-template-columns:1fr}
@@ -169,7 +184,7 @@ h2 em{color:var(--muted);font-size:1.12em}
   <nav class="top">
     <div class="logo" data-logo></div>
     <div class="links"><a href="focal.html" style="color:inherit;text-decoration:none">Home</a><span class="on">Agents</span><span>Lens</span></div>
-    <div class="endpoint"><label for="orch">Orchestrator</label><input id="orch" spellcheck="false"><label for="base">Bureau</label><input id="base" spellcheck="false"><button class="chip" id="ping" type="button">Check</button></div>
+    <div class="endpoint"><label for="orch">Orchestrator</label><input id="orch" spellcheck="false"><button class="chip" id="ping" type="button">Check</button></div>
   </nav>
 
   <header class="hero">
@@ -177,7 +192,23 @@ h2 em{color:var(--muted);font-size:1.12em}
     <p class="lede">Ask in plain words. The orchestrator picks which Fetch.ai agents to call, then answers from what they return. Each card shows what would land on the lens.</p>
   </header>
 
-  <div class="grid">
+  <section class="ask" id="account" aria-labelledby="account-title" style="margin-bottom:24px">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div><h2 id="account-title">Your <em>account.</em></h2><p class="muted" id="account-status" role="status" style="margin-top:8px">Connecting…</p></div>
+      <button type="button" class="btn" id="sign-out" hidden>Sign out</button>
+    </div>
+    <form id="auth-form" style="margin-top:18px" hidden>
+      <div class="row">
+        <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></div>
+        <div class="field"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" minlength="8" required></div>
+      </div>
+      <div class="row"><button class="btn dark" id="sign-in" type="submit">Sign in</button><button class="btn" id="sign-up" type="submit">Create account</button></div>
+    </form>
+    <p id="auth-message" role="status" style="margin-top:12px;font-size:14px"></p>
+    <button type="button" class="linkbtn" id="auth-retry" hidden>Reconnect</button>
+  </section>
+
+  <div class="grid" id="workspace" hidden inert>
     <aside>
       <h2>Agents</h2>
       <p class="muted" style="font-size:13px;margin:6px 0 14px">In chat the orchestrator picks. In Direct, you do.</p>
@@ -188,6 +219,21 @@ h2 em{color:var(--muted);font-size:1.12em}
         <table><thead><tr><th>Agent</th><th class="n">Calls</th><th class="n">Avg</th><th class="n">Errors</th></tr></thead><tbody id="usage"></tbody></table>
         <div class="foot"><span id="usage-since"></span><button class="linkbtn" id="reset" type="button">Reset</button></div>
       </div>
+      <section class="usage" aria-labelledby="preferences-title">
+        <h2 id="preferences-title">Your <em>preferences.</em></h2>
+        <form id="preferences-form" class="preference-form">
+          <fieldset id="preferences-fields" disabled>
+            <legend>Saved account preferences</legend>
+            <div class="field"><label for="display-density">Display density</label><select id="display-density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></div>
+            <div class="field"><label for="shopping-priority">Shopping priority</label><select id="shopping-priority"><option value="balanced">Balance price and quality</option><option value="price">Find the best value</option><option value="quality">Prioritize quality</option></select></div>
+            <label class="preference-toggle"><input id="proactive-enabled" type="checkbox">Suggest tasks from page content</label>
+            <div class="field"><label for="user-notes">Private notes</label><textarea id="user-notes" rows="4" maxlength="10000" placeholder="Anything you want to keep for later"></textarea><small class="muted">Saved to your account. Notes stay out of agent prompts.</small></div>
+            <button type="submit" class="btn dark" id="save-preferences">Save preferences</button>
+          </fieldset>
+          <p id="preferences-status" role="status" class="muted" style="font-size:12px">Sign in to load your preferences.</p>
+          <button type="button" id="preferences-retry" class="linkbtn" hidden>Try loading again</button>
+        </form>
+      </section>
     </aside>
 
     <main>
@@ -207,10 +253,12 @@ h2 em{color:var(--muted);font-size:1.12em}
       <div class="ask">
         <form id="ask">
           <div class="row">
-            <div class="field big"><label for="product">Product you're looking at</label><input id="product" required placeholder="e.g. Sony XM5" autocomplete="off"></div>
+            <div class="field big"><label for="product">Product you're looking at</label><input id="product" placeholder="e.g. Sony XM5" autocomplete="off"></div>
             <div class="field"><label for="store">Current store</label><input id="store" placeholder="Best Buy" autocomplete="off"></div>
             <div class="field"><label for="price">Current price</label><input id="price" type="number" step="0.01" min="0" placeholder="$"></div>
             <div class="field"><label for="max">Max for alternatives</label><input id="max" type="number" step="0.01" min="0" placeholder="$"></div>
+            <div class="field big"><label for="amazon-url">Amazon product link (real cart)</label><input id="amazon-url" type="url" placeholder="https://www.amazon.com/dp/…"></div>
+            <div class="field"><label for="quantity">Quantity</label><input id="quantity" type="number" min="1" max="20" value="1"></div>
           </div>
           <div class="row" style="justify-content:space-between;align-items:center">
             <div class="chips"><span>Try</span></div>
@@ -224,11 +272,14 @@ h2 em{color:var(--muted);font-size:1.12em}
   </div>
 </div>
 
-<script>
+<script type="module">
+import { setupAuth } from "./auth.js";
+import { setupPreferences } from "./preferences.js";
 const AGENTS={
   price:{v:3,name:"Price agent",id:"laai-price-compare",route:"/price",what:"Prices across stores"},
   alternatives:{v:2,name:"Alternatives agent",id:"laai-alternatives",route:"/alternatives",what:"Cheaper or better-rated picks"},
   reviews:{v:1,name:"Reviews agent",id:"laai-reviews",route:"/reviews",what:"Rating, pros and cons"},
+  buyer:{v:3,name:"Amazon cart agent",id:"focal-amazon-buyer-demo",route:"/buy/prepare",what:"Real cart · stops before checkout"},
 };
 const KEYS=Object.keys(AGENTS);
 const TRY=["Sony XM5","AirPods Pro 2","Bose QC Ultra","Nothing Ear (a)"];
@@ -255,12 +306,11 @@ function orb(v,size=40,idle=false){
 document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=`<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
 
 /* state */
-const base=$("#base");
-base.value=store.get("focal.base","http://127.0.0.1:8000");
-base.onchange=()=>{store.set("focal.base",base.value.trim());checkAll()};
-let selected=new Set(store.get("focal.selected",KEYS));
+let auth, preferences;
+let selected=new Set(store.get("focal.selected",["price","alternatives","reviews"]));
 const health={};
 let usage=store.get("focal.usage",null)||freshUsage();
+KEYS.forEach(k=>usage.agents[k]??={calls:0,ms:0,errors:0});
 function freshUsage(){return {since:Date.now(),agents:Object.fromEntries(KEYS.map(k=>[k,{calls:0,ms:0,errors:0}]))}}
 
 function renderRoster(){
@@ -283,26 +333,25 @@ $("#reset").onclick=()=>{usage=freshUsage();store.set("focal.usage",usage);rende
 /* calls */
 const ATTEMPTS=3;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-// POST JSON, retrying unreachable or server errors up to ATTEMPTS times.
-async function postJSON(url,body,onRetry){
-  let last;
-  for(let i=0;i<ATTEMPTS;i++){
-    if(i){onRetry?.(i+1);await sleep(1000*i)}
-    try{
-      const r=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
-      if(r.status>=400&&r.status<500)throw Object.assign(new Error(`HTTP ${r.status}`),{final:true});
-      if(!r.ok)throw new Error(`HTTP ${r.status}`);
-      return await r.json();
-    }catch(e){last=e;if(e.final)break}
+// Retry only when the orchestrator couldn't be reached at all. A stream that started, or any
+// cart action, is never resent, so nothing can be added to a cart twice.
+async function withRetry(run,onRetry,allowed=true){
+  for(let i=0;;i++){
+    try{return await run()}
+    catch(e){if(!allowed||!e.retryable||i>=ATTEMPTS-1)throw e;onRetry?.(i+2);await sleep(1000*(i+1))}
   }
-  throw last;
 }
-async function call(k,body,onRetry){
+async function call(k,body,onProgress){
   const t0=performance.now();
   try{
-    const data=await postJSON(base.value.replace(/\/$/,"")+AGENTS[k].route,body,onRetry);
-    return {ok:true,reachable:true,data,ms:performance.now()-t0};
-  }catch(e){return {ok:false,error:`${e.message||e} after ${ATTEMPTS} tries`,ms:performance.now()-t0}}
+    const path=k==="buyer"?"/v1/buyer/prepare/stream":`/v1/agents/${k}/stream`;
+    const progress=onProgress||(()=>{});
+    const result=await withRetry(()=>readEvents(path,body,progress),
+      n=>progress({kind:k,stage:"retrying",message:`Couldn't reach the orchestrator; retrying (${n} of ${ATTEMPTS})`}),k!=="buyer");
+    if(result.result?.confirmation_token)activePurchase=result.result.confirmation_token;
+    // A failed web search is still an answer: the agent is reachable.
+    return {ok:!!result.result&&!result.error,reachable:!!result.result,data:result.result,error:result.error,ms:performance.now()-t0};
+  }catch(e){return {ok:false,reachable:false,error:e.message||String(e),ms:performance.now()-t0}}
 }
 function record(k,res){
   const u=usage.agents[k]; u.calls++; u.ms+=res.ms; if(!res.ok||res.data?.error)u.errors++;
@@ -312,16 +361,19 @@ function record(k,res){
 }
 async function checkAll(){
   KEYS.forEach(k=>delete health[k]); renderRoster();
-  // Any HTTP answer means the Bureau is up; no live search is spent on a ping.
-  let up=false;
-  try{await fetch(base.value.replace(/\/$/,"")+"/",{signal:AbortSignal.timeout(4000)});up=true}catch{}
-  KEYS.forEach(k=>health[k]=up); renderRoster();
+  try{const r=await fetch(orch.value.replace(/\/$/,"")+"/health",{redirect:"error"});KEYS.forEach(k=>health[k]=r.ok)}catch{KEYS.forEach(k=>health[k]=false)}
+  renderRoster();
 }
 $("#ping").onclick=checkAll;
 
 /* rendering answers */
 function lens(top,main,sub){return `<div class="lensbox"><span class="l1">${esc(top)}</span><span class="l2">${esc(main)}</span><span>${esc(sub)}</span></div>`}
 const VIEW={
+  buyer(d){
+    const candidates=(d.candidates||[]).map(c=>`<button type="button" class="chip" data-buy-link="${esc(c.url)}" data-product="${esc(d.product)}" data-quantity="${d.quantity}">${esc(c.title)} →</button>`).join("");
+    const confirm=d.status==="cart_review"?`<button type="button" class="btn dark" data-confirm-buy="${esc(d.confirmation_token)}">Add to real Amazon cart</button>`:"";
+    return {lens:lens("AMAZON · CART ONLY",d.status==="cart_added"?"Verified in Amazon cart":"Review cart addition", "No real order or payment"),body:`<div class="demo-checkout"><strong>REAL AMAZON CART · no checkout</strong><p>${esc(d.product)} · quantity ${d.quantity}</p><p>${esc(d.summary)}</p>${d.selected_url?`<a href="${esc(d.selected_url)}" target="_blank" rel="noopener noreferrer">View Amazon listing ↗</a>`:""}${candidates}${d.search_url?`<a href="${esc(d.search_url)}" target="_blank" rel="noopener noreferrer">Search Amazon ↗</a>`:""}${confirm}${d.cart_url?`<p>Verified in the Amazon agent’s Chrome window. Use that window to review your cart.</p>`:""}</div>`};
+  },
   price(d){
     const best=d.best;
     const rows=d.offers.map(o=>`<a href="${esc(o.url)}" target="_blank" rel="noopener" class="${best&&o.store===best.store?"best":""}"><span>${esc(o.store)}</span><span class="p">${money(o.price)}</span></a>`).join("");
@@ -360,7 +412,7 @@ function fill(k,res){
   el.querySelector(".hd .orb").classList.add("idle");
   el.querySelector(".ms").textContent=Math.round(res.ms)+" ms";
   const box=el.querySelector(".thinking");
-  if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the Bureau running at ${esc(base.value)}?</p></div>`;return}
+  if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the backend running at ${esc(orch.value)}?</p></div>`;return}
   const v=VIEW[k](res.data);
   box.outerHTML=`<div class="bd"><div><p class="summary">${esc(res.data.summary)}</p>${v.body}</div>${v.lens}${evidence(res.data)}</div>`;
 }
@@ -370,19 +422,21 @@ $(".chips").insertAdjacentHTML("beforeend",TRY.map(t=>`<button type="button" cla
 document.querySelectorAll("[data-try]").forEach(b=>b.onclick=()=>{$("#product").value=b.dataset.try;$("#ask").requestSubmit()});
 $("#ask").onsubmit=async e=>{
   e.preventDefault();
-  const product=$("#product").value.trim(); if(!product||!selected.size)return;
+  const product=$("#product").value.trim(),amazonUrl=$("#amazon-url").value.trim();
+  if(!product&&!amazonUrl)return;
+  if(!product&&amazonUrl){selected=new Set(["buyer"]);renderRoster()}
+  if(!selected.size)return;
   const num=id=>{const v=$(id).value;return v===""?null:Number(v)};
   const bodies={
     price:{product,current_store:$("#store").value.trim()||null,current_price:num("#price")},
     alternatives:{product,max_price:num("#max")},
     reviews:{product},
+    buyer:{product:product||null,url:amazonUrl||null,quantity:Number($("#quantity").value)||1},
   };
   const ks=KEYS.filter(k=>selected.has(k));
   $("#results").innerHTML=ks.map(cardShell).join("");
   $("#go").disabled=true;
-  await Promise.all(ks.map(async k=>{
-    const r=await call(k,bodies[k],n=>{const t=$("#card-"+k+" .thinking");if(t)t.textContent=`${AGENTS[k].name}: retrying (${n} of ${ATTEMPTS})…`});
-    record(k,r);fill(k,r)}));
+  await Promise.all(ks.map(async k=>{const progress=makeProgress($("#card-"+k+" .thinking"));const r=await call(k,bodies[k],progress.update);progress.finish(r.ok);record(k,r);fill(k,r);$("#card-"+k).append(progress.el)}));
   $("#go").disabled=false;
 };
 
@@ -403,6 +457,7 @@ orch.onchange=()=>store.set("focal.orch",orch.value.trim());
 const logoOrb=()=>`<svg class="orb" width="28" height="28" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>`;
 document.querySelectorAll("[data-orb-logo]").forEach(e=>e.outerHTML=logoOrb());
 const convo=[];
+let activePurchase=null;
 const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100"];
 $("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
 document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
@@ -420,29 +475,101 @@ function miniCard(c,i,all){
   const warn=c.result.error?`<p class="warn-note">${esc(c.result.error)}. The agent is fine; the free web search refused this request. Try again in a moment.</p>`:"";
   return `<div class="mini">${head}<div class="bd"><div>${v.body||`<p class="muted" style="font-size:14px">${esc(c.result.summary)}</p>`}</div>${v.lens}${warn}${evidence(c.result)}</div></div>`;
 }
+async function readEvents(path,body,onProgress){
+  let response;
+  try{response=await auth.request(path,{method:"POST",headers:{"accept":"text/event-stream"},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)})}
+  // Only a network failure ("Failed to fetch") is worth retrying, not sign-in or timeouts.
+  catch(e){throw Object.assign(e instanceof Error?e:new Error(String(e)),{retryable:e instanceof TypeError})}
+  if(!response.ok)throw Object.assign(new Error(`HTTP ${response.status}`),{retryable:response.status>=502&&response.status<=504});
+  if(!response.body)throw new Error("Streaming is unavailable in this browser");
+  const reader=response.body.getReader(),decoder=new TextDecoder();let buffer="",result=null;
+  function consume(frame){
+    const raw=frame.split("\n").filter(line=>line.startsWith("data:")).map(line=>line.slice(5).trimStart()).join("\n");
+    if(!raw)return;
+    const event=JSON.parse(raw);
+    if(event.type==="progress")onProgress(event);
+    if(event.type==="error")throw new Error(event.message);
+    if(event.type==="result")result=event.data;
+  }
+  try{
+    while(true){const {value,done}=await reader.read();buffer+=decoder.decode(value,{stream:!done}).replace(/\r\n/g,"\n");let split;while((split=buffer.indexOf("\n\n"))!==-1){consume(buffer.slice(0,split));buffer=buffer.slice(split+2)}if(done)break}
+    if(buffer.trim())consume(buffer);
+    if(!result)throw new Error("Connection interrupted before completion; the request was not retried");
+    return result;
+  }finally{await reader.cancel().catch(()=>{});reader.releaseLock();response.authComplete?.()}
+}
+function makeProgress(container){
+  const started=performance.now(),rows=new Map();
+  const el=document.createElement("div");el.className="work";el.setAttribute("aria-live","polite");
+  el.innerHTML='<b class="work-title">Live agent activity</b><div class="work-rows"></div><details class="work-history"><summary>Activity log</summary><div></div></details>';
+  container.replaceChildren(el);
+  function update(event){
+    const key=event.kind;if(key!=="coordinator"&&!AGENTS[key])return;
+    let row=rows.get(key);
+    if(!row){row=document.createElement("div");row.className="work-row";row.innerHTML=`${orb(AGENTS[key]?.v||2,24)}<span class="detail"><b></b><small></small></span><span class="phase"></span>`;row.querySelector("b").textContent=key==="coordinator"?"Focal coordinator":AGENTS[key].name;el.querySelector(".work-rows").append(row);rows.set(key,row)}
+    row.dataset.state=event.stage;row.querySelector("small").textContent=event.message||"";row.querySelector(".phase").textContent=event.stage.replaceAll("_"," ");row.querySelector(".orb").classList.toggle("idle",["completed","failed","review_ready"].includes(event.stage));
+    const line=document.createElement("p");line.textContent=`${((performance.now()-started)/1000).toFixed(1)}s · ${key} · ${event.message}`;el.querySelector(".work-history div").append(line);
+    if(el.querySelector(".work-history div").children.length>100)el.querySelector(".work-history div").firstChild.remove();
+    if(event.result&&AGENTS[key]){let slot=el.querySelector(`[data-partial="${key}"]`);if(!slot){slot=document.createElement("div");slot.dataset.partial=key;el.append(slot)}slot.innerHTML=miniCard({kind:key,result:event.result,error:event.result.error,ms:event.ms||0})}
+  }
+  function finish(ok){el.querySelector(".work-title").textContent=`${ok?"Request finished":"Request interrupted"} · ${((performance.now()-started)/1000).toFixed(1)}s`;rows.forEach((row,key)=>{if(!["completed","failed","review_ready"].includes(row.dataset.state)){row.querySelector(".phase").textContent=ok&&key==="coordinator"?"completed":ok?"finished":"interrupted";row.querySelector(".orb").classList.add("idle")}});el.querySelectorAll("[data-partial]").forEach(slot=>slot.remove())}
+  return {el,update,finish};
+}
 $("#chat-form").onsubmit=async e=>{
   e.preventDefault();
   const input=$("#chat-input"), text=input.value.trim(); if(!text)return;
   input.value=""; $("#send").disabled=true; $("#starters").hidden=true;
   bubble(esc(text),"user");
   convo.push({role:"user",content:text});
-  const pending=bubble(`${orb(2,28)}<div class="body"><p class="muted">Choosing agents…</p></div>`,"bot");
+  const pending=bubble(`${logoOrb()}<div class="body"><div class="progress-host"></div></div>`,"bot");
+  const progress=makeProgress(pending.querySelector(".progress-host"));
+  progress.update({kind:"coordinator",stage:"connecting",message:"Connecting to the agent workflow"});
   try{
-    const d=await postJSON(orch.value.replace(/\/$/,"")+"/v1/chat",{messages:convo.slice(-20)},
-      n=>pending.querySelector(".body").innerHTML=`<p class="muted">Couldn't reach the orchestrator, retrying (${n} of ${ATTEMPTS})…</p>`);
+    const cartRelated=!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
+    const d=await withRetry(()=>readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update),
+      n=>progress.update({kind:"coordinator",stage:"retrying",message:`Couldn't reach the orchestrator; retrying (${n} of ${ATTEMPTS})`}),!cartRelated);
+    d.calls.forEach(c=>{if(c.result?.confirmation_token)activePurchase=c.result.confirmation_token;if(c.result?.status==="cart_added")activePurchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
+    progress.finish(true);
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
-    const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
+    const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
     pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
+    pending.querySelector(".body").append(progress.el);
   }catch(err){
     convo.pop();
-    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">Couldn't reach the orchestrator at ${esc(orch.value)} after ${ATTEMPTS} tries (${esc(err.message)}). Is it running?</p></div>`;
+    progress.finish(false);
+    const tried=err.retryable&&!(!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text));
+    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">${esc(err.message)}. ${tried?`Tried ${ATTEMPTS} times; is the orchestrator running?`:"No automatic retry was sent."}</p></div>`;
+    pending.querySelector(".body").append(progress.el);
   }
   pending.scrollIntoView({block:"end",behavior:"smooth"});
   $("#send").disabled=false; input.focus();
 };
 
-renderRoster(); renderUsage(); checkAll();
+document.addEventListener("click",e=>{
+  const listing=e.target.closest("[data-buy-link]"),confirmation=e.target.closest("[data-confirm-buy]");
+  if(!listing&&!confirmation)return;if($("#send").disabled)return;
+  setMode("chat");
+  if(confirmation){activePurchase=confirmation.dataset.confirmBuy;$("#chat-input").value="confirm add to cart"}
+  else{$("#chat-input").value=`Prepare Amazon cart addition for ${listing.dataset.product}, quantity ${listing.dataset.quantity}: ${listing.dataset.buyLink}`}
+  $("#chat-form").requestSubmit();
+});
+
+renderRoster(); renderUsage();
+auth=setupAuth({
+  endpoint:orch,
+  onUserChange(session){
+    preferences?.setUser(session?.user?.id);
+    convo.length=0;
+    activePurchase=null;
+    $("#thread").innerHTML='<div class="msg bot"><div class="body"><p>Ask me to consider a product. I’ll check prices, reviews, and alternatives within your budget.</p></div></div>';
+    $("#results").innerHTML='<div class="empty">Answers from the agents show up here.</div>';
+    $("#starters").hidden=false;
+    $("#chat-input").value="";
+    $("#product").value="";
+  }
+});
+preferences=setupPreferences({request:(...args)=>auth.request(...args)});
 </script>
 </body>
 </html>

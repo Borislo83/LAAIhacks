@@ -77,6 +77,13 @@ class ChatMessage(InputModel):
 
 class ChatRequest(InputModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=20)
+    purchase_confirmation: str | None = Field(default=None, min_length=32, max_length=64)
+
+
+class BuyerPreparation(InputModel):
+    product: str | None = Field(default=None, min_length=1, max_length=500)
+    url: str | None = Field(default=None, max_length=2048)
+    quantity: int = Field(default=1, ge=1, le=20)
 
 
 class ToolArgs(BaseModel):
@@ -89,7 +96,7 @@ class ToolArgs(BaseModel):
 
 
 class AgentCall(BaseModel):
-    kind: TaskKind
+    kind: TaskKind | Literal["buyer"]
     payload: dict[str, Any]
     result: dict[str, Any] | None = None
     error: str | None = None
@@ -99,4 +106,4 @@ class AgentCall(BaseModel):
 class ChatReply(BaseModel):
     reply: str
     calls: list[AgentCall]
-    source: Literal["asi_one", "rules", "coordinator"]
+    source: Literal["asi_one", "rules", "coordinator", "buyer"]

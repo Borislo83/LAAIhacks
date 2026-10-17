@@ -3,6 +3,7 @@
 import os
 
 from . import catalog, llm
+from .progress import tracked
 from .search import SearchUnavailable
 
 
@@ -29,6 +30,7 @@ def _not_found(product: str) -> str:
     return f"I couldn't find '{product}' in the catalog."
 
 
+@tracked("price")
 async def compare_prices(req: PriceCompareRequest) -> PriceCompareResponse:
     if not demo_mode():
         from .live import compare
@@ -79,6 +81,7 @@ async def compare_prices(req: PriceCompareRequest) -> PriceCompareResponse:
     )
 
 
+@tracked("alternatives")
 async def find_alternatives(req: AlternativesRequest) -> AlternativesResponse:
     if not demo_mode():
         from .live import alternatives
@@ -129,6 +132,7 @@ async def find_alternatives(req: AlternativesRequest) -> AlternativesResponse:
     )
 
 
+@tracked("reviews")
 async def get_reviews(req: ReviewsRequest) -> ReviewsResponse:
     if not demo_mode():
         from .live import reviews

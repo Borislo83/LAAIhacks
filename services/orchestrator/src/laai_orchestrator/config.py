@@ -14,3 +14,4 @@ class Config(BaseSettings):
     asi_one_model: str = "asi1-mini"
     # Local prototyping only: lets /v1/chat run without a Supabase sign-in.
     chat_auth_required: bool = True
+    amazon_cart_executor_token: SecretStr = SecretStr("")

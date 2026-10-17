@@ -26,7 +26,7 @@ def text_message(text: str, end_session: bool = True) -> ChatMessage:
     return ChatMessage(timestamp=datetime.now(timezone.utc), msg_id=uuid4(), content=content)
 
 
-def build_chat_protocol(answer: Answer) -> Protocol:
+def build_chat_protocol(answer: Answer, extract_product: bool = True) -> Protocol:
     proto = Protocol(spec=chat_protocol_spec)
 
     @proto.on_message(ChatMessage)
@@ -38,7 +38,7 @@ def build_chat_protocol(answer: Answer) -> Protocol:
         text = " ".join(item.text for item in msg.content if isinstance(item, TextContent)).strip()
         if not text:
             return
-        product = await llm.extract_product(text)
+        product = await llm.extract_product(text) if extract_product else text
         ctx.logger.info(f"Chat from {sender}: {text!r} -> product {product!r}")
         await ctx.send(sender, text_message(await answer(product)))
 
