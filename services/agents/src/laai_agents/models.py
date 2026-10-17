@@ -23,6 +23,10 @@ class Offer(Model):
     store: str
     price: float
     url: str
+    # structured (JSON-LD), page_meta (price tags) or search_snippet; demo data is curated.
+    source: str = "structured"
+    # high: trusted store + page evidence; medium: one of the two; low: neither.
+    trust: str = "high"
 
 
 class PriceCompareRequest(Model):

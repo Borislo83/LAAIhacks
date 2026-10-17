@@ -76,7 +76,7 @@ async def free_search(query: str) -> list[Source]:
         from ddgs import DDGS
 
         return DDGS(timeout=8).text(
-            query, region="us-en", max_results=8, backend="yahoo,duckduckgo"
+            query, region="us-en", max_results=12, backend="yahoo,duckduckgo"
         )
 
     try:
