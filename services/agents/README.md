@@ -14,7 +14,15 @@ Product data defaults to online search. Set `SEARCH_PROVIDER=ddgs` for keyless o
 search, `auto` to try ASI:One search with DDGS fallback, or `asi` to require ASI search.
 `PRODUCT_DATA_MODE=demo` explicitly selects the illustrative fixture catalog. Live failures
 never fall back to fixture prices. Every result identifies its data source, retrieval time,
-source links, and limitations. Structured offers are read only from reviewed HTTPS merchant domains, without redirects. Search results can be old or incomplete; prices are leads,
+source links, and limitations. Prices are gathered broadly, then ranked by trust. Any public HTTPS search result
+that names the product is a candidate: its JSON-LD offers (Offer or AggregateOffer), price
+meta tags, or a single clear dollar price in the search snippet. Each price is labeled
+`high` (major retailer/brand store + read from the page), `medium` (one of the two) or
+`low` (neither), and the best price is the cheapest in the most trusted tier available.
+Only clear mismatches are dropped: other currencies, explicit out-of-stock or used
+listings, installments, ranges, other model variants and price outliers. Pages are
+fetched read-only, redirects are re-checked, and private network hosts are refused.
+Search results can be old or incomplete; prices are leads,
 not verified checkout offers. Missing numeric evidence stays missing.
 
 ASI search must report a completed search and URL citations; unsupported responses do
@@ -41,7 +49,7 @@ the browser integration supplies the selected page's product identity.
 
 Known catalog names/categories seed candidate identity only. Live mode looks up prices
 again and never uses fixture prices or ratings. Unknown categories return research links
-rather than invented alternatives. Candidates need a matching in-stock USD structured merchant offer
+rather than invented alternatives. Candidates need a trust-ranked USD price
 strictly below the requested budget. Ratings remain absent unless backed by a source.
 
 The local API is a development surface. It executes research immediately on an explicit
