@@ -31,6 +31,7 @@ class Offer(Model):
 
 class PriceCompareRequest(Model):
     product: str
+    progress_id: str | None = Field(default=None, min_length=32, max_length=64)
     current_store: str | None = None
     current_price: float | None = None
 
@@ -45,6 +46,7 @@ class PriceCompareResponse(EvidenceResponse):
 
 class AlternativesRequest(Model):
     product: str
+    progress_id: str | None = Field(default=None, min_length=32, max_length=64)
     max_price: float | None = None
 
 
@@ -65,6 +67,7 @@ class AlternativesResponse(EvidenceResponse):
 
 class ReviewsRequest(Model):
     product: str
+    progress_id: str | None = Field(default=None, min_length=32, max_length=64)
 
 
 class ReviewsResponse(EvidenceResponse):
@@ -79,6 +82,7 @@ class ReviewsResponse(EvidenceResponse):
 
 class ConsiderRequest(Model):
     product: str = Field(min_length=1, max_length=500)
+    progress_id: str | None = Field(default=None, min_length=32, max_length=64)
     max_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 

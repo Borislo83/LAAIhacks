@@ -28,11 +28,21 @@ async def check() -> int:
                 },
             )
             response.raise_for_status()
-            for table in ["laai_settings", "laai_contexts", "laai_tasks"]:
+            for table, column in [
+                ("laai_settings", "user_id"),
+                ("laai_contexts", "user_id"),
+                ("laai_tasks", "user_id"),
+                ("laai_sessions", "user_id"),
+                ("laai_pages", "session_id"),
+                ("laai_actions", "session_id"),
+                ("laai_approval_events", "session_id"),
+                ("laai_idempotency_keys", "session_id"),
+                ("laai_user_preferences", "user_id"),
+            ]:
                 response = await http.get(
                     base + "/rest/v1/" + table,
                     headers=headers,
-                    params={"select": "user_id", "limit": 0},
+                    params={"select": column, "limit": 0},
                 )
                 if response.is_error:
                     print(f"Database check failed for {table} (HTTP {response.status_code}).")
@@ -43,7 +53,9 @@ async def check() -> int:
     except httpx.HTTPError:
         print("Supabase connection check failed. Check project URL, keys, and network access.")
         return 1
-    print("Supabase Auth and all three orchestrator tables are reachable. No data was changed.")
+    print(
+        "Supabase Auth and all orchestrator/workflow/preferences tables are reachable. No data was changed."
+    )
     return 0
 
 

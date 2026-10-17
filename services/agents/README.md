@@ -31,7 +31,48 @@ Run `uv run python check_search.py` to diagnose both providers without printing 
 See [ASI search documentation](https://docs.asi1.ai/documentation/build-with-asi-one/web-search)
 and [DDGS](https://pypi.org/project/ddgs/).
 
-## Focal coordinator
+## Live dashboard progress
+
+Research requests may include an opaque `progress_id`. The coordinator forwards it to
+the specialist uAgents; search, offer validation and summary steps emit actual work events.
+`POST /progress` with `{"progress_id":"<32-character random ID>","after":0}` returns ordered
+events for that request. Events are ephemeral, capped and retained for up to ten minutes.
+The dashboard backend relays them over authenticated server-sent events. They describe
+operations and results, not a model's private reasoning. No simulated percentage is shown.
+
+## Amazon cart agent
+
+The normal Bureau also starts `focal-amazon-buyer-demo`. `POST /buy/prepare` accepts either
+`{"product":"Sony XM5","quantity":1}` or
+`{"url":"https://www.amazon.com/dp/B0B5VHRX7F","quantity":1}`. Product names search online
+for Amazon listings; the user chooses a specific listing before approving a cart addition.
+Links must be HTTPS Amazon US product URLs with an ASIN; tracking parameters are discarded.
+
+The review returns a short-lived `confirmation_token`. After explicit approval, the backend
+calls `POST /buy/confirm` with that token and its private `executor_token`. Set the same
+`AMAZON_CART_EXECUTOR_TOKEN` in agents and orchestrator `.env` files; never send it to the
+browser. The local environments are configured; the example files contain no credentials.
+
+The executor launches a dedicated visible Chrome window through Playwright. It reads the
+real Amazon cart, checks the approved listing's ASIN and quantity, clicks **Add to Cart**,
+and verifies the ASIN is visible in the active cart. `cart_added` is returned only with that
+evidence. Existing items are not duplicated; their quantity must be reviewed on Amazon.
+An uncertain attempt is never automatically repeated. Unknown/expired approvals require a
+new review. There is no checkout, payment, Buy Now, or order-submission operation.
+
+Chrome must be installed on the machine running the agents. The profile lives in the ignored
+`.runtime/amazon-profile` directory (override `AMAZON_BROWSER_PROFILE` if needed). It does not
+read your normal browser profile. Sign in or complete Amazon verification manually in this
+window if asked, then prepare and approve again. Signed-out carts remain in that dedicated
+browser session; a dashboard link opened in another browser profile would not share it.
+The real cart remains visible in the agent's Chrome window. Prices and totals must be
+reviewed on Amazon. The cloud-hosted browser option is not configured.
+
+On the dashboard, type `Buy Sony XM5 on Amazon`, or paste an Amazon product link. Choose a
+listing, then use **Add to real Amazon cart** or type `confirm add to cart`. Quantity is also
+available in Direct mode. No buyer execution is implied by a research recommendation.
+
+## Coordinator workflow
 
 The Bureau also starts `focal-shopping-assistant`, a fourth uAgent with ACP and
 `POST /consider`. It sends typed messages to the three specialist uAgents concurrently,

@@ -40,6 +40,8 @@ class Backend:
 
     def __init__(self):
         self.settings = DEFAULTS.copy()
+        self.preferences = {"display_density": "comfortable", "shopping_priority": "balanced",
+            "proactive_enabled": True, "notes": "", "updated_at": "2026-10-17T00:00:00Z"}
         self.rows = {}
         self.agent_calls = []
         self.agent_error = False
@@ -59,6 +61,10 @@ class Backend:
             return httpx.Response(401, json={})
         if self.storage_error and path.startswith("/rest/"):
             return httpx.Response(500, json={"message": "private storage details"})
+        if path == "/rest/v1/rpc/laai_preferences":
+            if body.get("p_preferences") is not None:
+                self.preferences.update(body["p_preferences"])
+            return httpx.Response(200, json=self.preferences)
         if path == "/rest/v1/rpc/laai_get_settings":
             return httpx.Response(200, json=self.settings)
         if path == "/rest/v1/laai_settings":
@@ -134,6 +140,34 @@ def task_id(client):
     response = client.post("/v1/contexts", json=PAGE)
     assert response.status_code == 201
     return response.json()["tasks"][0]["id"]
+
+
+def test_dashboard_auth_config_exposes_only_public_credentials(api):
+    client, _ = api
+    client.headers.pop("Authorization")
+    response = client.get("/v1/auth/config")
+    assert response.status_code == 200
+    assert response.json() == {
+        "supabase_url": "https://supabase.example",
+        "supabase_publishable_key": "public-test",
+    }
+    assert "secret-test" not in response.text
+
+
+def test_dashboard_direct_calls_require_verified_session(api):
+    client, backend = api
+    client.headers.pop("Authorization")
+    for headers in ({}, {"Authorization": "Bearer invalid"}):
+        response = client.post("/v1/agents/price", json={"product": "Sony XM5"}, headers=headers)
+        assert response.status_code == 401
+    assert backend.agent_calls == []
+    response = client.post(
+        "/v1/agents/price", json={"product": "Sony XM5"},
+        headers={"Authorization": "Bearer valid"},
+    )
+    assert response.status_code == 200
+    assert response.json()["result"]["summary"] == "Best price is $299"
+    assert len(backend.agent_calls) == 1
 
 
 def test_prediction_dispatch_and_restart_history(api):

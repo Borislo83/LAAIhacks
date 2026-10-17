@@ -12,6 +12,7 @@ dependencies = [
     "uagents>=0.26.1",
     "ddgs>=9,<10",
     "lxml>=6,<7",
+    "playwright>=1.50,<2",
 ]
 
 [project.scripts]

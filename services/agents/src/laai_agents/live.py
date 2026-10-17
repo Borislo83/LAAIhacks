@@ -12,6 +12,7 @@ from .models import (
     PriceCompareResponse,
     ReviewsResponse,
 )
+from .progress import report
 from .search import SearchUnavailable, search
 
 
@@ -36,6 +37,7 @@ async def _candidates(sources, name):
 
     leads = [s for s in sources if matches_product(f"{s.title} {s.snippet}", name)]
     urls = list(dict.fromkeys(s.url for s in leads))[:5]
+    report("validating", f"Checking offers on {len(urls)} merchant pages and ranking evidence")
     page_offers = [
         offer
         for group in await asyncio.gather(*(fetch_offers(url, name) for url in urls))
@@ -114,6 +116,7 @@ async def alternatives(req):
         *(compare(PriceCompareRequest(product=p.name)) for p in candidates[:3]),
         return_exceptions=True,
     )
+    report("comparing", f"Comparing {len(results)} candidates against the budget")
     priced, unpriced = [], []
     for product, result in zip(candidates, results):
         best = None if isinstance(result, Exception) else result.best
@@ -172,6 +175,7 @@ def _research_url(product: str) -> str:
 async def reviews(req):
     name = product_name(req.product)
     sources, meta = await search(f"{name} independent review")
+    report("summarizing", "Collecting sourced review excerpts")
     excerpts = [f"{s.title}: {s.snippet[:280]}" for s in sources if s.snippet][:2]
     summary = (
         "Review search excerpts (not full-article analysis): " + " ".join(excerpts)

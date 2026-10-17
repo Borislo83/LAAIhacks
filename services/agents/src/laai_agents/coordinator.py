@@ -27,6 +27,7 @@ from .models import (
     ReviewsRequest,
     ReviewsResponse,
 )
+from .progress import ProgressBatch, ProgressQuery, publish, read
 
 
 ATTEMPTS = 3
@@ -72,19 +73,23 @@ async def consider(
         (
             "price",
             "laai-price-compare",
-            PriceCompareRequest(product=req.product),
+            PriceCompareRequest(product=req.product, progress_id=req.progress_id),
             PriceCompareResponse,
         ),
         (
             "reviews",
             "laai-reviews",
-            ReviewsRequest(product=req.product),
+            ReviewsRequest(product=req.product, progress_id=req.progress_id),
             ReviewsResponse,
         ),
         (
             "alternatives",
             "laai-alternatives",
-            AlternativesRequest(product=req.product, max_price=req.max_price),
+            AlternativesRequest(
+                product=req.product,
+                max_price=req.max_price,
+                progress_id=req.progress_id,
+            ),
             AlternativesResponse,
         ),
     ]
@@ -92,10 +97,19 @@ async def consider(
     async def delegate(spec):
         field, name, request, response_type = spec
         started = time.perf_counter()
+        publish(
+            req.progress_id, field, "delegated", "Coordinator sent work to specialist"
+        )
         result = None
         # Retry an unreachable specialist or a failed search; keep the last answer.
         for attempt in range(ATTEMPTS):
             if attempt:
+                publish(
+                    req.progress_id,
+                    field,
+                    "retrying",
+                    f"No usable answer yet; retrying ({attempt + 1} of {ATTEMPTS})",
+                )
                 await asyncio.sleep(RETRY_DELAY * attempt)
             try:
                 answer, _ = await ctx.send_and_receive(
@@ -119,7 +133,12 @@ async def consider(
         if top is None:
             return [first]
         second = await delegate(
-            ("alternative_reviews", "laai-reviews", ReviewsRequest(product=top), ReviewsResponse)
+            (
+                "alternative_reviews",
+                "laai-reviews",
+                ReviewsRequest(product=top, progress_id=req.progress_id),
+                ReviewsResponse,
+            )
         )
         return [first, second]
 
@@ -197,6 +216,9 @@ def build_coordinator(addresses: dict[str, str]):
 
     @agent.on_rest_post("/consider", ConsiderRequest, ConsiderResponse)
     async def on_rest(ctx: Context, req: ConsiderRequest) -> ConsiderResponse:
+        publish(
+            req.progress_id, "coordinator", "planning", "Identifying product and budget"
+        )
         parsed = await parse_request(req.product)
         if parsed is None:
             return ConsiderResponse(
@@ -204,7 +226,12 @@ def build_coordinator(addresses: dict[str, str]):
             )
         if req.max_price is not None:
             parsed.max_price = req.max_price
+        parsed.progress_id = req.progress_id
         return await consider(ctx, addresses, parsed)
+
+    @agent.on_rest_post("/progress", ProgressQuery, ProgressBatch)
+    async def progress(ctx: Context, req: ProgressQuery) -> ProgressBatch:
+        return ProgressBatch(events=read(req.progress_id, req.after))
 
     agent.include(proto, publish_manifest=True)
     return agent

@@ -21,6 +21,21 @@ After applying the migration and setting keys, run `uv run python check_supabase
 read-only check of Auth and all three database tables.
 
 The backend listens on port **8001**, with API docs at `http://localhost:8001/docs`.
+
+Dashboard progress uses authenticated `POST /v1/chat/stream` and
+`POST /v1/agents/{kind}/stream` server-sent events. `progress` events identify the working
+agent and its current operation; `result` carries the final response. The stream sends
+heartbeats, cancels its relay on disconnect, and never automatically retries execution.
+Ordinary JSON `/v1/chat` remains available. Progress is ephemeral and separate from the
+Glasses Team's durable approval events.
+
+The Amazon buying demo uses `POST /v1/buyer/prepare/stream` or chat. It accepts a product
+name or Amazon product link and shows a review for a real cart addition.
+Chat confirmation requires both an explicit affirmative message and the preparation's
+`purchase_confirmation` token. The backend adds its private `AMAZON_CART_EXECUTOR_TOKEN`
+and delegates to the local visible Chrome executor. The selected ASIN must be verified in
+the active cart before success is reported. The executor stops before checkout; no Amazon
+order or payment occurs. Browser profiles are local to the agents process.
 Set `AGENTS_URL` for a remote agent Bureau and `CORS_ORIGINS` for frontend origins.
 Optional `ASI_ONE_API_KEY` enables ASI:One page understanding. Without it, an explicit `product`
 field produces deterministic shopping suggestions; unstructured pages produce no tasks.
