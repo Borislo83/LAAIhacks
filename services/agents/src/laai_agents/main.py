@@ -12,8 +12,8 @@ from uagents import Bureau
 
 load_dotenv()
 
-from . import llm  # noqa: E402
-from .agents import build_alternatives_agent, build_price_agent, build_reviews_agent  # noqa: E402
+from . import llm
+from .agents import build_alternatives_agent, build_price_agent, build_reviews_agent
 
 BUILDERS = {
     "price": build_price_agent,
@@ -38,6 +38,9 @@ def main() -> None:
         return
 
     agents = [build() for build in BUILDERS.values()]
+    from .coordinator import build_coordinator
+
+    agents.append(build_coordinator({a.name: a.address for a in agents}))
     bureau = Bureau(port=args.port, endpoint=[f"http://127.0.0.1:{args.port}/submit"])
     for agent in agents:
         print(f"{agent.name}: {agent.address}")

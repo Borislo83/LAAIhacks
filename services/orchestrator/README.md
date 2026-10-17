@@ -44,10 +44,17 @@ Request bodies cannot supply a user ID. Expired tokens return 401; clients refre
 | POST | `/v1/chat` | Plain-language chat; ASI:One picks which agents to call |
 
 `/v1/chat` takes `{"messages": [{"role": "user", "content": "..."}]}` (up to 20 turns) and returns
-`reply`, `source` (`asi_one` or `rules`), and `calls`: each agent's `kind`, `payload`, `result`,
+`reply`, `source` (`asi_one`, `rules`, or `coordinator`), and `calls`: each agent's `kind`, `payload`, `result`,
 `error`, and `ms`. ASI:One chooses tools, and the backend validates every argument before calling
 an agent. A store or price the user never typed is dropped. Without a key, keywords choose agents.
 Chat saves nothing. For local prototyping only, `CHAT_AUTH_REQUIRED=false` skips the sign-in.
+
+"Consider/evaluate/assess this product" requests with a product name, or explicit requests
+for prices, reviews and alternatives, route to the Focal coordinator's `/consider` endpoint.
+It delegates typed messages to all three specialist uAgents and forwards the alternative
+budget. Responses include sources, timestamps and per-specialist failures. This research
+testing path is separate from G2 approval; the [contract client](../agents/README.md#shared-glasses-contract-v10)
+submits proposals to the Glasses Team API and runs approved research from its event stream.
 
 Example context body:
 

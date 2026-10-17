@@ -25,6 +25,11 @@ The Paper file "Focal — Design" holds the static E2 frame (still in the older 
 - **Chat:** plain-language questions go to the orchestrator's `POST /v1/chat` (:8001), which picks the agents.
 - **Direct:** fill in the fields and call the agents' REST routes on the Bureau (:8000) yourself.
 - Usage (calls, average time, errors) is counted in this browser only.
+- Ask "Consider Sony XM5 and recommend an alternative under $300" to delegate to all
+  three specialists through the Focal coordinator. Results show online sources, timestamps
+  and limitations. Prices/reviews in explicit demo mode are labeled illustrative.
+- This Studio is for research testing. The G2 approval workflow uses the contract client
+  in `services/agents/src/laai_agents/integration.py` and the Glasses Team's API.
 
 Run `uv run laai-agents` in `services/agents` and `uv run laai-orchestrator` in `services/orchestrator`
 (with `CHAT_AUTH_REQUIRED=false` and `http://localhost:5173` in `CORS_ORIGINS` in its `.env`). Then serve this

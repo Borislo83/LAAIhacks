@@ -7,6 +7,7 @@ from laai_agents.models import AlternativesRequest, PriceCompareRequest, Reviews
 @pytest.fixture(autouse=True)
 def no_llm(monkeypatch):
     monkeypatch.delenv("ASI_ONE_API_KEY", raising=False)
+    monkeypatch.setenv("PRODUCT_DATA_MODE", "demo")
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "page_id": "sony-xm5-demo-page",
+  "url": "https://electronics.sony.com/audio/headphones/headband/p/wh1000xm5-b",
+  "kind": "product",
+  "title": "Sony WH-1000XM5",
+  "summary": ["Product identity fixture; agent results use online sources in live mode."],
+  "facts": [],
+  "source_label": "Browser handoff fixture",
+  "updated_at": "2026-10-17T22:00:00Z"
+}

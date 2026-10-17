@@ -396,3 +396,45 @@ def test_chat_drops_prices_and_stores_the_user_never_said():
     assert backend.agent_calls == [
         ("/price", {"product": "AirPods Pro 2", "current_store": "Best Buy", "current_price": None})
     ]
+
+
+def test_consider_routes_to_fetch_coordinator_and_exposes_partial_failures():
+    seen = []
+
+    def handle(request):
+        assert request.url.path == "/consider"
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "product": "Sony WH-1000XM5",
+                "max_price": 300,
+                "summary": "Review sources found; price unavailable.",
+                "price": None,
+                "reviews": {"summary": "Review sources found", "sources": []},
+                "alternatives": {"summary": "No verified offer", "alternatives": []},
+                "errors": {"price": "Live price search unavailable"},
+                "timings_ms": {"reviews": 123},
+            },
+        )
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    with TestClient(create_app(config(chat_auth_required=False), http)) as client:
+        response = client.post(
+            "/v1/chat",
+            json={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Consider Sony XM5 and alternatives under $300",
+                    }
+                ]
+            },
+        )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "coordinator" and len(data["calls"]) == 3
+    assert data["calls"][0]["error"] == "Live price search unavailable"
+    assert data["calls"][1]["ms"] == 123
+    assert data["calls"][2]["payload"]["max_price"] == 300
+    assert len(seen) == 1

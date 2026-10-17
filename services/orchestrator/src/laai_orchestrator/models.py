@@ -99,4 +99,4 @@ class AgentCall(BaseModel):
 class ChatReply(BaseModel):
     reply: str
     calls: list[AgentCall]
-    source: Literal["asi_one", "rules"]
+    source: Literal["asi_one", "rules", "coordinator"]
