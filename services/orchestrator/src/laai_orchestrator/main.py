@@ -7,8 +7,11 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from .chat import chat
 from .config import Config
 from .models import (
+    ChatReply,
+    ChatRequest,
     ContextResponse,
     DispatchRequest,
     PageContext,
@@ -46,6 +49,15 @@ async def current_user(
 
 
 User = Annotated[UUID, Depends(current_user)]
+
+
+async def chat_user(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> UUID | None:
+    if not request.app.state.config.chat_auth_required:
+        return None
+    return await current_user(request, credentials)
 
 
 def create_app(config: Config | None = None, http: httpx.AsyncClient | None = None) -> FastAPI:
@@ -126,6 +138,16 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
             result = None
             error = "Agent unavailable or returned an invalid response"
         return await store.finish(user, task_id, result, error)
+
+    @app.post("/v1/chat", response_model=ChatReply)
+    async def chat_route(
+        body: ChatRequest,
+        request: Request,
+        _: Annotated[UUID | None, Depends(chat_user)],
+    ):
+        if body.messages[-1].role != "user":
+            raise HTTPException(422, "Last message must be from the user")
+        return await chat(body.messages, config, request.app.state.http)
 
     return app
 

@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Focal Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@1&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F7F7F5; --ink:#0B0B0C; --muted:#6E6E73; --hair:#E4E4E6; --cobalt:#2F47E8;
+  --lens:#0E0E10; --signal:#139A4E; --signal-soft:rgba(19,154,78,.14); --phosphor:#3CFF7A; --white:#FFFFFF; --warn:#C2410C;
+  --sans:'Inter',system-ui,sans-serif; --serif:'Instrument Serif',Georgia,serif; --mono:'JetBrains Mono',ui-monospace,monospace;
+}
+*{box-sizing:border-box;margin:0}
+[hidden]{display:none!important}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1296px;margin:0 auto;padding:0 24px 72px}
+em{font-family:var(--serif);font-style:italic;font-weight:400}
+.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}
+
+nav.top{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center;padding:26px 0 20px;border-bottom:1px solid var(--hair)}
+.logo{display:flex;align-items:center;gap:10px;font-weight:600;font-size:18px;letter-spacing:-.02em}
+nav.top .links{display:flex;gap:32px;font-size:14px;color:var(--muted)}
+nav.top .links .on{color:var(--ink)}
+.endpoint{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
+.endpoint input{font:12px var(--mono);border:1px solid var(--hair);background:var(--white);border-radius:8px;padding:8px 10px;width:190px;color:var(--ink)}
+
+.btn{font:500 14px var(--sans);padding:12px 18px;border-radius:8px;border:1px solid var(--hair);background:var(--white);color:var(--ink);cursor:pointer}
+.btn.dark{background:var(--ink);color:var(--white);border-color:var(--ink)}
+.btn:disabled{opacity:.5;cursor:default}
+.chip{font:500 13px var(--sans);background:none;border:1px solid var(--hair);border-radius:999px;padding:7px 12px;cursor:pointer;color:var(--ink)}
+.chip:hover{border-color:var(--ink)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+
+header.hero{padding:48px 0 32px;display:flex;justify-content:space-between;align-items:end;gap:32px;flex-wrap:wrap}
+h1{font-weight:500;letter-spacing:-.04em;font-size:clamp(40px,5vw,64px);line-height:1.02}
+h1 em{color:var(--signal);font-size:1.12em;letter-spacing:-.01em}
+h2{font-weight:500;letter-spacing:-.03em;font-size:24px;line-height:1.2}
+h2 em{color:var(--muted);font-size:1.12em}
+.lede{font-size:15px;line-height:24px;color:var(--muted);max-width:30em}
+
+.grid{display:grid;grid-template-columns:340px 1fr;gap:32px;align-items:start}
+.grid>*{min-width:0}
+
+/* agent roster */
+.roster{display:flex;flex-direction:column;gap:10px}
+.agent{display:flex;gap:14px;align-items:center;background:var(--white);border:1px solid var(--hair);border-radius:14px;padding:14px;cursor:pointer;text-align:left;font:inherit;color:inherit;transition:border-color .2s,box-shadow .2s}
+.agent[aria-pressed="true"]{border-color:var(--signal);box-shadow:0 0 0 4px var(--signal-soft)}
+.agent .meta{flex:1;min-width:0}
+.agent b{font-weight:500;font-size:15px;display:block}
+.agent small{font-size:12px;color:var(--muted)}
+.agent .route{font:11px var(--mono);color:var(--muted)}
+.status{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.status i{width:7px;height:7px;border-radius:50%;background:var(--hair)}
+.status.up i{background:var(--signal)}
+.status.down i{background:var(--warn)}
+
+/* usage */
+.usage{margin-top:24px;border-top:1px solid var(--hair);padding-top:20px}
+.usage table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px}
+.usage th{font-weight:500;color:var(--muted);text-align:left;padding:6px 0;font-size:12px}
+.usage td{padding:8px 0;border-top:1px solid var(--hair)}
+.usage td.n,.usage th.n{text-align:right;font-family:var(--mono);font-size:12px}
+.usage .foot{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:12px;color:var(--muted)}
+.linkbtn{background:none;border:0;padding:0;font:inherit;color:var(--muted);text-decoration:underline;cursor:pointer}
+
+/* ask */
+.ask{background:var(--white);border:1px solid var(--hair);border-radius:16px;padding:20px}
+.ask form{display:flex;flex-direction:column;gap:14px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:140px}
+.field label{font-size:12px;color:var(--muted)}
+.field input{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
+.field.big{flex:3;min-width:240px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.chips span{font-size:12px;color:var(--muted)}
+
+/* results */
+.results{display:flex;flex-direction:column;gap:16px;margin-top:20px}
+.empty{border:1px dashed var(--hair);border-radius:16px;padding:40px;text-align:center;color:var(--muted);font-size:14px}
+.card{background:var(--white);border:1px solid var(--hair);border-radius:16px;overflow:hidden}
+.card .hd{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--hair)}
+.card .hd b{font-weight:500;font-size:15px;flex:1}
+.card .hd .ms{font:12px var(--mono);color:var(--muted)}
+.card .bd{display:grid;grid-template-columns:1fr 300px;gap:20px;padding:18px}
+.lensbox{background:var(--lens);border-radius:12px;padding:16px;font-family:var(--mono);color:var(--phosphor);font-size:12px;line-height:19px;display:flex;flex-direction:column;gap:2px}
+.lensbox .l1{color:#6A6A70;font-size:11px;letter-spacing:.04em;text-transform:uppercase}
+.lensbox .l2{font-size:15px;line-height:22px}
+.summary{font-size:15px;line-height:23px}
+.list{margin-top:12px;display:flex;flex-direction:column}
+.list a,.list div{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--hair);font-size:14px;color:var(--ink);text-decoration:none}
+.list a:hover span:first-child{text-decoration:underline}
+.list .p{font-family:var(--mono);font-size:13px}
+.list .best .p{color:var(--signal)}
+.pc{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;font-size:14px}
+.pc ul{padding-left:18px;margin-top:6px;line-height:22px}
+.pc h4{font-size:12px;font-weight:500;color:var(--muted)}
+.err{color:var(--warn);font-size:14px}
+.thinking{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:14px;padding:18px}
+
+/* orbs (same as landing) */
+.orb{display:block;flex-shrink:0}
+.orb .s1{animation:sweep 2.4s ease-in-out infinite}
+@keyframes sweep{0%,100%{opacity:.14}35%{opacity:1}60%{opacity:.3}}
+.orb .s2{animation:wave 1.6s ease-in-out infinite alternate;transform-box:fill-box}
+@keyframes wave{from{transform:translateY(-34%)}to{transform:translateY(34%)}}
+.orb .s3{animation:scan 2.2s linear infinite;transform-box:view-box}
+@keyframes scan{from{transform:translateX(-60%)}to{transform:translateX(110%)}}
+.orb.idle *{animation-play-state:paused}
+
+/* mode tabs + chat */
+.tabs{display:inline-flex;gap:4px;padding:4px;border:1px solid var(--hair);border-radius:999px;background:var(--white);margin-bottom:16px}
+.tabs button{font:500 13px var(--sans);border:0;background:none;border-radius:999px;padding:7px 14px;cursor:pointer;color:var(--muted)}
+.tabs button[aria-selected="true"]{background:var(--ink);color:var(--white)}
+.chat{background:var(--white);border:1px solid var(--hair);border-radius:16px;display:flex;flex-direction:column;min-height:520px}
+.thread{flex:1;display:flex;flex-direction:column;gap:18px;padding:20px;overflow-y:auto;max-height:68vh}
+.msg{max-width:88%;font-size:15px;line-height:23px}
+.msg.user{align-self:flex-end;background:var(--ink);color:var(--white);padding:10px 14px;border-radius:14px 14px 4px 14px}
+.msg.bot{align-self:flex-start;display:flex;gap:12px;align-items:flex-start;width:88%}
+.msg.bot .body{flex:1;min-width:0;display:flex;flex-direction:column;gap:12px}
+.msg.bot .via{font:11px var(--mono);color:var(--muted)}
+.msg .err{font-size:14px}
+.mini{border:1px solid var(--hair);border-radius:12px;overflow:hidden}
+.mini .hd{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--hair);font-size:13px}
+.mini .hd b{font-weight:500;flex:1}
+.mini .hd .ms{font:11px var(--mono);color:var(--muted)}
+.mini .bd{display:grid;grid-template-columns:1fr 240px;gap:14px;padding:12px 14px}
+.mini .list{margin-top:0}
+.mini .pc{margin-top:0}
+.composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--hair)}
+.composer input{flex:1;min-width:0;font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
+.starters{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 4px}
+
+@media (max-width:980px){
+  .mini .bd{grid-template-columns:1fr}
+  .msg.bot{width:100%}
+  .grid{grid-template-columns:1fr}
+  .card .bd{grid-template-columns:1fr}
+  nav.top .links{display:none}
+}
+@media (max-width:560px){
+  .endpoint input{width:150px}
+  .endpoint{width:100%}
+  .pc{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="top">
+    <div class="logo" data-logo></div>
+    <div class="links"><a href="focal.html" style="color:inherit;text-decoration:none">Home</a><span class="on">Agents</span><span>Lens</span></div>
+    <div class="endpoint"><label for="orch">Orchestrator</label><input id="orch" spellcheck="false"><label for="base">Bureau</label><input id="base" spellcheck="false"><button class="chip" id="ping" type="button">Check</button></div>
+  </nav>
+
+  <header class="hero">
+    <h1>Talk to your <em>agents.</em></h1>
+    <p class="lede">Ask in plain words. The orchestrator picks which Fetch.ai agents to call, then answers from what they return. Each card shows what would land on the lens.</p>
+  </header>
+
+  <div class="grid">
+    <aside>
+      <h2>Agents</h2>
+      <p class="muted" style="font-size:13px;margin:6px 0 14px">In chat the orchestrator picks. In Direct, you do.</p>
+      <div class="roster" id="roster"></div>
+
+      <div class="usage">
+        <h2>Usage <em>this browser</em></h2>
+        <table><thead><tr><th>Agent</th><th class="n">Calls</th><th class="n">Avg</th><th class="n">Errors</th></tr></thead><tbody id="usage"></tbody></table>
+        <div class="foot"><span id="usage-since"></span><button class="linkbtn" id="reset" type="button">Reset</button></div>
+      </div>
+    </aside>
+
+    <main>
+      <div class="tabs" role="tablist"><button role="tab" data-mode="chat" aria-selected="true">Chat</button><button role="tab" data-mode="direct" aria-selected="false">Direct</button></div>
+
+      <section id="pane-chat">
+        <div class="chat">
+          <div class="thread" id="thread" aria-live="polite">
+            <div class="msg bot"><span data-orb-logo></span><div class="body"><p>Ask me about something you're looking at. I'll check prices, alternatives or reviews, whichever helps.</p></div></div>
+          </div>
+          <div class="starters" id="starters"></div>
+          <form class="composer" id="chat-form"><input id="chat-input" placeholder="Is the Sony XM5 worth it, or is there something cheaper?" autocomplete="off" required><button class="btn dark" id="send">Send</button></form>
+        </div>
+      </section>
+
+      <section id="pane-direct" hidden>
+      <div class="ask">
+        <form id="ask">
+          <div class="row">
+            <div class="field big"><label for="product">Product you're looking at</label><input id="product" required placeholder="e.g. Sony XM5" autocomplete="off"></div>
+            <div class="field"><label for="store">Current store</label><input id="store" placeholder="Best Buy" autocomplete="off"></div>
+            <div class="field"><label for="price">Current price</label><input id="price" type="number" step="0.01" min="0" placeholder="$"></div>
+            <div class="field"><label for="max">Max for alternatives</label><input id="max" type="number" step="0.01" min="0" placeholder="$"></div>
+          </div>
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <div class="chips"><span>Try</span></div>
+            <button class="btn dark" id="go">Ask agents</button>
+          </div>
+        </form>
+      </div>
+      <div class="results" id="results"><div class="empty">Answers from the agents show up here.</div></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+const AGENTS={
+  price:{v:3,name:"Price agent",id:"laai-price-compare",route:"/price",what:"Prices across stores"},
+  alternatives:{v:2,name:"Alternatives agent",id:"laai-alternatives",route:"/alternatives",what:"Cheaper or better-rated picks"},
+  reviews:{v:1,name:"Reviews agent",id:"laai-reviews",route:"/reviews",what:"Rating, pros and cons"},
+};
+const KEYS=Object.keys(AGENTS);
+const TRY=["Sony XM5","AirPods Pro 2","Bose QC Ultra","Nothing Ear (a)"];
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money=n=>n==null?"–":"$"+Number(n).toFixed(2);
+
+/* storage is a convenience only */
+const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+
+/* orbs, same generator as focal.html */
+let uid=0;
+function orb(v,size=40,idle=false){
+  const id="c"+(uid++), r=size/2-1, c=size/2, g="#4A4A50";
+  let el="";
+  const st=Math.max(2.6,size/11), n=Math.floor(size/st)+1;
+  if(v===1){const gap=Math.max(3,Math.round(size/12));let i=0;for(let y=2;y<size-1;y+=gap,i++)el+=`<rect class="s1" style="animation-delay:${(i*0.09).toFixed(2)}s" x="0" y="${y}" width="${size}" height="${Math.max(1.2,size/18).toFixed(1)}" fill="#fff"/>`}
+  if(v===2)for(let i=0;i<n;i++)el+=`<rect x="${(i*st+1).toFixed(1)}" y="0" width="1" height="${size}" fill="${g}"/>`;
+  if(v===2)for(let k=0;k<5;k++)el+=`<circle class="s2" style="animation-delay:${(-k*0.32).toFixed(2)}s" cx="${(size*.15+k*size*.175).toFixed(1)}" cy="${c}" r="${Math.max(1,size/22).toFixed(1)}" fill="#fff"/>`;
+  if(v===3){for(let i=0;i<n;i++)el+=`<rect x="0" y="${(i*st+1).toFixed(1)}" width="${size}" height="1" fill="${g}"/>`;
+    [[.28,.3,1.9],[.45,.25,2.6],[.62,.2,2.2],[.8,.15,3.1]].forEach(([y,w,d],k)=>el+=`<rect class="s3" style="animation-duration:${d}s;animation-delay:${(-k*0.7).toFixed(2)}s" x="0" y="${(y*size).toFixed(1)}" width="${(w*size).toFixed(1)}" height="${Math.max(1,size/16).toFixed(1)}" fill="#fff"/>`)}
+  return `<svg class="orb${idle?" idle":""}" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><defs><clipPath id="${id}"><circle cx="${c}" cy="${c}" r="${r}"/></clipPath></defs><circle cx="${c}" cy="${c}" r="${r}" fill="#0E0E10"/><g clip-path="url(#${id})">${el}</g></svg>`;
+}
+document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=`<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
+
+/* state */
+const base=$("#base");
+base.value=store.get("focal.base","http://127.0.0.1:8000");
+base.onchange=()=>{store.set("focal.base",base.value.trim());checkAll()};
+let selected=new Set(store.get("focal.selected",KEYS));
+const health={};
+let usage=store.get("focal.usage",null)||freshUsage();
+function freshUsage(){return {since:Date.now(),agents:Object.fromEntries(KEYS.map(k=>[k,{calls:0,ms:0,errors:0}]))}}
+
+function renderRoster(){
+  $("#roster").innerHTML=KEYS.map(k=>{const a=AGENTS[k],h=health[k];
+    const s=h===true?"up":h===false?"down":"";
+    return `<button class="agent" type="button" data-k="${k}" aria-pressed="${selected.has(k)}">${orb(a.v,44,true)}
+      <span class="meta"><b>${a.name}</b><small>${a.what}</small><br><span class="route">POST ${a.route}</span></span>
+      <span class="status ${s}"><i></i>${h===true?"Online":h===false?"Offline":"…"}</span></button>`}).join("");
+  document.querySelectorAll(".agent").forEach(b=>b.onclick=()=>{
+    const k=b.dataset.k; selected.has(k)?selected.delete(k):selected.add(k);
+    store.set("focal.selected",[...selected]); renderRoster(); $("#go").disabled=!selected.size});
+}
+function renderUsage(){
+  $("#usage").innerHTML=KEYS.map(k=>{const u=usage.agents[k];
+    return `<tr><td>${AGENTS[k].name.replace(" agent","")}</td><td class="n">${u.calls}</td><td class="n">${u.calls?Math.round(u.ms/u.calls)+" ms":"–"}</td><td class="n">${u.errors}</td></tr>`}).join("");
+  $("#usage-since").textContent="Since "+new Date(usage.since).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
+}
+$("#reset").onclick=()=>{usage=freshUsage();store.set("focal.usage",usage);renderUsage()};
+
+/* calls */
+async function call(k,body){
+  const t0=performance.now();
+  try{
+    const r=await fetch(base.value.replace(/\/$/,"")+AGENTS[k].route,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    const data=await r.json();
+    return {ok:true,data,ms:performance.now()-t0};
+  }catch(e){return {ok:false,error:e.message||String(e),ms:performance.now()-t0}}
+}
+function record(k,res){
+  const u=usage.agents[k]; u.calls++; u.ms+=res.ms; if(!res.ok)u.errors++;
+  store.set("focal.usage",usage); renderUsage();
+  health[k]=res.ok; renderRoster();
+}
+async function checkAll(){
+  KEYS.forEach(k=>delete health[k]); renderRoster();
+  await Promise.all(KEYS.map(async k=>{const r=await call(k,{product:"ping"});health[k]=r.ok}));
+  renderRoster();
+}
+$("#ping").onclick=checkAll;
+
+/* rendering answers */
+function lens(top,main,sub){return `<div class="lensbox"><span class="l1">${esc(top)}</span><span class="l2">${esc(main)}</span><span>${esc(sub)}</span></div>`}
+const VIEW={
+  price(d){
+    const best=d.best;
+    const rows=d.offers.map(o=>`<a href="${esc(o.url)}" target="_blank" rel="noopener" class="${best&&o.store===best.store?"best":""}"><span>${esc(o.store)}</span><span class="p">${money(o.price)}</span></a>`).join("");
+    const main=best?`${money(best.price)} at ${best.store}`:"No offers";
+    const sub=d.savings>0?`${money(d.savings)} less than here · nod to open`:d.savings!=null?"already the best price":`${d.offers.length} sellers checked`;
+    return {lens:lens(d.product,main,sub),body:rows?`<div class="list">${rows}</div>`:""};
+  },
+  alternatives(d){
+    const a=d.alternatives[0];
+    const rows=d.alternatives.map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.product)} <span class="muted" style="font-size:12px">· ${esc(x.reason)}</span></span><span class="p">${money(x.price)} · ${x.rating}★</span></a>`).join("");
+    return {lens:lens(d.product,a?`Try ${a.product}`:"Nothing better found",a?`${money(a.price)} · ${a.rating}★ · tilt to open`:"you picked well"),body:rows?`<div class="list">${rows}</div>`:""};
+  },
+  reviews(d){
+    const pc=(d.pros.length||d.cons.length)?`<div class="pc"><div><h4>Pros</h4><ul>${d.pros.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div><div><h4>Cons</h4><ul>${d.cons.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div></div>`:"";
+    const link=d.review_url?`<div class="list"><a href="${esc(d.review_url)}" target="_blank" rel="noopener"><span>Read full reviews</span><span class="p">↗</span></a></div>`:"";
+    return {lens:lens(d.product,d.rating!=null?`${d.rating}★ from ${d.review_count.toLocaleString()} reviews`:"No reviews found",d.pros[0]?`“${d.pros[0].toLowerCase()}” · glance down`:""),body:pc+link};
+  },
+};
+
+function cardShell(k){
+  const a=AGENTS[k];
+  return `<article class="card" id="card-${k}"><div class="hd">${orb(a.v,28)}<b>${a.name}</b><span class="ms"></span></div><div class="thinking">${a.name} is thinking…</div></article>`;
+}
+function fill(k,res){
+  const el=$("#card-"+k); if(!el)return;
+  el.querySelector(".hd .orb").classList.add("idle");
+  el.querySelector(".ms").textContent=Math.round(res.ms)+" ms";
+  const box=el.querySelector(".thinking");
+  if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the Bureau running at ${esc(base.value)}?</p></div>`;return}
+  const v=VIEW[k](res.data);
+  box.outerHTML=`<div class="bd"><div><p class="summary">${esc(res.data.summary)}</p>${v.body}</div>${v.lens}</div>`;
+}
+
+/* form */
+$(".chips").insertAdjacentHTML("beforeend",TRY.map(t=>`<button type="button" class="chip" data-try="${esc(t)}">${esc(t)}</button>`).join(""));
+document.querySelectorAll("[data-try]").forEach(b=>b.onclick=()=>{$("#product").value=b.dataset.try;$("#ask").requestSubmit()});
+$("#ask").onsubmit=async e=>{
+  e.preventDefault();
+  const product=$("#product").value.trim(); if(!product||!selected.size)return;
+  const num=id=>{const v=$(id).value;return v===""?null:Number(v)};
+  const bodies={
+    price:{product,current_store:$("#store").value.trim()||null,current_price:num("#price")},
+    alternatives:{product,max_price:num("#max")},
+    reviews:{product},
+  };
+  const ks=KEYS.filter(k=>selected.has(k));
+  $("#results").innerHTML=ks.map(cardShell).join("");
+  $("#go").disabled=true;
+  await Promise.all(ks.map(async k=>{const r=await call(k,bodies[k]);record(k,r);fill(k,r)}));
+  $("#go").disabled=false;
+};
+
+/* mode tabs */
+const MODE_PANES={chat:$("#pane-chat"),direct:$("#pane-direct")};
+function setMode(m){
+  document.querySelectorAll("[data-mode]").forEach(b=>b.setAttribute("aria-selected",b.dataset.mode===m));
+  Object.entries(MODE_PANES).forEach(([k,el])=>el.hidden=k!==m);
+  store.set("focal.mode",m);
+}
+document.querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+setMode(store.get("focal.mode","chat"));
+
+/* chat with the orchestrator */
+const orch=$("#orch");
+orch.value=store.get("focal.orch","http://127.0.0.1:8001");
+orch.onchange=()=>store.set("focal.orch",orch.value.trim());
+const logoOrb=()=>`<svg class="orb" width="28" height="28" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>`;
+document.querySelectorAll("[data-orb-logo]").forEach(e=>e.outerHTML=logoOrb());
+const convo=[];
+const STARTERS=["Is the Sony XM5 worth it?","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100"];
+$("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
+document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
+
+function bubble(html,cls){
+  const el=document.createElement("div"); el.className="msg "+cls; el.innerHTML=html;
+  $("#thread").appendChild(el); el.scrollIntoView({block:"end",behavior:"smooth"}); return el;
+}
+function miniCard(c){
+  const a=AGENTS[c.kind];
+  const head=`<div class="hd">${orb(a.v,22,true)}<b>${a.name}</b><span class="ms">${c.ms} ms</span></div>`;
+  if(!c.result)return `<div class="mini">${head}<div class="bd" style="grid-template-columns:1fr"><p class="err">${esc(c.error||"No result")}</p></div></div>`;
+  const v=VIEW[c.kind](c.result);
+  return `<div class="mini">${head}<div class="bd"><div>${v.body||`<p class="muted" style="font-size:14px">${esc(c.result.summary)}</p>`}</div>${v.lens}</div></div>`;
+}
+$("#chat-form").onsubmit=async e=>{
+  e.preventDefault();
+  const input=$("#chat-input"), text=input.value.trim(); if(!text)return;
+  input.value=""; $("#send").disabled=true; $("#starters").hidden=true;
+  bubble(esc(text),"user");
+  convo.push({role:"user",content:text});
+  const pending=bubble(`${orb(2,28)}<div class="body"><p class="muted">Choosing agents…</p></div>`,"bot");
+  try{
+    const r=await fetch(orch.value.replace(/\/$/,"")+"/v1/chat",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({messages:convo.slice(-20)})});
+    if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    const d=await r.json();
+    d.calls.forEach(c=>record(c.kind,{ok:!c.error,ms:c.ms}));
+    convo.push({role:"assistant",content:d.reply||"(no reply)"});
+    const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
+    pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
+  }catch(err){
+    convo.pop();
+    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">Couldn't reach the orchestrator at ${esc(orch.value)} (${esc(err.message)}). Is it running?</p></div>`;
+  }
+  pending.scrollIntoView({block:"end",behavior:"smooth"});
+  $("#send").disabled=false; input.focus();
+};
+
+renderRoster(); renderUsage(); checkAll();
+</script>
+</body>
+</html>

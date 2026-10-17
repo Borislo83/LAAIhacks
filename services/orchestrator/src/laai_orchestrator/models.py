@@ -68,3 +68,35 @@ def agent_payload(kind: TaskKind, product: str, page: PageContext) -> dict[str, 
     elif kind == TaskKind.ALTERNATIVES:
         payload["max_price"] = page.max_price
     return payload
+
+
+class ChatMessage(InputModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class ChatRequest(InputModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=20)
+
+
+class ToolArgs(BaseModel):
+    """Agent arguments chosen by the LLM; validated before any agent call."""
+
+    product: str = Field(min_length=1, max_length=200)
+    current_store: str | None = Field(default=None, max_length=200)
+    current_price: float | None = Field(default=None, ge=0)
+    max_price: float | None = Field(default=None, ge=0)
+
+
+class AgentCall(BaseModel):
+    kind: TaskKind
+    payload: dict[str, Any]
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    ms: int
+
+
+class ChatReply(BaseModel):
+    reply: str
+    calls: list[AgentCall]
+    source: Literal["asi_one", "rules"]
