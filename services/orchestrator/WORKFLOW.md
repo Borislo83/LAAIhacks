@@ -52,3 +52,26 @@ hosting platform or Supabase Cron. Deleting an Auth user also cascades their app
 Run `npm test` in `supabase/tests` and `pytest -q` in `services/orchestrator`. Database tests
 execute real migration SQL in embedded PostgreSQL; API tests mock the Supabase HTTP boundary.
 A live G2 handoff still needs the migration deployed and real role-scoped user tokens.
+
+## Preferences and notes
+
+Apply `202610170003_user_preferences.sql` after the session migration. Authenticated users
+read and replace their own record with `GET`/`PUT /v1/preferences`. The payload contains
+`display_density` (`comfortable|compact`), `shopping_priority` (`balanced|price|quality`),
+`proactive_enabled`, and `notes` (up to 10,000 characters). Responses also include `updated_at`.
+Reads initialize defaults once and never overwrite saved values. Supabase owns persistence;
+there is no in-memory fallback. Deleting the Auth user deletes their preferences and notes.
+
+Page-context predictions respect `proactive_enabled` (default false). Explicit chat and Direct
+requests still run. Shopping priority orders suggested specialists and coordinator cards;
+ASI:One also receives the structured priority as recommendation context. Explicit user requests
+and budgets take precedence. Notes are private storage and are never sent to an agent/model.
+The signed-in dashboard loads preferences before enabling Save, keeps text after save failures,
+and clears it on sign-out. Display density applies to the Studio; session display responses
+include only `preferences.display_density` for G2. Changed preferences increment active owned
+session revisions atomically so a polling display sees updates; unchanged saves do not.
+
+Deployment check: `python check_supabase.py` performs read-only Auth/table checks without
+printing credentials. Run it after applying both migrations and reloading the PostgREST schema.
+Never deploy the new API before applying the migrations: unavailable persistence returns 503,
+and the dashboard keeps Save disabled rather than pretending data was saved.

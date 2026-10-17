@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from .config import Config
 from .models import AgentCall, ChatMessage, ChatReply, TaskKind, ToolArgs
+from .preferences import preference_context, preferred_tasks
 
 ASI_ONE_URL = "https://api.asi1.ai/v1/chat/completions"
 MAX_ROUNDS = 3
@@ -131,9 +132,14 @@ def grounded(args: ToolArgs, user_text: str) -> ToolArgs:
 
 
 async def chat_with_llm(
-    history: list[ChatMessage], config: Config, http: httpx.AsyncClient
+    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, preferences=None
 ) -> ChatReply:
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM}]
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "system",
+            "content": SYSTEM + (preference_context(preferences) if preferences else ""),
+        }
+    ]
     messages += [m.model_dump() for m in history]
     user_text = " ".join(m.content for m in history if m.role == "user")
     calls: list[AgentCall] = []
@@ -179,17 +185,22 @@ def rules_reply(calls: list[AgentCall]) -> ChatReply:
 
 
 async def chat_with_rules(
-    history: list[ChatMessage], config: Config, http: httpx.AsyncClient
+    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, preferences=None
 ) -> ChatReply:
     """No LLM: pick agents by keyword and treat the message as the product name."""
     text = history[-1].content
     kinds = [k for k, pattern in KEYWORDS.items() if re.search(pattern, text, re.IGNORECASE)]
     args = ToolArgs(product=text)
-    calls = [await call_agent(k, args, config, http) for k in kinds or list(TaskKind)]
+    kinds = kinds or list(TaskKind)
+    if preferences:
+        kinds = preferred_tasks(kinds, preferences.shopping_priority)
+    calls = [await call_agent(k, args, config, http) for k in kinds]
     return rules_reply(calls)
 
 
-async def chat(history: list[ChatMessage], config: Config, http: httpx.AsyncClient) -> ChatReply:
+async def chat(
+    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, preferences=None
+) -> ChatReply:
     text = history[-1].content
     if re.search(r"\b(consider|evaluate|assess)\b", text, re.IGNORECASE) or all(
         re.search(pattern, text, re.IGNORECASE) for pattern in (r"price", r"review", r"alternative")
@@ -220,6 +231,9 @@ async def chat(history: list[ChatMessage], config: Config, http: httpx.AsyncClie
                         ms=data.get("timings_ms", {}).get(field, 0),
                     )
                 )
+            if preferences:
+                order = preferred_tasks(list(TaskKind), preferences.shopping_priority)
+                calls.sort(key=lambda call: order.index(call.kind))
             return ChatReply(reply=data["summary"], calls=calls, source="coordinator")
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             return ChatReply(
@@ -229,7 +243,7 @@ async def chat(history: list[ChatMessage], config: Config, http: httpx.AsyncClie
             )
     if config.asi_one_api_key.get_secret_value():
         try:
-            return await chat_with_llm(history, config, http)
+            return await chat_with_llm(history, config, http, preferences)
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
             pass
-    return await chat_with_rules(history, config, http)
+    return await chat_with_rules(history, config, http, preferences)
