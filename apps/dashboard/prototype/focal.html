@@ -43,9 +43,6 @@ section:first-of-type{border-top:0}
 .step p{font-size:14px;margin-top:4px}
 .step.lit{border-color:var(--lens);color:var(--ink)}
 .step.lit .t{color:var(--lens)}
-.counter{display:flex;align-items:baseline;gap:6px;border-bottom:1px solid var(--ink);padding-bottom:6px}
-.counter .n{font-family:var(--serif);font-size:112px;line-height:.95;color:var(--lens)}
-.counter .u{font-family:var(--serif);font-size:34px;color:var(--muted)}
 svg .draw{stroke-dasharray:var(--len,400);stroke-dashoffset:var(--len,400);transition:stroke-dashoffset .6s ease}
 svg .draw.on{stroke-dashoffset:0}
 svg .gaze{opacity:0;transition:opacity .3s}
@@ -58,7 +55,7 @@ svg .gaze.on{opacity:1}
 [data-glasses]>svg{width:100%;height:auto;display:block}
 .pin{position:absolute;display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:5px 12px 5px 5px;font:12px var(--mono);transform:translate(-50%,-50%);transition:border-color .3s,color .3s;color:var(--muted)}
 .pin.lit{border-color:var(--lens);color:var(--ink)}
-.e2-foot{display:grid;grid-template-columns:1fr 320px;gap:48px;align-items:end;margin-top:8px}
+.e2-foot{display:grid;grid-template-columns:1fr;gap:48px;align-items:end;margin-top:8px}
 
 .strip{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:28px}
 .strip .cell{background:var(--lens-bg);border:1px solid var(--hair);border-radius:var(--r);padding:22px;color:var(--ink);display:flex;flex-direction:column;gap:18px}
@@ -75,7 +72,6 @@ svg .gaze.on{opacity:1}
   .wrap{padding:0 20px 48px}
   nav.top .cta>span{display:none}
   .strip,.seq{grid-template-columns:1fr}
-  .counter .n{font-size:88px}
   section{padding:56px 0}
 }
 </style>
@@ -89,7 +85,7 @@ svg .gaze.on{opacity:1}
       <div class="kicker"><span data-orb="2" data-size="20"></span>Smart glasses with agents that act on what you see</div>
       <h1>Look once.</h1>
       <p class="tagline">See it clearly.</p>
-      <p class="lede">Every part of Focal has one job. Your eyes pick the page, the orchestrator reads your intent, and one agent answers on the lens in under a second.</p>
+      <p class="lede">Every part of Focal has one job. You pick the page, the orchestrator reads your intent, and the agents answer on the lens.</p>
     </div>
     <div class="actions"><button class="btn dark">Pair your G2</button><button class="replay" data-replay="e2">Replay the glance</button></div>
   </div>
@@ -97,10 +93,6 @@ svg .gaze.on{opacity:1}
   <div class="e2-stage" id="e2-stage"><div data-glasses="e2"></div></div>
   <div class="e2-foot">
     <div class="seq" data-seq="e2"></div>
-    <div style="display:flex;flex-direction:column;gap:12px">
-      <div class="counter"><span class="n" data-count="e2">0.0</span><span class="u">s</span></div>
-      <span class="note">From your gaze to an answer on the lens</span>
-    </div>
   </div>
   <section style="margin-top:72px">
     <div class="sec-head"><h2>Agents, thinking</h2><p class="tagline">Each agent has its own iris, so you can tell who's working at a glance.</p></div>
@@ -110,16 +102,16 @@ svg .gaze.on{opacity:1}
 <script src="orb.js"></script>
 <script>
 const AG={
-  price:{v:3,name:"Price agent",what:"Checking 3 sellers for Sony WH-1000XM6",lens:["SONY WH-1000XM6 · amazon.com","$299 at Best Buy","$49 less than Amazon · nod to open"],motion:"Scanlines slide"},
-  alt:{v:2,name:"Alternatives agent",what:"Comparing 6 brands like Allbirds",lens:["ALLBIRDS TREE RUNNER · $98","Try Vessi Weekend","waterproof · $83 · 4.6★ · tilt to open"],motion:"Dots ride the wave"},
-  rev:{v:1,name:"Reviews agent",what:"Reading 1,204 reviews of Blue Bottle",lens:["BLUE BOTTLE · HAYES VALLEY","4.6★ “best pour-over”","1,204 reviews · glance down for more"],motion:"Light sweeps the sphere"},
-  read:{v:4,name:"Reader agent",what:"Loading chapter 4 of Pride and Prejudice",lens:["PRIDE AND PREJUDICE · CH. 4","When Jane and Elizabeth were alone…","blink twice for the next page · 38%"],motion:"Bars flicker"}
+  price:{v:3,name:"Price agent",what:"Checking sellers for a pair of headphones",lens:["SONY WH-1000XM5","Best price: Best Buy","cheaper than this page · tap for sources"],motion:"Scanlines slide"},
+  alt:{v:2,name:"Alternatives agent",what:"Comparing similar shoes",lens:["ALLBIRDS TREE RUNNER","Alternative: Vessi Weekend","waterproof · tap to open"],motion:"Dots ride the wave"},
+  rev:{v:1,name:"Reviews agent",what:"Reading reviews of a coffee shop",lens:["BLUE BOTTLE · HAYES VALLEY","Reviewers praise the pour-over","pros and cons · tap for more"],motion:"Light sweeps the sphere"},
+  news:{v:7,name:"News brief",what:"Summarizing several news sources",lens:["NEWS BRIEF","One sourced summary","tap for sources"],motion:"Lines settle into a page"}
 };
-const ORDER=["price","alt","rev","read"];
+const ORDER=["price","alt","rev","news"];
 document.querySelectorAll("[data-orb]").forEach(e=>e.outerHTML=orb(+e.dataset.orb,+(e.dataset.size||40)));
 document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=logoMark()+"Focal");
 
-document.querySelector("[data-strip]").innerHTML=["rev","alt","price","read"].map(k=>`<div class="cell">${orb(AG[k].v,56)}<div><b style="font-weight:500;font-size:15px;color:var(--ink)">${AG[k].name} is thinking</b><p>${AG[k].motion}</p></div><span class="m">${AG[k].what}</span></div>`).join("");
+document.querySelector("[data-strip]").innerHTML=["rev","alt","price","news"].map(k=>`<div class="cell">${orb(AG[k].v,56)}<div><b style="font-weight:500;font-size:15px;color:var(--ink)">${AG[k].name} is thinking</b><p>${AG[k].motion}</p></div><span class="m">${AG[k].what}</span></div>`).join("");
 
 /* glasses drawing, shared */
 function glasses(){
@@ -143,24 +135,21 @@ document.querySelectorAll("[data-glasses]").forEach(e=>e.innerHTML=glasses(e.dat
 /* e2 pins */
 (function(){
   const st=document.getElementById("e2-stage");
-  [["gaze",27,8,"rev","Eyes pick the page"],["intent",50,8,"alt","Orchestrator reads intent"],["agent",81.5,8,"price","Price agent checks sellers"],["answer",27,97,"price","Answer lands on the lens"]].forEach(([k,x,y,a,t])=>{
+  [["gaze",27,8,"rev","You open a page"],["intent",50,8,"alt","Orchestrator reads intent"],["agent",81.5,8,"price","Price agent checks sellers"],["answer",27,97,"price","Answer lands on the lens"]].forEach(([k,x,y,a,t])=>{
     const p=document.createElement("div");p.className="pin";p.dataset.k=k;p.style.left=x+"%";p.style.top=y+"%";p.innerHTML=orb(AG[a].v,26)+t;st.appendChild(p)});
 })();
 /* steps */
-const STEPS=[["gaze","0.0 s","Your gaze rests on a product page"],["intent","0.2 s","The orchestrator reads it as about to buy"],["agent","0.3 s","Price agent checks 3 sellers on Agentverse"],["answer","0.8 s","A cheaper seller appears on the lens"]];
+const STEPS=[["gaze","1","You open a product page"],["intent","2","The orchestrator reads it as about to buy"],["agent","3","The price agent checks sellers on Agentverse"],["answer","4","A cheaper seller appears on the lens"]];
 document.querySelectorAll("[data-seq]").forEach(e=>e.innerHTML=STEPS.map(([k,t,p])=>`<div class="step" data-k="${k}"><span class="t">${t}</span><p>${p}</p></div>`).join(""));
 
 const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
 function playGlance(v){
   const root=document.getElementById(v);
   const all=root.querySelectorAll("[data-k]"); all.forEach(e=>e.classList.remove("on","lit"));
-  const cnt=root.querySelector("[data-count]");
   const times={gaze:0,intent:500,agent:1000,answer:1700};
   Object.entries(times).forEach(([k,t])=>setTimeout(()=>{
     root.querySelectorAll(`[data-k="${k}"]`).forEach(e=>e.classList.add(e.tagName==="DIV"?"lit":"on"));
   }, reduce?0:t));
-  if(cnt){ if(reduce){cnt.textContent="0.8";return}
-    const t0=performance.now(); (function f(now){const s=Math.min(1,(now-t0)/1900);cnt.textContent=(0.8*s).toFixed(1); if(s<1)requestAnimationFrame(f)})(t0);}
 }
 document.querySelectorAll("[data-replay]").forEach(b=>b.onclick=()=>playGlance(b.dataset.replay));
 
