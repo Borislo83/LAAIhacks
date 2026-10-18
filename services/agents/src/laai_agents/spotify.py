@@ -5,12 +5,7 @@ needed (SPOTIFY_CLIENT_ID). Run `uv run laai-spotify-login` once on the laptop; 
 the Spotify consent page and stores a refresh token in SPOTIFY_TOKEN_PATH (default
 ~/.config/laai/spotify_token.json, mode 600). The agent then targets the laptop's Spotify
 app: the device named SPOTIFY_DEVICE_NAME, else the first "Computer" device, preferring
-the active one. Web API playback control needs Spotify Premium.
-
-Free accounts use the AppleScript backend instead: it drives the Spotify desktop app on
-the Mac with osascript (fixed scripts, user values only as `on run argv` arguments) and
-finds what to play with keyless web search on open.spotify.com. SPOTIFY_BACKEND picks it:
-auto (default: AppleScript on macOS when no Web API login is stored), applescript or webapi.
+the active one. Playback control needs Spotify Premium.
 """
 
 import asyncio
@@ -20,7 +15,6 @@ import json
 import os
 import re
 import secrets
-import sys
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -31,7 +25,6 @@ import aiohttp
 
 from . import net
 from .models import SpotifyRequest, SpotifyResponse
-from .search import SearchUnavailable, search
 
 API = "https://api.spotify.com/v1"
 AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
@@ -220,22 +213,7 @@ def describe(kind: str, item: dict) -> tuple[str, str | None]:
 
 # --- Handler -------------------------------------------------------------------------
 
-def backend() -> str:
-    """'applescript' or 'webapi'. Auto uses the Web API only once a login is stored."""
-    choice = os.getenv("SPOTIFY_BACKEND", "auto").strip().lower()
-    if choice in {"applescript", "webapi"}:
-        return choice
-    linked = token_path().exists() and bool(os.getenv("SPOTIFY_CLIENT_ID", "").strip())
-    return "applescript" if sys.platform == "darwin" and not linked else "webapi"
-
-
 async def control(req: SpotifyRequest) -> SpotifyResponse:
-    if backend() == "applescript":
-        return await desktop_control(req)
-    return await webapi_control(req)
-
-
-async def webapi_control(req: SpotifyRequest) -> SpotifyResponse:
     reply = SpotifyResponse(action=req.action, query=req.query, summary="")
     try:
         device = await laptop_device()
@@ -293,194 +271,6 @@ async def play(req: SpotifyRequest, target: dict, reply: SpotifyResponse) -> Non
     by = f" by {reply.artist}" if reply.artist and kind != "playlist" else ""
     label = "" if kind == "track" else f" ({kind})"
     reply.summary = f"▶️ Playing {reply.title}{by}{label} on {reply.device}."
-
-
-# --- AppleScript backend (Spotify Free, desktop app on the Mac) ----------------------
-
-# Fixed script sources. User values reach them only as `on run argv` arguments.
-SCRIPTS = {
-    "running": 'return application "Spotify" is running',
-    "pause": 'tell application "Spotify" to pause',
-    "resume": 'tell application "Spotify" to play',
-    "next": 'tell application "Spotify" to next track',
-    "previous": 'tell application "Spotify" to previous track',
-    "get_volume": 'tell application "Spotify" to return sound volume',
-    "set_volume": 'on run argv\ntell application "Spotify" to set sound volume to (item 1 of argv as integer)\nend run',
-    "play_uri": 'on run argv\ntell application "Spotify" to play track (item 1 of argv)\nend run',
-    "now_playing": (
-        'tell application "Spotify" to return (name of current track) & linefeed & '
-        "(artist of current track)"
-    ),
-}
-URI = re.compile(r"spotify:(track|album|playlist|artist):[A-Za-z0-9]{22}")
-WEB_LINK = re.compile(
-    r"/(?:intl-[a-z]{2}(?:-[a-zA-Z]{2})?/)?(track|album|playlist|artist)/([A-Za-z0-9]{22})/?"
-)
-OSASCRIPT_TIMEOUT = 10
-LAUNCH_WAIT = 10  # seconds for the app to start
-SETTLE = 1.5  # seconds before reading what started playing
-NOT_ALLOWED = ("-1743", "not allowed", "not authorized")
-PERMISSION = (
-    "macOS blocked controlling Spotify. Allow it in System Settings > Privacy & Security "
-    "> Automation, then try again."
-)
-
-
-async def run_osascript(argv: list[str]) -> tuple[int, str, str]:
-    process = await asyncio.create_subprocess_exec(
-        *argv,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(process.communicate(), OSASCRIPT_TIMEOUT)
-    except TimeoutError:
-        process.kill()
-        await process.wait()
-        raise
-    return process.returncode, out.decode(errors="replace"), err.decode(errors="replace")
-
-
-def osascript_argv(script: str, *args: str) -> list[str]:
-    return ["osascript", "-e", SCRIPTS[script], *args]
-
-
-async def osascript(script: str, *args: str) -> str:
-    try:
-        code, out, err = await run_osascript(osascript_argv(script, *args))
-    except (OSError, TimeoutError):
-        raise SpotifyError("Couldn't control the Spotify app on the laptop.") from None
-    if code != 0:
-        if any(marker in err.lower() for marker in NOT_ALLOWED):
-            raise SpotifyError(PERMISSION)
-        raise SpotifyError("Couldn't control the Spotify app on the laptop.")
-    return out.strip()
-
-
-async def app_running() -> bool:
-    return await osascript("running") == "true"
-
-
-async def launch_app() -> None:
-    try:
-        code, _, _ = await run_osascript(["open", "-a", "Spotify"])
-    except (OSError, TimeoutError):
-        code = 1
-    if code != 0:
-        raise SpotifyError("Spotify isn't installed on the laptop. Install the Spotify app and try again.")
-    for _ in range(LAUNCH_WAIT * 2):
-        if await app_running():
-            await asyncio.sleep(SETTLE)  # running before it accepts commands
-            return
-        await asyncio.sleep(0.5)
-    raise SpotifyError("Spotify didn't start on the laptop. Open the Spotify app and try again.")
-
-
-def spotify_uri(url: str) -> tuple[str, str] | None:
-    """('track', 'spotify:track:<id>') for an open.spotify.com link, else None."""
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return None
-    if parts.scheme != "https" or parts.hostname != "open.spotify.com" or parts.username or parts.port:
-        return None
-    match = WEB_LINK.fullmatch(parts.path)
-    if not match:
-        return None
-    uri = f"spotify:{match[1]}:{match[2]}"
-    return (match[1], uri) if URI.fullmatch(uri) else None
-
-
-def _clean_title(title: str) -> str:
-    """'Daft Punk | Spotify' -> 'daft punk'."""
-    return re.split(r"\s+[|\-–]\s+", title, maxsplit=1)[0].strip().lower()
-
-
-async def find_uri(query: str, kind: str) -> tuple[str, str] | None:
-    """Best open.spotify.com match from keyless web search. Search URLs are never fetched."""
-    site = "site:open.spotify.com" + ("" if kind == "auto" else f"/{kind}")
-    sources, _ = await search(f"{site} {query}")
-    found = [(hit, s) for s in sources if (hit := spotify_uri(s.url))]
-    if kind != "auto":
-        found = [(hit, s) for hit, s in found if hit[0] == kind]
-    elif artist := next(
-        (hit for hit, s in found if hit[0] == "artist" and _clean_title(s.title) == query.lower()), None
-    ):
-        return artist
-    else:
-        # Like the Web API path: auto means a song unless the query is an artist's name.
-        found.sort(key=lambda pair: pair[0][0] != "track")
-    return found[0][0] if found else None
-
-
-async def desktop_control(req: SpotifyRequest) -> SpotifyResponse:
-    reply = SpotifyResponse(action=req.action, query=req.query, summary="", device="the laptop")
-    try:
-        running = await app_running()
-        if req.action in {"play", "resume"} and not running:
-            await launch_app()
-        elif not running:
-            raise SpotifyError("Spotify isn't open on the laptop. Open the Spotify app and try again.")
-        if req.action == "play":
-            await desktop_play(req, reply)
-        elif req.action == "pause":
-            await osascript("pause")
-            reply.summary = "⏸ Paused Spotify."
-        elif req.action == "resume":
-            await osascript("resume")
-            reply.summary = "▶️ Resumed Spotify."
-        elif req.action == "next":
-            await osascript("next")
-            reply.summary = "⏭ Skipped to the next track."
-        elif req.action == "previous":
-            await osascript("previous")
-            reply.summary = "⏮ Back to the previous track."
-        elif req.action == "volume":
-            if req.volume is not None:
-                level = req.volume
-            else:
-                current = await osascript("get_volume")
-                if not current.isdigit():
-                    raise SpotifyError("The Spotify app didn't report its volume.")
-                level = int(current) + (req.volume_change or 0)
-            level = max(0, min(100, level))
-            await osascript("set_volume", str(level))
-            reply.volume = level
-            reply.summary = f"🔊 Volume set to {level}%."
-    except SpotifyError as exc:
-        reply.error = str(exc)
-        reply.summary = str(exc)
-    return reply
-
-
-async def desktop_play(req: SpotifyRequest, reply: SpotifyResponse) -> None:
-    query = (req.query or "").strip()
-    if not query:
-        raise SpotifyError("Tell me what to play, e.g. “play Blinding Lights”.")
-    try:
-        hit = await find_uri(query, req.kind)
-    except SearchUnavailable:
-        raise SpotifyError("Couldn't search Spotify right now; try again in a moment.") from None
-    if not hit:
-        reply.summary = f"Couldn't find “{query}” on Spotify."
-        return
-    kind, uri = hit
-    await osascript("play_uri", uri)
-    await asyncio.sleep(SETTLE)
-    try:
-        playing = (await osascript("now_playing")).split("\n")
-    except SpotifyError:
-        playing = [""]  # No current track yet.
-    reply.kind, reply.uri = kind, uri
-    reply.url = f"https://open.spotify.com/{kind}/{uri.rsplit(':', 1)[1]}"
-    reply.title = playing[0].strip()[:300] or None
-    reply.artist = (playing[1].strip()[:300] if len(playing) > 1 else "") or None
-    if not reply.title:
-        reply.summary = f"Asked Spotify to play “{query}”, but it didn't report a track."
-        return
-    by = f" by {reply.artist}" if reply.artist else ""
-    reply.summary = f"▶️ Playing {reply.title}{by} on the laptop's Spotify app."
 
 
 # --- One-time login on the laptop ----------------------------------------------------
