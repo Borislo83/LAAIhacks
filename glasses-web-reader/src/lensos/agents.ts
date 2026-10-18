@@ -2,6 +2,7 @@ import { getTextWidth, measureTextWrap, pxTruncate } from '@evenrealities/pretex
 import { POPUP_TAP_GRACE_MS } from './action-popup'
 import { BackendError, type BackendClient } from './client'
 import type { AgentCall, ChatReply, MessageSent } from './types'
+import type { PageSpec } from '../screens'
 
 // Voice commands for the Focal agents: the orchestrator's POST /v1/chat picks the
 // agent (news, YouTube, Spotify, shopping, Messenger). Its reply becomes pages of
@@ -16,8 +17,11 @@ export const CARD_LINES = 8
 const MAX_PAGES = 12
 
 export interface MessageDraft { draft_id: string; recipient: string; text: string }
+/** One choice in a side-by-side comparison: a store offer or a rival product. */
+export interface CompareColumn { head: string; price: string; note: string; extra?: string }
+export interface CompareTable { title: string; columns: CompareColumn[] }
 export type AgentAnswer =
-  | { kind: 'answer'; title: string; pages: string[] }
+  | { kind: 'answer'; title: string; pages: string[]; compare?: CompareTable }
   | { kind: 'draft'; title: string; pages: string[]; draft: MessageDraft }
 
 const str = (v: unknown) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '')
@@ -112,6 +116,63 @@ function messageAnswer(call: AgentCall): AgentAnswer {
     pages: paginate('Messages', `${str(r.summary) || call.error || 'No message was drafted.'}\nNothing was sent.`) }
 }
 
+const money = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? `$${v.toFixed(2).replace(/\.00$/, '')}` : '')
+const TRUST_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 }
+type Rec = Record<string, unknown>
+const recs = (v: unknown): Rec[] => (Array.isArray(v) ? v.filter((x): x is Rec => !!x && typeof x === 'object') : [])
+
+/**
+ * 2-3 choices to show side by side: the product's best offer next to its rivals when the
+ * reply has alternatives, otherwise the top store offers (verified first, then cheapest).
+ */
+export function compareTable(reply: ChatReply): CompareTable | undefined {
+  const result = (kind: string) => reply.calls.find(c => c.kind === kind && c.result && !c.error)?.result as Rec | undefined
+  const price = result('price'), alts = result('alternatives')
+  const offerColumn = (o: Rec): CompareColumn => ({
+    head: str(o.store) || 'Store', price: money(o.price) || 'No price',
+    note: o.trust === 'high' ? 'Verified' : 'Unverified',
+    extra: typeof o.rating === 'number' ? `${o.rating}★` : undefined,
+  })
+  const ranked = recs(price?.offers).filter(o => typeof o.price === 'number')
+    .sort((a, b) => (TRUST_RANK[str(a.trust)] ?? 3) - (TRUST_RANK[str(b.trust)] ?? 3) || (a.price as number) - (b.price as number))
+  const rivals = recs(alts?.alternatives)
+  if (rivals.length) {
+    const product = str(price?.product) || str(alts?.product) || str(reply.product)
+    const best = (price?.best as Rec | undefined) ?? ranked[0]
+    const columns: CompareColumn[] = []
+    if (product) columns.push({ head: product, price: money(best?.price) || 'No price', note: str(best?.store) || 'This page' })
+    for (const a of rivals) {
+      if (columns.length >= 3) break
+      columns.push({ head: str(a.product) || 'Alternative', price: money(a.price) || 'No price',
+        note: str(a.store) || 'Lead', extra: typeof a.rating === 'number' ? `${a.rating}★` : undefined })
+    }
+    return columns.length >= 2 ? { title: product ? `${product} vs rivals` : 'Compare', columns } : undefined
+  }
+  if (ranked.length >= 2) {
+    const product = str(price?.product) || str(reply.product)
+    return { title: product ? `Prices: ${product}` : 'Prices', columns: ranked.slice(0, 3).map(offerColumn) }
+  }
+  return undefined
+}
+
+const COL_GAP = 8
+/** The comparison as a lens layout: a title row, one bordered box per choice, a footer. */
+export function compareSpec(table: CompareTable, footer: string): PageSpec {
+  const n = table.columns.length
+  const w = Math.floor((576 - COL_GAP * (n + 1)) / n)
+  const inner = w - 2 * 10
+  const cell = (c: CompareColumn) => [...wrap(c.head, inner).slice(0, 2), '', c.price, c.note, c.extra ?? '']
+    .map(line => pxTruncate(line, inner)).join('\n').replace(/\n+$/, '')
+  return {
+    texts: [
+      { x: 4, y: 2, w: 568, h: 36, text: pxTruncate(table.title, CARD_W), pad: 4 },
+      ...table.columns.map((c, i) => ({ x: COL_GAP + i * (w + COL_GAP), y: 42, w, h: 204, text: cell(c), pad: 10, border: 2, color: 13, radius: 8 })),
+      { x: 4, y: 252, w: 568, h: 34, text: footer, pad: 4 },
+    ],
+    images: [],
+  }
+}
+
 /**
  * Lens pages for a chat reply, or null when chat didn't use an agent (or every
  * agent failed), so the caller falls back to web search.
@@ -124,7 +185,8 @@ export function answerFor(reply: ChatReply): AgentAnswer | null {
   if (!done.length) return null
   if (done.some(c => SHOPPING.has(c.kind))) {
     const title = str(reply.product) || 'Shopping'
-    return { kind: 'answer', title, pages: paginate(title, str(reply.reply) || done.map(c => str(c.result?.summary)).join('\n\n')) }
+    return { kind: 'answer', title, compare: compareTable(reply),
+      pages: paginate(title, str(reply.reply) || done.map(c => str(c.result?.summary)).join('\n\n')) }
   }
   const parts = done.map(c => c.kind === 'news' ? newsText(c.result!)
     : c.kind === 'youtube' ? youtubeText(c.result!)
@@ -195,10 +257,14 @@ export class AgentCard {
   }
   /** Hands-free answers fade back to the page; a draft never does, it waits for a tap. */
   get fades() { return this.quiet && this.answer.kind !== 'draft' }
-  get text() { return this.answer.pages[this.page] }
-  private get last() { return this.page >= this.answer.pages.length - 1 }
+  private get table() { return this.answer.kind === 'answer' ? this.answer.compare : undefined }
+  private get count() { return this.answer.pages.length + (this.table ? 1 : 0) }
+  /** The comparison, when it is the page on screen (it comes first). */
+  get compare() { return this.page === 0 ? this.table : undefined }
+  get text() { return this.answer.pages[this.page - (this.table ? 1 : 0)] ?? '' }
+  private get last() { return this.page >= this.count - 1 }
   footer() {
-    const n = this.answer.pages.length
+    const n = this.count
     const hint = this.answer.kind === 'draft'
       ? this.sending ? 'Sending...' : this.last ? 'Tap: send   Swipe: cancel' : 'Tap: next   Swipe: cancel'
       : this.last ? 'Tap: close' : 'Swipe: more   Tap: close'
