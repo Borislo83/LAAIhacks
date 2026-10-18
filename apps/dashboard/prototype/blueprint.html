@@ -59,15 +59,6 @@ canvas#scene{position:fixed;inset:0;z-index:1;display:block;width:100%;height:10
 @media (max-width:520px){.example{display:none}}
 .example::before{content:"";display:inline-block;width:6px;height:6px;margin-right:8px;background:var(--lens);vertical-align:1px}
 
-/* the way into the product */
-.studio-link{
-  position:fixed;top:30px;right:30px;z-index:5;
-  font:500 14px/1 var(--sans);color:var(--sheet);background:var(--ink);
-  border:1px solid var(--ink);padding:11px 16px;text-decoration:none;
-}
-.studio-link:hover{background:transparent;color:var(--ink)}
-.studio-link:focus-visible{outline:2px solid var(--lens);outline-offset:3px}
-
 /* credits: shown on the landing view only, fades out once you scroll */
 .credits{
   position:fixed;right:30px;bottom:28px;z-index:4;text-align:right;
@@ -108,7 +99,6 @@ section:first-child{min-height:100vh}
 <div id="labels" aria-hidden="true"></div>
 <div class="frame" aria-hidden="true"></div>
 <p class="example" id="example" aria-hidden="true">Example case: researching a product</p>
-<a class="studio-link" href="dashboard.html">Open Studio</a>
 <div class="scrim" aria-hidden="true"></div>
 
 <main>
@@ -529,7 +519,6 @@ function readScroll(){
 addEventListener("scroll", readScroll, {passive:true});
 
 const credits = document.getElementById("credits");
-const studioLink = document.querySelector(".studio-link");
 const scrim = document.querySelector(".scrim");
 const sections = [...document.querySelectorAll("main section")];
 const copies = [...document.querySelectorAll(".copy")];
@@ -563,7 +552,7 @@ function copyAlpha(n){
   return fadeIn*(1 - fadeOut);
 }
 function safeRect(i){
-  const W = innerWidth, H = innerHeight, b = studioLink.getBoundingClientRect();
+  const W = innerWidth, H = innerHeight, b = {bottom: 30};   // top of the drawing area, below the frame
   if(narrow) return {x0:22, x1:W-22, y0:b.bottom+18, y1:Math.max(b.bottom+200, i === 0 ? copyRest[0]-14 : H-copyBand-54)};
   let y1 = H-40;
   if(i === 0){ const c = credits.getBoundingClientRect(); if(c.height) y1 = c.top-16; }
@@ -675,7 +664,6 @@ function draw(dt, snap = false){
   // credits, past the frame or on a label of the current sheet steps aside (flips) or fades out
   const VW = innerWidth, VH = innerHeight, now = performance.now()/1000, cur = Math.floor(s);
   const keepOut = [];
-  const btn = studioLink.getBoundingClientRect(); keepOut.push([btn.left-6, btn.top-6, btn.right+6, btn.bottom+6]);
   if(+credits.style.opacity > 0.02){ const c = credits.getBoundingClientRect(); if(c.height) keepOut.push([c.left-6, c.top-6, c.right+6, c.bottom+6]); }
   copies.forEach((c,n)=>{
     const op = copyAlpha(n);
