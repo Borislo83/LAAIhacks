@@ -11,3 +11,5 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .runtime/
+# uAgents local storage (per-agent memory, watches)
+agent1*_data.json

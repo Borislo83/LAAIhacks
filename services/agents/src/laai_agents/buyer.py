@@ -85,7 +85,7 @@ def prune():
             del _quotes[token]
 
 
-@tracked("buyer")
+@tracked("buyer", subject="Amazon listing")
 async def prepare(req: BuyRequest) -> BuyResponse:
     prune()
     name = req.product or "Amazon product"
@@ -153,7 +153,7 @@ async def prepare(req: BuyRequest) -> BuyResponse:
     )
 
 
-@tracked("buyer")
+@tracked("buyer", subject="Amazon listing")
 async def confirm(req: BuyConfirmation) -> BuyResponse:
     expected = os.getenv("AMAZON_CART_EXECUTOR_TOKEN", "")
     if not expected or not secrets.compare_digest(

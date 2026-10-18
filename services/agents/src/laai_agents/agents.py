@@ -7,6 +7,7 @@ endpoint (for the orchestrator over plain HTTP) and the Agent Chat Protocol
 
 import os
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from uagents import Agent, Context, Model, Protocol
 
@@ -42,6 +43,23 @@ def coordinator_address() -> str:
 NEWS_SEED = os.getenv("NEWS_AGENT_SEED", "laai news agent dev seed")
 
 
+# Agentverse profile: a one-line description plus agent_profiles/<name>.md as the README.
+# ASI:One finds agents by these, so they say what each agent does and how to ask.
+PROFILES = Path(__file__).parent / "agent_profiles"
+DESCRIPTIONS = {
+    "focal-shopping-assistant": "Should I buy it? A team of agents researches a product, verifies every price, adds your pick to your Amazon cart, tells a friend and watches the price, in one chat.",
+    "laai-price-compare": "Current prices for a product across online stores, read from product pages and ranked by trust, with a source for every price.",
+    "laai-alternatives": "Cheaper or better-rated alternatives to a product in the same category, within your budget.",
+    "laai-reviews": "Expert review summary for a product: average rating on a 5-point scale, pros, cons and links.",
+    "focal-price-verifier": "Audits price offers: drops low-trust leads and outliers, flags budget and single-source prices, and asks for a deeper search when nothing is trustworthy.",
+    "focal-memory": "Long-term memory for the Focal shopping team: a shopper's preferences and past decisions.",
+    "focal-amazon-buyer-demo": "Finds the Amazon listing and adds it to your cart only after you approve. Checkout is disabled.",
+    "laai-messenger": "Drafts an iMessage to an allowlisted friend and sends it only after you approve.",
+    "laai-youtube": "Finds a YouTube link for a song or video you ask for.",
+    "laai-news": "Short, sourced summary of the latest news on any topic.",
+}
+
+
 def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
     kwargs = {}
     if port is not None:
@@ -51,7 +69,16 @@ def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
         name == "focal-shopping-assistant" and os.getenv("COORDINATOR_AGENTVERSE_MAILBOX") == "1"
     ):
         kwargs = {"port": port, "mailbox": True} if port else {"mailbox": True}
-    agent = Agent(name=name, seed=seed, publish_agent_details=True, **kwargs)
+    readme = PROFILES / f"{name}.md"
+    if readme.exists():
+        kwargs["readme_path"] = str(readme)
+    agent = Agent(
+        name=name,
+        seed=seed,
+        publish_agent_details=True,
+        description=DESCRIPTIONS.get(name),
+        **kwargs,
+    )
 
     @agent.on_event("shutdown")
     async def close_http(ctx: Context):

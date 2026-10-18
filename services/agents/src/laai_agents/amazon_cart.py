@@ -27,6 +27,11 @@ NEEDS_SIGN_IN = {
 }
 
 
+def _on_sign_in(page) -> bool:
+    # Amazon's sign-in lives at /ap/signin or, in its newer flow, /ax/claim/...
+    return bool(re.search(r"/(?:ap/signin|ax/claim)", urlsplit(page.url).path))
+
+
 def _cart_item(page, asin: str):
     return page.locator(
         f'#sc-active-cart [data-asin="{asin}"], #activeCartViewForm [data-asin="{asin}"]'
@@ -47,7 +52,9 @@ async def add_to_cart(url: str, quantity: int):
         try:
             if _playwright is None:
                 _playwright = await async_playwright().start()
-            if _browser is None or not _browser.pages:
+            # The profile stays locked while its context is open, so a live context with
+            # no tabs gets a new tab below rather than a second launch.
+            if _browser is None:
                 profile = Path(
                     os.getenv("AMAZON_BROWSER_PROFILE", ".runtime/amazon-profile")
                 ).resolve()
@@ -68,8 +75,7 @@ async def add_to_cart(url: str, quantity: int):
                 "Checking whether the selected item is already in the cart",
             )
             await page.goto(cart_url, wait_until="domcontentloaded", timeout=45000)
-            # Amazon's sign-in lives at /ap/signin or, in its newer flow, /ax/claim/...
-            if re.search(r"/(?:ap/signin|ax/claim)", urlsplit(page.url).path):
+            if _on_sign_in(page):
                 return dict(NEEDS_SIGN_IN)
             try:
                 await page.wait_for_selector(
@@ -90,8 +96,7 @@ async def add_to_cart(url: str, quantity: int):
                 }
             report("opening_listing", "Opening the exact approved Amazon listing")
             await page.goto(canonical, wait_until="domcontentloaded", timeout=45000)
-            # Amazon's sign-in lives at /ap/signin or, in its newer flow, /ax/claim/...
-            if re.search(r"/(?:ap/signin|ax/claim)", urlsplit(page.url).path):
+            if _on_sign_in(page):
                 return dict(NEEDS_SIGN_IN)
             if await page.locator(
                 '#captchacharacters, form[action*="validateCaptcha"]'

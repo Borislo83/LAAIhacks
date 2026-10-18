@@ -131,6 +131,9 @@ class AgentCall(BaseModel):
 class ChatReply(BaseModel):
     reply: str
     calls: list[AgentCall]
+    # Best price / alternative / recommended, each with an Amazon or Best Buy cart link
+    # when the product comes from one of those stores.
+    picks: list[dict[str, Any]] = Field(default_factory=list)
     source: Literal["asi_one", "rules", "coordinator", "buyer"]
 
 
@@ -141,14 +144,20 @@ class MessageRequest(BaseModel):
 
 
 class MessageSend(InputModel):
-    """A draft the signed-in user reviewed and confirmed; text may be edited first."""
+    """A draft the signed-in user reviewed and confirmed, exactly as drafted.
+
+    The agent sends only the draft's own text, so an edit must be re-drafted first.
+    """
 
     draft_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
-    text: str = Field(min_length=1, max_length=2000)
+    # The messaging agent's own limit; longer text would come back as an agent error.
+    text: str = Field(min_length=1, max_length=1000)
 
 
 class MessageSent(BaseModel):
-    status: Literal["sent", "failed", "needs_permission"]
+    status: Literal["sent", "failed", "needs_permission", "open_link"]
     summary: str = Field(max_length=2000)
     # True when the agent only simulated the send (local development).
     dry_run: bool = False
+    # open_link: an sms: URL that opens Messages with the approved draft; the user sends it.
+    open_url: str | None = Field(default=None, max_length=3000, pattern=r"^sms:\+?[0-9A-Za-z@._%+-]+\?&body=")
