@@ -484,7 +484,7 @@ const VIEW={
     const best=d.best;
     const rows=d.offers.map(o=>`<a href="${esc(o.url)}" target="_blank" rel="noopener" class="${best&&o.store===best.store?"best":""}"><span>${esc(o.store)}</span><span class="p">${money(o.price)}</span></a>`).join("");
     const main=best?`${money(best.price)} at ${best.store}`:"No offers";
-    const sub=d.savings>0?`${money(d.savings)} less than here · nod to open`:d.savings!=null?"already the best price":`${d.offers.length} sellers checked`;
+    const sub=d.savings>0?`${money(d.savings)} less than here · tap to open`:d.savings!=null?"already the best price":`${d.offers.length} sellers checked`;
     return {lens:lens(d.product,main,sub),body:rows?`<div class="list">${rows}</div>`:`<p class="muted">${esc(d.summary)}</p>`};
   },
   alternatives(d){
@@ -497,7 +497,7 @@ const VIEW={
     const card=id?`<a class="yt" href="${watchUrl(id)}" target="_blank" rel="noopener noreferrer"><img src="https://i.ytimg.com/vi/${id}/hqdefault.jpg" alt="" width="160" height="90" loading="lazy"><span><b>${esc(d.title)}</b><small>${esc(meta)}</small></span></a>`:"";
     const alts=(d.alternatives||[]).map(a=>[a,youtubeId(a.url)]).filter(([,aid])=>aid)
       .map(([a,aid])=>`<a class="src" href="${watchUrl(aid)}" target="_blank" rel="noopener noreferrer" title="${esc(a.channel||"")}">${esc(a.title)}</a>`).join("");
-    return {lens:lens("YOUTUBE",id?d.title:"No video found",id?`${meta} · nod to play`:"try a more specific request"),
+    return {lens:lens("YOUTUBE",id?d.title:"No video found",id?`${meta} · tap to play`:"try a more specific request"),
       body:card+(alts?`<div class="yt-alts">Also${alts}</div>`:"")};
   },
   messenger(d){
