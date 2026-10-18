@@ -11,7 +11,7 @@ This page explains what each team gets and how to plug in. Contract terms follow
 | `202610170001_orchestrator.sql` | Settings, contexts, tasks (dashboard) | Applied |
 | `202610170002_shared_workflow.sql` | Contract tables, `laai_workflow` RPC | Applied (do not rerun) |
 | `202610170003_user_preferences.sql` | `user_preferences` + private notes | Applied (do not rerun) |
-| `202610170004_workflow_v1_1.sql` | Event ack, invalidation outbox, devices, rate-limit fix | **Not applied yet** |
+| `202610170004_workflow_v1_1.sql` | Event ack, invalidation outbox, devices, rate-limit fix | Applied 2026-10-17 |
 
 004 only uses `create or replace` / `if not exists`, so applying it twice is harmless. Apply it
 in the Supabase SQL editor, then run `python check_supabase.py` in `services/orchestrator`
@@ -97,7 +97,8 @@ Error codes beyond the contract list: `DEVICE_NOT_FOUND` and `EVENT_NOT_FOUND` (
   until a reviewed handler (and, for `open_url`, a destination allowlist) is registered.
 - Poll `GET .../events?after=<cursor>`. From 004 each event carries `action_status`. Skip events
   whose status is `invalidated`: they will never accept a result, and the DB has already closed
-  them. `services/agents/src/laai_agents/integration.py` does this and advances its cursor.
+  them. `services/agents/src/laai_agents/integration.py` skips them (it re-checks `display`
+  before running) and advances its cursor.
 - Delivery is at-least-once. Post results with stable request IDs (`<event_id>:outcome`) and
   optionally `ack` the event once you are done with it.
 

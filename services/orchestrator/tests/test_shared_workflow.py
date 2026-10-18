@@ -205,6 +205,8 @@ def test_demo_auth_maps_fixture_tokens_to_roles_on_loopback_only():
             "/v1/sessions", headers={**web, "X-Forwarded-For": "203.0.113.9"}
         )
         assert proxied.json()["error"]["code"] == "UNAUTHORIZED"
+        tunneled = client.post("/v1/sessions", headers={**web, "CF-Connecting-IP": "203.0.113.9"})
+        assert tunneled.status_code == 401
     remote, calls = demo_client(host="203.0.113.9")
     with remote:
         response = remote.post("/v1/sessions", headers={"Authorization": "Bearer demo-all"})
