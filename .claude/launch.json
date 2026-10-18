@@ -4,8 +4,38 @@
     {
       "name": "dashboard-prototype",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "5173", "--bind", "127.0.0.1", "--directory", "apps/dashboard/prototype"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5173",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "apps/dashboard/prototype"
+      ],
       "port": 5173
+    },
+    {
+      "name": "agents",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--directory",
+        "services/agents",
+        "laai-agents"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "orchestrator",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--directory",
+        "services/orchestrator",
+        "laai-orchestrator"
+      ],
+      "port": 8001
     }
   ]
 }
