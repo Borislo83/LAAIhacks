@@ -1,6 +1,6 @@
 # Agents
 
-Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are seven specialists and a coordinator:
+Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are eight specialists and a coordinator:
 
 | Agent | Agent protocol | REST | What it does |
 |---|---|---|---|
@@ -10,6 +10,7 @@ Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are sev
 | `laai-youtube` | `YouTubeRequest` → `YouTubeResponse` | `POST /youtube` | A YouTube link for a song or video the user asks for |
 | `laai-spotify` | `SpotifyRequest` → `SpotifyResponse` | `POST /spotify` | Plays a song, artist, album or playlist in the laptop's Spotify app (AppleScript); pause, resume, skip, volume |
 | `laai-news` | `NewsRequest` → `NewsResponse` | `POST /news` | A headline, a 2-4 sentence summary, an image and sources for recent news on a topic |
+| `laai-search` | `SearchRequest` → `SearchResponse` | `POST /search` | A 2-4 sentence answer to a general question (what/who/how/when, places, hours, weather) from the web, with up to three sources, within about 5 s |
 | `laai-messenger` | `MessageDraftRequest` → `MessageDraftResponse` | `POST /imessage/prepare`, `POST /imessage/send` | Drafts an iMessage to an allowlisted friend; sends only after approval |
 
 Every agent also speaks the **Agent Chat Protocol**, so ASI:One and Agentverse chat can talk to it in plain language. Two more agents support the coordinator: `focal-price-verifier` checks price offers, and `focal-memory` keeps the shopper's profile and past decisions. See [ASI:One flow](#asione-flow-coordinator).
@@ -157,6 +158,53 @@ stages are `searching`, `reading` ("Reading N articles"), `ranking` and `summari
 No results give `headline: null` with a summary that says nothing recent was found. If
 every search provider fails, `error` is `"News search unavailable"` and nothing is
 summarized.
+
+## Web search agent
+
+`laai-search` answers general questions: "what is X", "who is Y", "how do I Z", "when does
+the dining hall open", "best ramen near UCLA", "weather in LA". It is the news agent's
+sibling and reuses its reader, ranking and grounding; `/news` is unchanged.
+
+```bash
+curl http://127.0.0.1:8000/search -H 'Content-Type: application/json' \
+  -d '{"query":"when does Bruin Plate open"}'
+```
+
+The response has the news result's shape, so the lens and the orchestrator's news sanitizer
+read it as is: `headline` (and the same text as `title`: the question, or the top article's
+title for news), `summary` (2-4 sentences, at most 500 characters), optional `image_url`,
+`image_alt` and `image_source_url`, up to three `sources` (`title`, `url`, `publisher`,
+`published_at`) and `error`. It also has `partial` (the deadline cut reading or the summary
+short), `news` (recency counted), `data_source` (`web`, `web+news` or `open-meteo`) and
+`elapsed_ms`. `max_sources` (3-12, default 5) is how many result pages it reads.
+
+1. **Search.** "Search for", "look up", "can you" and similar are stripped; the question
+   words stay. The shared keyless search (`search.free_search`: the installed engines
+   race, cached ten minutes) runs, plus DDGS news when the question asks for news
+   ("latest", "news", "what happened", "scores"). It gets 64% of the deadline; if nothing
+   has come back by then it may run on until half a second before the deadline. If every
+   engine in that race comes back empty, up to three other installed engines (Mojeek,
+   Startpage, Wikipedia, ...) are raced before it gives up.
+2. **Read.** The top results are read concurrently with the news agent's reader (HTTPS,
+   public hosts, redirects re-checked) for at most 2 s, leaving time to answer. A page
+   that isn't back keeps its search snippet, and the answer says `partial`.
+3. **Rank.** The search engine's order, plus how well each title, snippet and page text
+   match the question. Recency counts only for news-like questions, which are ranked like
+   the news agent's.
+4. **Answer.** With `ASI_ONE_API_KEY` and at least 0.8 s left, ASI:One gets the question
+   and the extracted text of the top four results and is told to answer only from them.
+   Any sentence with a number, time or date that is in neither the sources nor the question
+   is dropped. Without a key, or when nothing is left, the answer is the results' own
+   sentences that best match the question, verbatim (numbers favored for "when", "how
+   much" and hours questions).
+5. **Weather.** "Weather/forecast in <place>" asks Open-Meteo (`geocoding-api.open-meteo.com`
+   then `api.open-meteo.com`, fixed hosts, no key) and states its numbers: now, and today's
+   or tomorrow's high, low and chance of rain. If it fails, the web answers.
+
+Every answer is back within `SEARCH_DEADLINE_SECONDS` (default 5). Complete answers are
+cached for `SEARCH_CACHE_SECONDS` (default 300; news and weather 120). If every search
+provider fails, `error` is `"Search unavailable"` (or `"Search timed out"`) and nothing is
+answered. No results give a summary that says so.
 
 ## iMessage agent
 
@@ -306,6 +354,28 @@ same IDs instead of proposing twice. `--once` makes a single pass, and `--interv
 seconds between passes (default 2). A watcher journal cannot be used with `propose`/`poll`,
 and a propose/poll journal cannot be used with `watch`. `tests/test_g2_watcher.py` covers
 the whole path: page PUT, proposal, G2 approval, then the result on the display.
+
+**Add to Amazon cart** (`add_to_amazon_cart`, migration `202610170007_cart_action.sql`). On
+a `product` page the watcher also names one Amazon listing and proposes adding it, so the
+glasses' review screen shows the exact item before approval: title, ASIN, price, condition
+and seller. On an amazon.com `/dp/<ASIN>` page (the display's `page.url`) it is that ASIN,
+proposed first. Otherwise `buyer.prepare` finds the product's Amazon listings, keeps those
+naming the same model number, reads up to four listing pages for the buy-box price, seller
+and whether Add to Cart is the new or Amazon's used offer, and picks the cheapest new one
+(cheapest used/refurb only when no new offer exists, labeled as such). No listing with a
+price means no cart action. Picking takes a few seconds and is capped at 8.
+
+Only an approval on the glasses runs it, with the listing journaled at proposal time.
+`AMAZON_CART_DRY_RUN` is on unless set to `0`: a dry run posts "Dry run: would add …" and
+never opens a browser. With `AMAZON_CART_DRY_RUN=0` it calls `amazon_cart.add_to_cart` for
+that ASIN, quantity 1 (refusing Amazon's used offer for an item approved as new). It posts
+"Added <title> ($X) to your Amazon cart. Checkout not started." only once the item is
+verified in the cart; sign-in, verification, blocked and unverified outcomes are posted as
+failed with what to do. A redelivered approval reposts its journaled result, and an add
+that started but has no journaled result is never retried. Checkout and payment are never
+used. `AMAZON_CART_ACTION=0` turns the action off. If the API refuses the type (an orchestrator or database without 007), the watcher
+proposes the research actions alone. `tests/test_cart_action.py` covers it with a fake
+executor.
 
 Use `--session SESSION_ID` when the browser has already created the session. Page and
 action request IDs are retained across retries. The client proposes two allowed actions:

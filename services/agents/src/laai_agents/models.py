@@ -278,3 +278,35 @@ class NewsResponse(Model):
     # A general request ("brief me on the news") returns several stories instead.
     brief: bool = False
     stories: list[NewsStory] = Field(default_factory=list, max_items=10)
+
+
+class SearchRequest(Model):
+    """A general question or search ("when does Bruin Plate open", "weather in LA")."""
+
+    query: str = Field(min_length=1, max_length=300)
+    # How many result pages to read (concurrently, within the deadline).
+    max_sources: int = Field(default=5, ge=3, le=12)
+    progress_id: str | None = Field(default=None, min_length=32, max_length=64)
+
+
+class SearchResponse(Model):
+    """Shaped like NewsResponse (headline, summary, sources, image) so the lens renders it."""
+
+    query: str
+    headline: str | None = None
+    # Same as headline; some clients read `title`.
+    title: str | None = None
+    # 2-4 plain sentences answering the question, drawn only from the pages read.
+    summary: str | None = None
+    image_url: str | None = None
+    image_alt: str | None = None
+    image_source_url: str | None = None
+    sources: list[NewsSource] = Field(default_factory=list, max_items=3)
+    error: str | None = None
+    # True when the deadline cut reading or summarizing short; the answer may be thinner.
+    partial: bool = False
+    # True when the query asked for recent news (recency counted in ranking).
+    news: bool = False
+    # web, web+news or open-meteo.
+    data_source: str = "web"
+    elapsed_ms: int = 0

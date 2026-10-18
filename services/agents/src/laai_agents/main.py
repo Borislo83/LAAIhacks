@@ -19,6 +19,7 @@ from .agents import (
     build_news_agent,
     build_price_agent,
     build_reviews_agent,
+    build_search_agent,
     build_spotify_agent,
     build_youtube_agent,
 )
@@ -35,6 +36,7 @@ BUILDERS = {
     "spotify": build_spotify_agent,
     "messenger": build_messenger_agent,
     "news": build_news_agent,
+    "search": build_search_agent,
     "buyer": build_buyer_agent,
     "amazon-cart": build_amazon_cart_agent,
     "bestbuy-cart": build_bestbuy_cart_agent,

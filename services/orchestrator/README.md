@@ -59,6 +59,14 @@ returns a `https://www.youtube.com/watch?v=` link, the orchestrator posts it to 
 and adds `laptop: {status, summary}` to the YouTube call's result. The reply says "Playing
 <title> on your laptop" only when `status` is `opened`; otherwise it gives the link and says why
 it didn't open. Without the token nothing is opened.
+General questions go to the web search agent (`/search`, kind `search`). Clear question forms
+skip ASI:One: "what is", "who is", "how do I", "how to", "when does", "search for", "look up",
+"google" and "weather in <place>". The LLM's `web_search` tool covers the rest ("best ramen
+near UCLA"), and without an LLM the keyword rules send question forms, "weather", "near me"
+and "opening hours" there. Shopping words, news phrasing ("latest", "news", "what's happening
+with"), media, Spotify, YouTube, messages and small talk ("what's up", "who are you") keep
+their own routes. Its result (headline, summary, up to three https sources) is sanitized like
+news (`safe_search`), and the rules reply names the sources.
 Set `AGENTS_URL` for a remote agent Bureau and `CORS_ORIGINS` for frontend origins.
 Optional `ASI_ONE_API_KEY` enables ASI:One page understanding. Without it, an explicit `product`
 field produces deterministic shopping suggestions; unstructured pages produce no tasks.
