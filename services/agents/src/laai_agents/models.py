@@ -194,7 +194,7 @@ class YouTubeResponse(Model):
 
 
 class SpotifyRequest(Model):
-    action: Literal["play", "pause", "resume", "next", "previous", "volume"] = "play"
+    action: Literal["play", "pause", "resume", "next", "previous", "volume", "now_playing"] = "play"
     query: str | None = Field(default=None, max_length=300)
     kind: Literal["track", "artist", "album", "playlist", "auto"] = "auto"
     volume: int | None = Field(default=None, ge=0, le=100)
@@ -207,6 +207,11 @@ class SpotifyResponse(Model):
     kind: str | None = None
     title: str | None = None
     artist: str | None = None
+    album: str | None = None
+    # Player state after the action: playing, paused or stopped.
+    state: str | None = None
+    position_seconds: int | None = None
+    duration_seconds: int | None = None
     uri: str | None = None
     url: str | None = None
     device: str | None = None
