@@ -656,7 +656,31 @@ async def test_coordinator_picks_reach_the_chat_reply():
         reply = await chat.chat(
             [ChatMessage(role="user", content="Are there Sony headphones under $300?")], config(), http
         )
-    assert reply.source == "coordinator" and reply.picks == [pick]
+    assert reply.source == "coordinator" and reply.picks == [{**pick, "image": None}]
+
+
+async def test_only_store_photos_reach_the_dashboard():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    amazon = "https://m.media-amazon.com/images/I/61abc.jpg"
+    picks = [
+        {"label": "Best price", "product": "A", "url": "https://www.amazon.com/dp/B0DFZPR9Z4",
+         "reason": "r", "image": amazon},
+        {"label": "Alternative", "product": "B", "url": "https://example.com/b",
+         "reason": "r", "image": "https://tracker.example.com/pixel.gif"},
+    ]
+
+    def handle(request):
+        return httpx.Response(200, json={"product": "Sony WH-1000XM5", "summary": "s",
+                                         "image": "http://m.media-amazon.com/x.jpg", "picks": picks})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        reply = await chat.chat(
+            [ChatMessage(role="user", content="Consider Sony XM5 under $300")], config(), http
+        )
+    assert [p["image"] for p in reply.picks] == [amazon, None]
+    assert reply.product == "Sony WH-1000XM5" and reply.image is None  # http is refused
 
 
 async def test_reply_to_what_to_say_becomes_the_draft():

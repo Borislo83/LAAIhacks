@@ -33,6 +33,8 @@ class Offer(Model):
     cart_url: str | None = None
     rating: float | None = None
     review_count: int | None = None
+    # Product photo from the store listing (Amazon's image CDN).
+    image: str | None = None
 
 
 class PriceCompareRequest(Model):
@@ -73,6 +75,7 @@ class Alternative(Model):
     store: str | None = None
     # Official add-to-cart link, only for Amazon and Best Buy listings.
     cart_url: str | None = None
+    image: str | None = None
 
 
 class AlternativesResponse(EvidenceResponse):
@@ -127,6 +130,7 @@ class Pick(Model):
     cart_url: str | None = None
     rating: float | None = None
     reason: str
+    image: str | None = None
 
 
 class CartRequest(Model):
@@ -149,6 +153,8 @@ class ConsiderResponse(Model):
     store: str | None = None
     # "consider" (price, reviews, alternatives) or "browse" (store listings in budget).
     mode: str = "consider"
+    # A photo of the product researched, from its Amazon listing.
+    image: str | None = None
     price: PriceCompareResponse | None = None
     reviews: ReviewsResponse | None = None
     alternatives: AlternativesResponse | None = None

@@ -177,14 +177,15 @@ def make_picks(values: dict, max_price: float | None) -> list[Pick]:
             candidates.append(
                 dict(product=o.product, price=o.price, store=o.store, url=o.url,
                      cart_url=o.cart_url, rating=rating_of(o.product, o.rating), trust=o.trust,
-                     origin="price")
+                     origin="price", image=o.image)
             )
     for a in alts.alternatives if alts else []:
         if in_budget(a.price):
             candidates.append(
                 dict(product=a.product, price=a.price, store=a.store, url=a.url,
                      cart_url=a.cart_url, rating=rating_of(a.product, a.rating),
-                     trust="high" if a.cart_url else "medium", origin="alternative")
+                     trust="high" if a.cart_url else "medium", origin="alternative",
+                     image=a.image)
             )
 
     picks = []
@@ -199,7 +200,7 @@ def make_picks(values: dict, max_price: float | None) -> list[Pick]:
             Pick(label="Alternative", product=alternative.product, price=alternative.price,
                  store=alternative.store, url=alternative.url, cart_url=alternative.cart_url,
                  rating=rating_of(alternative.product, alternative.rating),
-                 reason=alternative.reason)
+                 reason=alternative.reason, image=alternative.image)
         )
     if candidates:
         taken = {(p.product, p.price) for p in picks}
@@ -222,7 +223,28 @@ def make_picks(values: dict, max_price: float | None) -> list[Pick]:
 
 def _pick(label: str, c: dict, reason: str) -> Pick:
     return Pick(label=label, product=c["product"], price=c["price"], store=c["store"],
-                url=c["url"], cart_url=c["cart_url"], rating=c["rating"], reason=reason)
+                url=c["url"], cart_url=c["cart_url"], rating=c["rating"], reason=reason,
+                image=c.get("image"))
+
+
+async def with_images(product: str, picks: list[Pick]) -> tuple[str | None, list[Pick]]:
+    """A photo of the product and of each pick, from Amazon listings (8 s at most)."""
+    if os.getenv("PRODUCT_DATA_MODE", "live") != "live":
+        return None, picks
+    from .stores import product_image
+
+    names = list(dict.fromkeys([product, *(p.product for p in picks if not p.image)]))[:4]
+
+    async def one(name):
+        try:
+            return await asyncio.wait_for(product_image(name), timeout=8)
+        except Exception:  # noqa: BLE001 -- a missing photo never blocks the answer
+            return None
+
+    found = dict(zip(names, await asyncio.gather(*(one(n) for n in names)), strict=True))
+    return found.get(product), [
+        p if p.image else p.copy(update={"image": found.get(p.product)}) for p in picks
+    ]
 
 
 # Called with each finished step so a chat can narrate the orchestration live.
@@ -395,18 +417,17 @@ async def consider(
     if "reviews" in values and "alternative_reviews" in values:
         sections.append(compare_reviews(values["reviews"], values["alternative_reviews"]))
     picks = make_picks(values, req.max_price)
+    image, picks = await with_images(req.product, picks)
     if picks:
-        sections.insert(
-            0,
-            "Picks: "
-            + "; ".join(
-                f"{p.label}: {p.product}"
-                + (f" (${p.price:.2f} on {p.store})" if p.price is not None else "")
-                for p in picks
-            )
-            + ".",
-        )
-    sections.extend(f"{field}: {error}" for field, error in errors.items())
+        # The picks and each agent's card carry the details, so the reply stays short:
+        # the recommendation and, when both were reviewed, how the reviews compare.
+        top = next((p for p in picks if p.label == "Recommended"), picks[0])
+        price = f" at ${top.price:.2f} on {top.store}" if top.price is not None else ""
+        sections = [f"My pick: {top.product}{price}."] + [
+            s for s in sections[-1:] if s.startswith("Reviews compared:")
+        ]
+    else:
+        sections.extend(f"{field}: {error}" for field, error in errors.items())
     if any(result.data_source == "demo_catalog" for result in values.values()):
         sections.insert(
             0, "DEMO: illustrative catalog data, not current offers or reviews."
@@ -415,6 +436,7 @@ async def consider(
         product=req.product,
         max_price=req.max_price,
         store=req.store,
+        image=image,
         errors=errors,
         timings_ms=timings,
         summary="\n\n".join(sections),
@@ -445,7 +467,7 @@ def listing_picks(offers) -> list[Pick]:
         stars = f"{o.rating}★" + (f" from {o.review_count:,} ratings" if o.review_count else "")
         picks.append(
             Pick(label=label, product=o.product, price=o.price, store=o.store, url=o.url,
-                 cart_url=o.cart_url, rating=o.rating,
+                 cart_url=o.cart_url, rating=o.rating, image=o.image,
                  reason=f"{stars}, ${o.price:.2f} on {o.store}" if o.rating
                  else f"${o.price:.2f} on {o.store}")
         )  # fmt: skip

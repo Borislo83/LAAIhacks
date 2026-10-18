@@ -41,7 +41,7 @@ def _price(value) -> float | None:
     return price if price > 0 else None
 
 
-def _offer(product, store, price, url, cart_url, rating, reviews, source):
+def _offer(product, store, price, url, cart_url, rating, reviews, source, image=None):
     return Offer(
         product=product,
         store=store,
@@ -52,7 +52,24 @@ def _offer(product, store, price, url, cart_url, rating, reviews, source):
         cart_url=cart_url,
         rating=round(float(rating), 1) if rating not in (None, "") else None,
         review_count=int(reviews) if str(reviews or "").isdigit() else None,
+        image=store_image(image),
     )
+
+
+IMAGE_HOSTS = (".media-amazon.com", ".ssl-images-amazon.com", ".bbystatic.com")
+
+
+def store_image(url) -> str | None:
+    """A product photo URL, only from the stores' own image CDNs."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(url or ""))
+    except ValueError:
+        return None
+    host = parts.hostname or ""
+    ok = parts.scheme == "https" and not parts.username and host.endswith(IMAGE_HOSTS)
+    return str(url) if ok and len(str(url)) <= 500 else None
 
 
 # SerpApi's free tier is ~100 searches a month, so identical lookups within half an
@@ -157,6 +174,7 @@ async def amazon_search(query: str, max_price: float | None = None) -> list[Offe
                 item.get("rating"),
                 item.get("reviews"),
                 "serpapi_amazon",
+                item.get("thumbnail"),
             )
         )
     return offers
@@ -268,6 +286,7 @@ def parse_amazon_results(page: str, max_price: float | None = None) -> list[Offe
             " ".join(card.xpath('.//*[contains(@aria-label,"rating")]/@aria-label')),
         )
         seen.add(asin)
+        image = next(iter(card.xpath('.//img[contains(@class,"s-image")]/@src')), None)
         offers.append(
             _offer(
                 title[:200],
@@ -278,16 +297,67 @@ def parse_amazon_results(page: str, max_price: float | None = None) -> list[Offe
                 stars[1] if stars else None,
                 counted[1].replace(",", "") if counted else None,
                 "amazon_search_page",
+                image,
             )
         )
     return offers
 
 
-async def amazon_page_search(query: str, max_price: float | None = None) -> list[Offer]:
-    from .merchants import fetch_page
+# Amazon throttles bursts, so its page is read one request at a time and each answer is
+# reused for half an hour (price, alternatives and photos often ask for the same thing).
+_PAGES: dict[tuple, tuple[float, list[Offer]]] = {}
+_AMAZON_SLOT = asyncio.Semaphore(1)
 
+
+async def amazon_page_search(query: str, max_price: float | None = None) -> list[Offer]:
     if not _words(query):
         return []
+    key = (" ".join(query.lower().split()), max_price)
+    cached = _PAGES.get(key)
+    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+        return cached[1]
+    async with _AMAZON_SLOT:
+        cached = _PAGES.get(key)
+        if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+            return cached[1]
+        offers = await _read_amazon_page(query, max_price)
+    if offers:
+        while len(_PAGES) >= CACHE_SIZE:
+            del _PAGES[next(iter(_PAGES))]
+        _PAGES[key] = (time.monotonic(), offers)
+    return offers
+
+
+async def product_image(name: str) -> str | None:
+    """The photo on the Amazon listing that names this product."""
+    # New listings first: a "Renewed" one shows the same product, but used. (A sorted
+    # copy: the listings are cached and shared with the price agent.)
+    offers = sorted(await amazon_page_search(name), key=lambda o: "renewed" in o.product.lower())
+    for offer in offers:
+        if offer.image and photo_of(offer.product, name):
+            return offer.image
+    return None
+
+
+def photo_of(title: str, name: str) -> bool:
+    """The listing shows this product. Amazon writes models many ways ("WH-1000XM5/B",
+    "WH1000XM5"), so the model is compared without spaces or punctuation."""
+    from .live import names_product
+
+    if names_product(title, name):
+        return True
+    compact = re.sub(r"[^a-z0-9]", "", title.lower())
+    words = re.findall(r"[a-z0-9]+", name.lower())
+    # The name without its brand ("WH-1000XM5" for "Sony WH-1000XM5"), or all of it.
+    for part in ("".join(words[1:]), "".join(words)):
+        if len(part) >= 5 and part in compact:
+            return True
+    return False
+
+
+async def _read_amazon_page(query: str, max_price: float | None) -> list[Offer]:
+    from .merchants import fetch_page
+
     # Amazon sometimes answers with a short interstitial instead of results, so it gets
     # three attempts like the agents do.
     for attempt in range(AMAZON_ATTEMPTS):
