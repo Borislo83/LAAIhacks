@@ -663,6 +663,7 @@ orch.value=store.get("focal.orch","http://127.0.0.1:8001");
 orch.onchange=()=>store.set("focal.orch",orch.value.trim());
 const convo=[];
 let activePurchase=null;
+let autoConfirm=null, convoResult=null;  // the listing an "Add to Amazon cart" click approved; the last chat answer
 // Cart requests are never retried, so nothing can be added to a cart twice.
 const isCartRelated=text=>!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
 const STARTERS=["Brief me on the news today.","Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100","Find the song Blinding Lights","Text Alex that I'm running 10 minutes late"];
@@ -716,7 +717,12 @@ function picksCard(picks){
   const tiles=picks.map(p=>{
     const cart=CARTS.find(([prefix])=>String(p.cart_url||"").startsWith(prefix));
     const link=/^https:\/\//.test(p.url||"")?p.url:null;
-    const action=cart
+    // Amazon's add-to-cart link no longer adds anything, so Amazon picks go to the cart
+    // agent, which adds the item in its own signed-in Chrome window and checks the cart.
+    const asin=(String(p.cart_url||"").match(/ASIN\.1=([A-Z0-9]{10})/i)||String(p.url||"").match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i)||[])[1];
+    const action=asin&&(p.store==="amazon.com"||cart?.[1]==="Add to Amazon cart")
+      ?`<button type="button" class="cartbtn" data-buy-link="https://www.amazon.com/dp/${esc(asin.toUpperCase())}" data-product="${esc(p.product)}" data-quantity="1" data-auto-confirm>Add to Amazon cart</button>`
+      :cart
       ?`<a class="cartbtn" href="${esc(p.cart_url)}" target="_blank" rel="noopener noreferrer">${cart[1]}</a>`
       :link?`<a class="viewbtn" href="${esc(link)}" target="_blank" rel="noopener noreferrer">View at ${esc(storeName(p.store))} ↗</a>`:"";
     return `<div class="pick"><span class="plabel">${esc(p.label)}</span><b>${esc(p.product)}</b>
@@ -812,12 +818,14 @@ $("#chat-form").onsubmit=async e=>{
   const pending=bubble(`${logoOrb()}<div class="body"><div class="progress-host"></div><div class="outs"></div></div>`,"bot");
   const body=pending.querySelector(".body"),outs=pending.querySelector(".outs");
   const progress=makeProgress(pending.querySelector(".progress-host"),outs);
+  convoResult=null;
   progress.update({kind:"coordinator",stage:"connecting",message:"Connecting to the agent workflow"});
   try{
     const cartRelated=isCartRelated(text);
     const d=await withRetry(()=>readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update),
       n=>progress.update({kind:"coordinator",stage:"retrying",message:retryMessage(n)}),!cartRelated);
     d.calls=(d.calls||[]).map(c=>({...c,kind:kindOf(c.kind)}));
+    convoResult=d;
     d.calls.forEach(c=>{if(c.result?.confirmation_token)activePurchase=c.result.confirmation_token;if(c.result?.status==="cart_added")activePurchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
@@ -836,6 +844,11 @@ $("#chat-form").onsubmit=async e=>{
     });
   }
   $("#send").disabled=false; $("#starters").classList.remove("busy"); input.focus();
+  // After an "Add to Amazon cart" click, the reviewed addition for that listing is
+  // confirmed right away; anything else (sign-in needed, another item) waits for the user.
+  const wanted=autoConfirm; autoConfirm=null;
+  const review=wanted&&convoResult?.calls?.find(c=>c.result?.status==="cart_review"&&c.result?.selected_url===wanted);
+  if(review){activePurchase=review.result.confirmation_token;input.value="confirm add to cart";$("#chat-form").requestSubmit()}
 };
 
 document.addEventListener("click",e=>{
@@ -843,7 +856,10 @@ document.addEventListener("click",e=>{
   if(!listing&&!confirmation)return;if($("#send").disabled)return;
   setMode("chat");
   if(confirmation){activePurchase=confirmation.dataset.confirmBuy;$("#chat-input").value="confirm add to cart"}
-  else{$("#chat-input").value=`Prepare Amazon cart addition for ${listing.dataset.product}, quantity ${listing.dataset.quantity}: ${listing.dataset.buyLink}`}
+  else{
+    // "Add to Amazon cart" is itself the approval for that one listing.
+    autoConfirm=listing.hasAttribute("data-auto-confirm")?listing.dataset.buyLink:null;
+    $("#chat-input").value=`Prepare Amazon cart addition for ${listing.dataset.product}, quantity ${listing.dataset.quantity}: ${listing.dataset.buyLink}`}
   $("#chat-form").requestSubmit();
 });
 
