@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Focal Team</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22 fill=%22none%22 stroke=%22%23eceae2%22 stroke-width=%226%22%3E%3Cpath d=%22M8 20 V8 H20 M44 8 H56 V20 M56 44 V56 H44 M20 56 H8 V44%22/%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%229%22 fill=%22%237ee09a%22 stroke=%22none%22/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --sheet:#1b1e21;
+  --grid:#24282c;
+  --ink:#eceae2;
+  --muted:#8d9196;
+  --lens:#7ee09a;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+  --t:.55s cubic-bezier(.65,0,.35,1);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--sheet);color:var(--ink)}
+body{font:16px/1.5 var(--mono);-webkit-font-smoothing:antialiased;overflow:hidden;transition:background-color var(--t)}
+.grid{
+  position:fixed;inset:0;transition:opacity var(--t);
+  background:
+    linear-gradient(var(--grid) 1px,transparent 1px) 0 0/24px 24px,
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/24px 24px;
+}
+
+/* the frame is the whole viewport on the web, and the G2's 576×288 display on the glasses */
+.frame{
+  position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:100vw;height:100vh;padding:16px;
+  display:grid;place-items:center;
+  border:1px solid transparent;border-radius:0;
+  transition:width var(--t),height var(--t),border-color var(--t),border-radius var(--t);
+}
+.frame-label{
+  position:absolute;left:0;bottom:-28px;font-size:11px;color:var(--muted);
+  opacity:0;transition:opacity var(--t);white-space:nowrap;
+}
+main{display:flex;flex-direction:column;align-items:center;gap:clamp(40px,8vh,72px);text-align:center;transition:gap var(--t)}
+.lockup{display:flex;align-items:center;gap:clamp(14px,2vw,24px);transition:gap var(--t)}
+.lockup svg{width:clamp(56px,9vw,104px);height:auto;color:var(--ink);transition:width var(--t),color var(--t)}
+.lockup h1{margin:0;font-weight:500;font-size:clamp(56px,10vw,112px);letter-spacing:-0.02em;line-height:1;transition:font-size var(--t),color var(--t)}
+ul{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;justify-content:center;gap:12px clamp(24px,4vw,48px);transition:gap var(--t)}
+li{font-size:clamp(15px,1.6vw,19px);white-space:nowrap;transition:font-size var(--t),color var(--t)}
+li::before{content:"";display:inline-block;width:6px;height:6px;margin-right:10px;background:var(--lens);vertical-align:2px;transition:margin var(--t)}
+
+/* glasses: identical size and position, drawn in the lens's single green inside the G2's 2:1 display outline,
+   so the two views line up frame for frame when cut or crossfaded in an edit */
+body.glasses{background:#000}
+body.glasses .grid{opacity:0}
+body.glasses .frame{width:min(88vw,176vh);height:min(44vw,88vh);border-color:#2a2f33;border-radius:14px}
+body.glasses .frame-label{opacity:1}
+body.glasses .lockup svg,
+body.glasses .lockup h1,
+body.glasses li{color:var(--lens)}
+/* the display's own feel: emissive glow, scanlines, hollow bullets */
+body.glasses .lockup h1,
+body.glasses li{text-shadow:0 0 6px rgba(126,224,154,.55),0 0 18px rgba(126,224,154,.25)}
+body.glasses .lockup svg{filter:drop-shadow(0 0 6px rgba(126,224,154,.55))}
+body.glasses li::before{background:transparent;outline:1px solid var(--lens);outline-offset:-1px}
+.scan{
+  position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity var(--t);
+  background:repeating-linear-gradient(transparent 0 2px,rgba(0,0,0,.35) 2px 3px);
+}
+body.glasses .scan{opacity:1}
+
+.frame-label{left:2px;top:auto;bottom:-24px}
+@media (max-width:620px){ul{flex-direction:column;align-items:flex-start}}
+@media (prefers-reduced-motion:reduce){:root{--t:0s}}
+</style>
+</head>
+<body>
+<div class="grid" aria-hidden="true"></div>
+<div class="frame">
+  <main>
+    <div class="lockup">
+      <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" aria-hidden="true"><path d="M8 20 V8 H20 M44 8 H56 V20 M56 44 V56 H44 M20 56 H8 V44"/><circle cx="32" cy="32" r="8" fill="var(--lens)" stroke="none"/></svg>
+      <h1>focal</h1>
+    </div>
+    <ul>
+      <li>Legend Yang</li>
+      <li>Boris Lo</li>
+      <li>Jonathan Jeong</li>
+      <li>Eason Su</li>
+    </ul>
+  </main>
+  <div class="scan" aria-hidden="true"></div>
+  <div class="frame-label">G2 lens · 576 × 288</div>
+</div>
+<script>
+// click or space flips web ↔ glasses; "a" flashes between them on a loop; ?view=glasses opens on the lens
+const body = document.body;
+const params = new URLSearchParams(location.search);
+if(params.get("view") === "glasses") body.classList.add("glasses");
+const flip = () => body.classList.toggle("glasses");
+let timer = null;
+const auto = on => { clearInterval(timer); timer = on ? setInterval(flip, 2400) : null; };
+if(params.has("auto")) auto(true);
+addEventListener("click", flip);
+addEventListener("keydown", e => {
+  if(e.key === " "){ e.preventDefault(); flip(); }
+  if(e.key === "a") auto(!timer);
+});
+</script>
+</body>
+</html>
