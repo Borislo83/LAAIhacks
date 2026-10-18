@@ -69,7 +69,14 @@ async def profile() -> tuple[str, int | None, dict]:
 
 async def handle(ctx: Context, req: MemoryRequest) -> MemoryResponse:
     key = user_key(req.user)
-    history = ctx.storage.get(key) or []
+    # Latest decision per product; drop placeholder names an extractor may return.
+    history, seen = [], set()
+    for entry in ctx.storage.get(key) or []:
+        product = str(entry.get("product") or "")
+        if product.lower() in seen or "no product" in product.lower():
+            continue
+        seen.add(product.lower())
+        history.append(entry)
     if req.remember:
         history = ([{**req.remember, "at": int(time.time())}] + history)[:HISTORY]
         ctx.storage.set(key, history)
