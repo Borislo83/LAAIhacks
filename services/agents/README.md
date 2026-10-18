@@ -1,6 +1,6 @@
 # Agents
 
-Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are five specialists and a coordinator:
+Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are six specialists and a coordinator:
 
 | Agent | Agent protocol | REST | What it does |
 |---|---|---|---|
@@ -8,6 +8,7 @@ Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are fiv
 | `laai-alternatives` | `AlternativesRequest` → `AlternativesResponse` | `POST /alternatives` | Cheaper or better-rated competitors in the same category |
 | `laai-reviews` | `ReviewsRequest` → `ReviewsResponse` | `POST /reviews` | Rating, pros/cons, a review link, and a one-line summary |
 | `laai-youtube` | `YouTubeRequest` → `YouTubeResponse` | `POST /youtube` | A YouTube link for a song or video the user asks for |
+| `laai-news` | `NewsRequest` → `NewsResponse` | `POST /news` | A headline, a 2-4 sentence summary, an image and sources for recent news on a topic |
 | `laai-messenger` | `MessageDraftRequest` → `MessageDraftResponse` | `POST /imessage/prepare`, `POST /imessage/send` | Drafts an iMessage to an allowlisted friend; sends only after approval |
 
 Every agent also speaks the **Agent Chat Protocol**, so ASI:One and Agentverse chat can talk to it in plain language.
@@ -56,6 +57,51 @@ links are returned, always as `https://www.youtube.com/watch?v=<11-character id>
 (`youtu.be` links are rewritten). Shorts, playlists, channels and other sites are dropped,
 and no URL from the query or the results is fetched. No match gives `url: null` with a
 summary that says so. If every provider fails, `error` is set and no link is guessed.
+
+## News agent
+
+`laai-news` answers "what's the latest on X" with a short, sourced summary of recent
+coverage. It is separate from the shopping research.
+
+```bash
+curl http://127.0.0.1:8000/news -H 'Content-Type: application/json' \
+  -d '{"query":"what\u0027s the latest on SpaceX Starship","max_sources":8}'
+```
+
+`max_sources` (3-12, default 8) is how many article pages it reads. The response has
+`headline`, `summary` (2-4 plain sentences, at most 600 characters), `image_url`,
+`image_alt`, `image_source_url` (the article the image came from), up to eight `sources`
+(`title`, `url`, `publisher`, `published_at`), most relevant first, and `error`. The chat
+reply is plain text: the headline, the summary and up to three source links. Progress
+stages are `searching`, `reading` ("Reading N articles"), `ranking` and `summarizing`.
+
+1. **Search.** Request phrasing ("what's the latest on", "news about", "today") is
+   stripped. Keyless DDGS news search (past week) runs first, and the shared web search
+   is the fallback.
+2. **Read.** The top `max_sources` results are fetched concurrently on the shared
+   session. Pages are HTTPS only, 8 s and 1.5 MB each (longer pages are read up to the
+   cap), redirects are re-checked, and hosts that resolve to private, loopback or
+   link-local addresses are refused. From each page it reads the title, `og:image`
+   (made absolute), the description, the publisher, the published time and the
+   paragraph text (lxml). A page that can't be read keeps its search title and snippet.
+3. **Rank.** Title and lead overlap with the query, plus recency over the past week,
+   with a small penalty for repeating a publisher. Copies of the same story (same URL,
+   or mostly the same title words) are kept once, and results that share no word with
+   the query are dropped when others match.
+4. **Headline and image.** The headline is the top article's title. The image is the
+   first ranked article's HTTPS `og:image` that is not on a private or local host, not
+   logo-like, and not tiny when `og:image:width`/`height` say so. The image itself is
+   never fetched.
+5. **Summary.** With `ASI_ONE_API_KEY`, ASI:One gets only the extracted text of the top
+   five articles (no query, no URLs) and is told to state only facts in those articles,
+   not to speculate, to say so briefly if they disagree, and to write 2-4 sentences. A
+   reply containing a number that does not appear in that text is discarded. Without a
+   key, or when the reply is discarded, the summary is the top articles' own lead
+   sentences, verbatim and deduplicated, skipping snippets cut off with "...".
+
+No results give `headline: null` with a summary that says nothing recent was found. If
+every search provider fails, `error` is `"News search unavailable"` and nothing is
+summarized.
 
 ## iMessage agent
 
