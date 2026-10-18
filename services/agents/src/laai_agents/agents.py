@@ -47,7 +47,7 @@ NEWS_SEED = os.getenv("NEWS_AGENT_SEED", "laai news agent dev seed")
 # ASI:One finds agents by these, so they say what each agent does and how to ask.
 PROFILES = Path(__file__).parent / "agent_profiles"
 DESCRIPTIONS = {
-    "FOCAL": "FOCAL turns what you ask into something done: a team of 12 agents that researches and verifies purchases, adds to your cart, briefs you on news, finds videos and messages friends, with memory of what you like.",
+    "FOCAL": "FOCAL works so you can focus on what matters. Ask it for almost anything and a team of 12 agents gets it done; its specialty is shopping: research, price verification, checkout and price watching, all in one chat.",
     "laai-price-compare": "Current prices for a product across online stores, read from product pages and ranked by trust, with a source for every price.",
     "laai-alternatives": "Cheaper or better-rated alternatives to a product in the same category, within your budget.",
     "laai-reviews": "Expert review summary for a product: average rating on a 5-point scale, pros, cons and links.",
@@ -70,6 +70,9 @@ AVATARS = {
 
 def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
     kwargs = {}
+BANNERS = {
+    "FOCAL": "https://storage.googleapis.com/agentverse-prod-assets/agent-banners-pub/585959653.png",
+}
     if port is not None:
         kwargs = {"port": port, "endpoint": [f"http://127.0.0.1:{port}/submit"]}
     # Set AGENTVERSE_MAILBOX=1 to reach the agent through Agentverse (needed for ASI:One).
@@ -90,6 +93,9 @@ def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
     )
 
     @agent.on_event("shutdown")
+        banner_url=BANNERS.get(name),
+        # FOCAL talks to many chats at once; one long research run must not queue the rest.
+        handle_messages_concurrently=name == "FOCAL",
     async def close_http(ctx: Context):
         await net.close()
 

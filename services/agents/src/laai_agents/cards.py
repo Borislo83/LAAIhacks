@@ -114,7 +114,7 @@ def money(value: float | None) -> str:
     return f"${value:,.2f}" if value is not None else "n/a"
 
 
-def code_block(data, limit: int = 900) -> str:
+def code_block(data, limit: int = 2400) -> str:
     rendered = json.dumps(data, indent=2, default=str)
     if len(rendered) > limit:
         rendered = rendered[:limit].rstrip() + "\n  …"
