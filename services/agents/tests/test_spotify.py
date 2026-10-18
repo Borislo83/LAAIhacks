@@ -1,41 +1,48 @@
-import json
-
 import pytest
 
 from laai_agents import spotify
 from laai_agents.agents import build_spotify_agent
-from laai_agents.models import SpotifyRequest
+from laai_agents.models import Source, SpotifyRequest
 
-LAPTOP = {"id": "dev-laptop", "name": "Boris's MacBook", "type": "Computer", "is_active": False, "volume_percent": 50}
-PHONE = {"id": "dev-phone", "name": "iPhone", "type": "Smartphone", "is_active": True, "volume_percent": 80}
-TRACK = {
-    "name": "Blinding Lights",
-    "uri": "spotify:track:0VjIjW4GlUZAMYd2vXMi3b",
-    "artists": [{"name": "The Weeknd"}],
-    "external_urls": {"spotify": "https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b"},
-}
-ARTIST = {"name": "Daft Punk", "uri": "spotify:artist:4tZwfgrHOc3mvqYlEYSvVi", "external_urls": {}}
+TRACK_ID = "6qYkmqFsXbj8CQjAdbYz07"
+ARTIST_ID = "4tZwfgrHOc3mvqYlEYSvVi"
+
+
+def playing_line(state, title="Blinding Lights", artist="The Weeknd", position="102", duration="200"):
+    return "\t".join([state, title, artist, f"spotify:track:{TRACK_ID}", "After Hours", position, duration])
+
+
+def source(url, title):
+    return Source(title=title, url=url)
 
 
 @pytest.fixture
-def api(monkeypatch):
-    """Fake Web API: records every call, answers from `state`. No network."""
-    calls = []
-    state = {"devices": [PHONE, LAPTOP], "search": {"tracks": {"items": [TRACK]}, "artists": {"items": []}}}
+def app(monkeypatch):
+    """Fake Spotify app and search: records osascript calls and search queries. No processes, no network."""
+    calls, queries = [], []
+    state = {
+        "running": "true",
+        "volume": "50",
+        "now_playing": playing_line("playing"),
+        "sources": [
+            source(f"https://open.spotify.com/track/{TRACK_ID}", "Blinding Lights - song and lyrics by The Weeknd | Spotify"),
+        ],
+    }
 
-    async def fake_call(method, path, params=None, body=None):
-        calls.append((method, path, params, body))
+    async def fake_osascript(name, *args):
+        calls.append((name, *args))
         if "error" in state:
             raise spotify.SpotifyError(state["error"])
-        if path == "/me/player/devices":
-            return {"devices": state["devices"]}
-        if path == "/search":
-            return state["search"]
-        return None
+        return {"running": state["running"], "get_volume": state["volume"], "now_playing": state["now_playing"]}.get(name, "")
 
-    monkeypatch.setattr(spotify, "call", fake_call)
-    monkeypatch.delenv("SPOTIFY_DEVICE_NAME", raising=False)
-    return calls, state
+    async def fake_search(query):
+        queries.append(query)
+        return state["sources"], {}
+
+    monkeypatch.setattr(spotify, "osascript", fake_osascript)
+    monkeypatch.setattr(spotify, "search", fake_search)
+    monkeypatch.setattr(spotify, "SETTLE", 0)
+    return calls, queries, state
 
 
 @pytest.mark.parametrize(
@@ -50,6 +57,10 @@ def api(monkeypatch):
         ("play", "resume", None, None),
         ("skip this song", "next", None, None),
         ("go back", "previous", None, None),
+        ("what's playing", "now_playing", None, None),
+        ("What song is this?", "now_playing", None, None),
+        ("now playing", "now_playing", None, None),
+        ("what is playing right now", "now_playing", None, None),
     ],
 )
 def test_parse(text, action, query, kind):
@@ -66,79 +77,152 @@ def test_parse_volume():
     assert spotify.parse("a bit quieter please").volume_change == -15
 
 
-async def test_plays_track_on_laptop_not_active_phone(api):
-    calls, _ = api
-    reply = await spotify.control(SpotifyRequest(query="Blinding Lights"))
+@pytest.mark.parametrize(
+    "title, expected",
+    [
+        ("Blinding Lights - song and lyrics by The Weeknd | Spotify", "Blinding Lights"),
+        ("Thriller - Album by Michael Jackson | Spotify", "Thriller"),
+        ("Daft Punk | Spotify", "Daft Punk"),
+        ("Lofi Beats - playlist by Spotify | Spotify", "Lofi Beats"),
+    ],
+)
+def test_result_title(title, expected):
+    assert spotify.result_title(title) == expected
+
+
+async def test_plays_track_and_reads_back(app):
+    calls, queries, _ = app
+    reply = await spotify.control(SpotifyRequest(query="Blinding Lights", kind="track"))
     assert reply.error is None
-    assert (reply.title, reply.artist, reply.device) == ("Blinding Lights", "The Weeknd", "Boris's MacBook")
-    assert reply.url == TRACK["external_urls"]["spotify"]
-    assert calls[-1] == ("PUT", "/me/player/play", {"device_id": "dev-laptop"}, {"uris": [TRACK["uri"]]})
-    assert "Playing Blinding Lights by The Weeknd" in reply.summary
+    assert queries == ["site:open.spotify.com/track Blinding Lights"]
+    assert ("play_uri", f"spotify:track:{TRACK_ID}") in calls
+    assert (reply.title, reply.artist) == ("Blinding Lights", "The Weeknd")
+    assert reply.url == f"https://open.spotify.com/track/{TRACK_ID}"
+    assert reply.summary == "▶️ Playing Blinding Lights by The Weeknd on the laptop."
 
 
-async def test_auto_prefers_exact_artist(api):
-    calls, state = api
-    state["search"] = {"artists": {"items": [ARTIST]}, "tracks": {"items": [TRACK]}}
+async def test_auto_prefers_exact_artist(app):
+    calls, _, state = app
+    state["sources"] = [
+        source(f"https://open.spotify.com/track/{TRACK_ID}", "One More Time - song and lyrics by Daft Punk | Spotify"),
+        source(f"https://open.spotify.com/intl-de/artist/{ARTIST_ID}?si=abc", "Daft Punk | Spotify"),
+    ]
     reply = await spotify.control(SpotifyRequest(query="daft punk"))
     assert reply.kind == "artist"
-    assert calls[-1][3] == {"context_uri": ARTIST["uri"]}
+    assert ("play_uri", f"spotify:artist:{ARTIST_ID}") in calls
 
 
-async def test_no_match(api):
-    calls, state = api
-    state["search"] = {"tracks": {"items": []}}
+async def test_ignores_non_spotify_and_wrong_kind_links(app):
+    calls, _, state = app
+    state["sources"] = [
+        source("https://open.spotify.com.evil.example/track/" + TRACK_ID, "x"),
+        source(f"https://open.spotify.com/album/{TRACK_ID}", "x"),
+        source("https://open.spotify.com/track/short", "x"),
+    ]
     reply = await spotify.control(SpotifyRequest(query="zzzz", kind="track"))
-    assert reply.url is None and "Couldn't find" in reply.summary
-    assert not any(path == "/me/player/play" for _, path, *_ in calls)
+    assert "Couldn't find" in reply.summary
+    assert not any(name == "play_uri" for name, *_ in calls)
 
 
-async def test_controls(api):
-    calls, _ = api
-    assert (await spotify.control(SpotifyRequest(action="pause"))).error is None
-    assert calls[-1][:2] == ("PUT", "/me/player/pause")
-    await spotify.control(SpotifyRequest(action="next"))
-    assert calls[-1][:2] == ("POST", "/me/player/next")
-    reply = await spotify.control(SpotifyRequest(action="volume", volume_change=60))
-    assert reply.volume == 100
-    assert calls[-1][2] == {"device_id": "dev-laptop", "volume_percent": 100}
-
-
-async def test_named_device(api, monkeypatch):
-    calls, _ = api
-    monkeypatch.setenv("SPOTIFY_DEVICE_NAME", "iphone")
-    await spotify.control(SpotifyRequest(action="pause"))
-    assert calls[-1][2] == {"device_id": "dev-phone"}
-
-
-async def test_spotify_closed_on_laptop(api):
-    _, state = api
-    state["devices"] = [PHONE]
+async def test_reports_when_spotify_does_not_start(app):
+    _, _, state = app
+    state["now_playing"] = "stopped"
     reply = await spotify.control(SpotifyRequest(query="Blinding Lights"))
-    assert reply.error and "isn't open on the laptop" in reply.summary
+    assert reply.error == "Spotify didn't start playing."
+    assert "logged in" in reply.summary
 
 
-async def test_api_errors_become_summaries(api):
-    _, state = api
-    state["error"] = spotify.api_error(403, {"error": {"status": 403, "reason": "PREMIUM_REQUIRED"}})
+@pytest.mark.parametrize("action", ["resume", "next", "previous"])
+async def test_controls_report_when_spotify_stays_stopped(app, action):
+    # The app accepts commands on its login screen but never plays.
+    _, _, state = app
+    state["now_playing"] = "stopped"
+    reply = await spotify.control(SpotifyRequest(action=action))
+    assert reply.error == "Spotify didn't start playing."
+    assert reply.summary == "Spotify didn't start. Is the app logged in?"
+
+
+async def test_skip_while_paused_is_fine(app):
+    _, _, state = app
+    state["now_playing"] = playing_line("paused")
+    assert (await spotify.control(SpotifyRequest(action="next"))).error is None
+    assert (await spotify.control(SpotifyRequest(action="resume"))).error == "Spotify didn't start playing."
+
+
+async def test_controls(app):
+    calls, _, _ = app
+    assert (await spotify.control(SpotifyRequest(action="pause"))).summary == "⏸ Paused Spotify."
+    assert calls[-1] == ("pause",)
+    await spotify.control(SpotifyRequest(action="next"))
+    assert ("next",) in calls
+    reply = await spotify.control(SpotifyRequest(action="resume"))
+    assert reply.summary == "▶️ Now playing Blinding Lights by The Weeknd"
+    reply = await spotify.control(SpotifyRequest(action="volume", volume_change=60))
+    assert reply.volume == 100 and calls[-1] == ("set_volume", "100")
+
+
+async def test_controls_need_running_app(app):
+    calls, _, state = app
+    state["running"] = "false"
     reply = await spotify.control(SpotifyRequest(action="pause"))
-    assert reply.error == "Spotify only allows playback control with Premium."
+    assert "isn't open" in reply.error
+    assert ("pause",) not in calls
 
 
-async def test_not_linked(monkeypatch, tmp_path):
-    monkeypatch.setenv("SPOTIFY_TOKEN_PATH", str(tmp_path / "missing.json"))
-    monkeypatch.setattr(spotify, "_access", None)
+async def test_osascript_errors_become_summaries(app):
+    _, _, state = app
+    state["error"] = "macOS blocked control of Spotify: allow it in System Settings."
     reply = await spotify.control(SpotifyRequest(action="pause"))
-    assert "laai-spotify-login" in reply.summary
+    assert reply.summary.startswith("macOS blocked control of Spotify")
 
 
-def test_token_saved_private(monkeypatch, tmp_path):
-    path = tmp_path / "laai" / "token.json"
-    monkeypatch.setenv("SPOTIFY_TOKEN_PATH", str(path))
-    spotify.save_token({"refresh_token": "r"})
-    assert json.loads(path.read_text()) == {"refresh_token": "r"}
-    assert path.stat().st_mode & 0o777 == 0o600
+def test_scripts_take_args_as_argv():
+    # User text must never be spliced into AppleScript source.
+    assert "item 1 of argv" in spotify.SCRIPTS["play_uri"]
+    assert "item 1 of argv" in spotify.SCRIPTS["set_volume"]
 
 
 async def test_agent_builds():
     agent = build_spotify_agent()
     assert agent.name == "laai-spotify"
+
+
+async def test_now_playing_while_playing(app):
+    calls, _, _ = app
+    reply = await spotify.control(SpotifyRequest(action="now_playing"))
+    assert reply.summary == "▶️ Blinding Lights by The Weeknd (1:42 / 3:20)"
+    assert (reply.state, reply.album, reply.position_seconds, reply.duration_seconds) == ("playing", "After Hours", 102, 200)
+    assert reply.url == f"https://open.spotify.com/track/{TRACK_ID}"
+    assert calls[-1] == ("now_playing",)
+
+
+async def test_now_playing_paused_and_stopped(app):
+    _, _, state = app
+    state["now_playing"] = playing_line("paused", "Espresso", "Sabrina Carpenter")
+    reply = await spotify.control(SpotifyRequest(action="now_playing"))
+    assert reply.summary == "⏸ Paused: Espresso by Sabrina Carpenter"
+    state["now_playing"] = "stopped"
+    reply = await spotify.control(SpotifyRequest(action="now_playing"))
+    assert (reply.summary, reply.state, reply.error) == ("Nothing is playing on Spotify.", "stopped", None)
+
+
+async def test_now_playing_without_timing(app):
+    _, _, state = app
+    state["now_playing"] = playing_line("playing", duration="0")
+    reply = await spotify.control(SpotifyRequest(action="now_playing"))
+    assert reply.summary == "▶️ Blinding Lights by The Weeknd"
+
+
+@pytest.mark.parametrize("action, summary", [("next", "⏭ Now playing Espresso by Sabrina Carpenter"), ("previous", "⏮ Now playing Espresso by Sabrina Carpenter")])
+async def test_skips_name_the_track(app, action, summary):
+    _, _, state = app
+    state["now_playing"] = playing_line("playing", "Espresso", "Sabrina Carpenter")
+    assert (await spotify.control(SpotifyRequest(action=action))).summary == summary
+
+
+async def test_album_play_keeps_album_link(app):
+    _, _, state = app
+    state["sources"] = [source(f"https://open.spotify.com/album/{ARTIST_ID}", "After Hours - Album by The Weeknd | Spotify")]
+    reply = await spotify.control(SpotifyRequest(query="After Hours", kind="album"))
+    assert reply.uri == f"spotify:album:{ARTIST_ID}" and reply.url.endswith(f"/album/{ARTIST_ID}")
+    assert reply.summary == "▶️ Playing Blinding Lights by The Weeknd (from the album After Hours) on the laptop."

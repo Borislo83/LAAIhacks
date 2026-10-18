@@ -22,7 +22,6 @@ laai-agents = "laai_agents.main:main"
 laai-glasses-executor = "laai_agents.integration:main"
 laai-g2-sim = "laai_agents.g2_sim:main"
 laai-register = "laai_agents.register:main"
-laai-spotify-login = "laai_agents.spotify:login"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

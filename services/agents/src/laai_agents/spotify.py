@@ -1,60 +1,36 @@
 """Spotify on the laptop: play a song, artist, album or playlist, and control playback.
 
-Uses the Spotify Web API with the Authorization Code + PKCE flow, so only a client ID is
-needed (SPOTIFY_CLIENT_ID). Run `uv run laai-spotify-login` once on the laptop; it opens
-the Spotify consent page and stores a refresh token in SPOTIFY_TOKEN_PATH (default
-~/.config/laai/spotify_token.json, mode 600). The agent then targets the laptop's Spotify
-app: the device named SPOTIFY_DEVICE_NAME, else the first "Computer" device, preferring
-the active one. Playback control needs Spotify Premium.
+Drives the Spotify desktop app on this Mac through AppleScript (`osascript`, run without a
+shell), so it works on a free account and needs no API keys. Spotify IDs come from keyless
+web search restricted to open.spotify.com; only the ID is used, no result page is fetched.
+macOS asks once to let the agent's terminal control Spotify (Privacy & Security >
+Automation).
 """
 
 import asyncio
-import base64
-import hashlib
-import json
-import os
 import re
-import secrets
-import time
-import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlsplit
+import sys
 
-import aiohttp
-
-from . import net
 from .models import SpotifyRequest, SpotifyResponse
+from .search import SearchUnavailable, search
 
-API = "https://api.spotify.com/v1"
-AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
-TOKEN_URL = "https://accounts.spotify.com/api/token"
-# Spotify only accepts loopback redirects as an explicit IP, not "localhost".
-REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
-SCOPES = "user-read-playback-state user-modify-playback-state"
-TIMEOUT = aiohttp.ClientTimeout(total=10)
 KINDS = ("track", "artist", "album", "playlist")
-
-
-class SpotifyError(Exception):
-    """A failure with a message fit to show the user."""
-
-
-def token_path() -> Path:
-    default = Path.home() / ".config" / "laai" / "spotify_token.json"
-    return Path(os.getenv("SPOTIFY_TOKEN_PATH", default)).expanduser()
-
-
-def client_id() -> str:
-    value = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
-    if not value:
-        raise SpotifyError("Spotify isn't set up: set SPOTIFY_CLIENT_ID in .env.")
-    return value
-
+LINK = re.compile(
+    r"^https://open\.spotify\.com/(?:intl-[a-z-]+/)?(track|artist|album|playlist)/([A-Za-z0-9]{22})(?:[/?#]|$)"
+)
+DEVICE = "Spotify on this Mac"
+# Seconds to wait for the app to start playing before reading what is playing.
+SETTLE = 2.0
 
 # --- Parsing chat text ---------------------------------------------------------------
 
 CONTROLS = [
+    ("now_playing", re.compile(
+        r"^(?:now\s+playing|current\s+(?:song|track)|"
+        r"what(?:'s|\s+is)\s+(?:playing|on)(?:\s+(?:now|right\s+now))?|"
+        r"what\s+(?:song|track)\s+is\s+(?:this|playing|on)(?:\s+(?:now|right\s+now))?|"
+        r"what\s+am\s+i\s+listening\s+to)$"
+    )),
     ("pause", re.compile(r"^(?:pause|stop)(?:\s+(?:it|the\s+)?(?:music|song|spotify|playback))?$")),
     ("resume", re.compile(r"^(?:resume|unpause|continue|play)(?:\s+(?:it|the\s+)?(?:music|song|spotify|playback))?$")),
     ("next", re.compile(r"^(?:next|skip)(?:\s+(?:this\s+|the\s+)?(?:song|track|one))?$")),
@@ -104,237 +80,214 @@ def play_target(text: str) -> dict:
     return {"query": (query or text)[:300], "kind": kind}
 
 
-# --- Tokens --------------------------------------------------------------------------
+# --- The desktop app -----------------------------------------------------------------
 
-_access: tuple[str, float] | None = None
+class SpotifyError(Exception):
+    """A failure with a message fit to show the user."""
 
 
-def load_token() -> dict:
+# Arguments reach the script as argv, never spliced into its source.
+SCRIPTS = {
+    "running": 'return application "Spotify" is running',
+    "play_uri": 'on run argv\ntell application "Spotify" to play track (item 1 of argv)\nend run',
+    "pause": 'tell application "Spotify" to pause',
+    "resume": 'tell application "Spotify" to play',
+    "next": 'tell application "Spotify" to next track',
+    "previous": 'tell application "Spotify" to previous track',
+    "get_volume": 'tell application "Spotify" to return sound volume',
+    "set_volume": 'on run argv\ntell application "Spotify" to set sound volume to (item 1 of argv as integer)\nend run',
+    "now_playing": (
+        'tell application "Spotify"\n'
+        "if player state is stopped then return \"stopped\"\n"
+        "set t to current track\n"
+        "return (player state as string) & tab & (name of t) & tab & (artist of t) & tab & "
+        "(spotify url of t) & tab & (album of t) & tab & ((player position as integer) as string) & tab & "
+        "(((duration of t) div 1000) as string)\n"
+        "end tell"
+    ),
+}
+
+
+async def osascript(name: str, *args: str) -> str:
+    if sys.platform != "darwin":
+        raise SpotifyError("The Spotify agent only runs on a Mac with the Spotify app.")
+    process = await asyncio.create_subprocess_exec(
+        "osascript", "-e", SCRIPTS[name], *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
     try:
-        return json.loads(token_path().read_text())
-    except FileNotFoundError:
-        raise SpotifyError("Spotify isn't linked yet: run `uv run laai-spotify-login` on the laptop.") from None
+        out, err = await asyncio.wait_for(process.communicate(), timeout=15)
+    except TimeoutError:
+        process.kill()
+        raise SpotifyError("The Spotify app didn't respond.") from None
+    if process.returncode != 0:
+        message = err.decode(errors="replace")
+        if "-1743" in message or "Not authorized" in message:
+            raise SpotifyError(
+                "macOS blocked control of Spotify: allow it in System Settings > "
+                "Privacy & Security > Automation."
+            )
+        raise SpotifyError("The Spotify app refused the command.")
+    return out.decode().strip()
 
 
-def save_token(data: dict) -> None:
-    path = token_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.touch(mode=0o600, exist_ok=True)
-    path.chmod(0o600)
-    path.write_text(json.dumps(data))
+async def require_running() -> None:
+    if await osascript("running") != "true":
+        raise SpotifyError("Spotify isn't open on the laptop. Open the Spotify app and try again.")
 
 
-async def access_token() -> str:
-    global _access
-    if _access and _access[1] > time.time() + 30:
-        return _access[0]
-    stored = load_token()
-    form = {"grant_type": "refresh_token", "refresh_token": stored["refresh_token"], "client_id": client_id()}
-    async with net.session().post(TOKEN_URL, data=form, timeout=TIMEOUT) as resp:
-        body = await resp.json(content_type=None)
-    if "access_token" not in body:
-        raise SpotifyError("Spotify login expired: run `uv run laai-spotify-login` again.")
-    # PKCE refresh tokens rotate; keep the new one.
-    if body.get("refresh_token"):
-        save_token({**stored, "refresh_token": body["refresh_token"]})
-    _access = (body["access_token"], time.time() + body.get("expires_in", 3600))
-    return _access[0]
+async def now_playing() -> dict | None:
+    """What Spotify has loaded, or None when it is stopped (nothing loaded)."""
+    parts = (await osascript("now_playing")).split("\t")
+    if len(parts) != 7:
+        return None
+    state, title, artist, uri, album, position, duration = parts
+    return {
+        "state": state,
+        "title": title,
+        "artist": artist or None,
+        "uri": uri,
+        "album": album or None,
+        "position": int(position) if position.isdigit() else None,
+        "duration": int(duration) if duration.isdigit() and duration != "0" else None,
+    }
 
 
-# --- Web API -------------------------------------------------------------------------
-
-async def call(method: str, path: str, params: dict | None = None, body: dict | None = None):
-    """One Web API call. Returns parsed JSON, or None for an empty (204) reply."""
-    global _access
-    for attempt in range(2):
-        headers = {"Authorization": f"Bearer {await access_token()}"}
-        async with net.session().request(
-            method, API + path, params=params, json=body, headers=headers, timeout=TIMEOUT
-        ) as resp:
-            if resp.status == 401 and attempt == 0:
-                _access = None
-                continue
-            text = await resp.text()
-            data = json.loads(text) if text.strip() else None
-            if resp.status < 300:
-                return data
-            raise SpotifyError(api_error(resp.status, data))
-    raise SpotifyError("Spotify rejected the login: run `uv run laai-spotify-login` again.")
+def clock(seconds: int) -> str:
+    return f"{seconds // 60}:{seconds % 60:02d}"
 
 
-def api_error(status: int, data) -> str:
-    error = (data or {}).get("error") if isinstance(data, dict) else None
-    reason = error.get("reason") if isinstance(error, dict) else None
-    if reason == "PREMIUM_REQUIRED":
-        return "Spotify only allows playback control with Premium."
-    if reason == "NO_ACTIVE_DEVICE" or status == 404:
-        return "Spotify isn't open on the laptop. Open the Spotify app and try again."
-    if status == 429:
-        return "Spotify is rate-limiting requests; try again in a moment."
-    message = error.get("message") if isinstance(error, dict) else None
-    return f"Spotify error {status}" + (f": {message}" if message else "")
+def track_line(playing: dict) -> str:
+    """'Espresso by Sabrina Carpenter'."""
+    return playing["title"] + (f" by {playing['artist']}" if playing["artist"] else "")
 
 
-async def laptop_device() -> dict:
-    devices = (await call("GET", "/me/player/devices") or {}).get("devices", [])
-    wanted = os.getenv("SPOTIFY_DEVICE_NAME", "").strip().lower()
-    if wanted:
-        candidates = [d for d in devices if d.get("name", "").lower() == wanted]
-    else:
-        candidates = [d for d in devices if d.get("type") == "Computer"]
-    if not candidates:
-        name = f'"{os.getenv("SPOTIFY_DEVICE_NAME")}"' if wanted else "on the laptop"
-        raise SpotifyError(f"Spotify isn't open {name}. Open the Spotify app and try again.")
-    return sorted(candidates, key=lambda d: not d.get("is_active"))[0]
+def fill(reply: SpotifyResponse, playing: dict) -> None:
+    reply.title, reply.artist, reply.album = playing["title"], playing["artist"], playing["album"]
+    reply.state, reply.uri = playing["state"], playing["uri"]
+    reply.position_seconds, reply.duration_seconds = playing["position"], playing["duration"]
+    if reply.uri and reply.uri.count(":") == 2:
+        kind, spotify_id = reply.uri.split(":")[1:]
+        reply.url = f"https://open.spotify.com/{kind}/{spotify_id}"
 
 
-async def find(query: str, kind: str) -> tuple[str, dict]:
-    """Best match for the query. 'auto' prefers an exact artist name, else a track."""
-    types = KINDS if kind == "auto" else (kind,)
-    data = await call("GET", "/search", params={"q": query, "type": ",".join(types), "limit": 5})
-    if kind == "auto":
-        artists = [a for a in (data.get("artists") or {}).get("items", []) if a]
-        if artists and artists[0]["name"].lower() == query.lower():
-            return "artist", artists[0]
-        kind = "track"
-    items = [item for item in (data.get(f"{kind}s") or {}).get("items", []) if item]
-    if not items:
+# --- Finding Spotify IDs -------------------------------------------------------------
+
+def result_title(title: str) -> str:
+    """'Blinding Lights - song and lyrics by The Weeknd | Spotify' -> 'Blinding Lights'."""
+    title = re.sub(r"\s*[|-]\s*Spotify\s*$", "", title or "")
+    return re.split(r"\s+-\s+(?:song|single|album|ep|playlist)\b", title, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+
+
+def norm(text: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+async def find(query: str, kind: str) -> tuple[str, str, str]:
+    """(kind, uri, title) of the best open.spotify.com match. 'auto' prefers an artist
+    whose name is exactly the query, else the first track, else the first hit."""
+    scope = "" if kind == "auto" else f"/{kind}"
+    sources, _ = await search(f"site:open.spotify.com{scope} {query}")
+    hits = []
+    for source in sources:
+        if match := LINK.match(source.url):
+            if kind == "auto" or match[1] == kind:
+                hits.append((match[1], f"spotify:{match[1]}:{match[2]}", result_title(source.title)))
+    if not hits:
         raise LookupError
-    return kind, items[0]
-
-
-def describe(kind: str, item: dict) -> tuple[str, str | None]:
-    if kind in ("track", "album"):
-        return item["name"], ", ".join(a["name"] for a in item.get("artists", [])) or None
-    if kind == "playlist":
-        return item["name"], (item.get("owner") or {}).get("display_name")
-    return item["name"], None
+    if kind == "auto":
+        for hit in hits:
+            if hit[0] == "artist" and norm(hit[2]) == norm(query):
+                return hit
+        return next((hit for hit in hits if hit[0] == "track"), hits[0])
+    return hits[0]
 
 
 # --- Handler -------------------------------------------------------------------------
 
 async def control(req: SpotifyRequest) -> SpotifyResponse:
-    reply = SpotifyResponse(action=req.action, query=req.query, summary="")
+    reply = SpotifyResponse(action=req.action, query=req.query, device=DEVICE, summary="")
     try:
-        device = await laptop_device()
-        reply.device = device.get("name")
-        target = {"device_id": device["id"]}
         if req.action == "play":
-            await play(req, target, reply)
-        elif req.action == "pause":
-            await call("PUT", "/me/player/pause", params=target)
-            reply.summary = "⏸ Paused Spotify."
-        elif req.action == "resume":
-            await call("PUT", "/me/player/play", params=target)
-            reply.summary = "▶️ Resumed Spotify."
-        elif req.action == "next":
-            await call("POST", "/me/player/next", params=target)
-            reply.summary = "⏭ Skipped to the next track."
-        elif req.action == "previous":
-            await call("POST", "/me/player/previous", params=target)
-            reply.summary = "⏮ Back to the previous track."
-        elif req.action == "volume":
-            current = device.get("volume_percent")
-            if req.volume is not None:
-                level = req.volume
-            elif current is None:
-                raise SpotifyError("This Spotify device doesn't report its volume.")
+            await play(req, reply)
+            return reply
+        await require_running()
+        if req.action == "now_playing":
+            playing = await now_playing()
+            if not playing:
+                reply.state = "stopped"
+                reply.summary = "Nothing is playing on Spotify."
+                return reply
+            fill(reply, playing)
+            if playing["state"] == "playing":
+                timing = (
+                    f" ({clock(playing['position'])} / {clock(playing['duration'])})"
+                    if playing["position"] is not None and playing["duration"]
+                    else ""
+                )
+                reply.summary = f"▶️ {track_line(playing)}{timing}"
             else:
-                level = current + (req.volume_change or 0)
+                reply.summary = f"⏸ Paused: {track_line(playing)}"
+            return reply
+        if req.action == "volume":
+            level = req.volume
+            if level is None:
+                level = int(await osascript("get_volume")) + (req.volume_change or 0)
             level = max(0, min(100, level))
-            await call("PUT", "/me/player/volume", params={**target, "volume_percent": level})
+            await osascript("set_volume", str(level))
             reply.volume = level
             reply.summary = f"🔊 Volume set to {level}%."
+            return reply
+        await osascript(req.action)
+        if req.action == "pause":
+            reply.state = "paused"
+            reply.summary = "⏸ Paused Spotify."
+            return reply
+        # Spotify accepts commands even on its login screen; check it actually played.
+        await asyncio.sleep(SETTLE)
+        playing = await now_playing()
+        # Skipping while paused stays paused, so only resume must end up playing.
+        if not playing or (req.action == "resume" and playing["state"] != "playing"):
+            reply.state = playing["state"] if playing else "stopped"
+            reply.error = "Spotify didn't start playing."
+            reply.summary = "Spotify didn't start. Is the app logged in?"
+            return reply
+        fill(reply, playing)
+        icon = {"resume": "▶️", "next": "⏭", "previous": "⏮"}[req.action]
+        verb = "Now playing" if playing["state"] == "playing" else "Paused on"
+        reply.summary = f"{icon} {verb} {track_line(playing)}"
     except SpotifyError as exc:
-        reply.error = str(exc)
-        reply.summary = str(exc)
-    except (aiohttp.ClientError, asyncio.TimeoutError):
-        reply.error = "Couldn't reach Spotify."
-        reply.summary = "Couldn't reach Spotify right now; try again in a moment."
+        reply.error = reply.summary = str(exc)
+    except SearchUnavailable:
+        reply.error = "Search unavailable."
+        reply.summary = "Couldn't search for that right now; try again in a moment."
     return reply
 
 
-async def play(req: SpotifyRequest, target: dict, reply: SpotifyResponse) -> None:
+async def play(req: SpotifyRequest, reply: SpotifyResponse) -> None:
     query = (req.query or "").strip()
     if not query:
         raise SpotifyError("Tell me what to play, e.g. “play Blinding Lights”.")
     try:
-        kind, item = await find(query, req.kind)
+        kind, uri, title = await find(query, req.kind)
     except LookupError:
         reply.summary = f"Couldn't find “{query}” on Spotify."
         return
-    body = {"uris": [item["uri"]]} if kind == "track" else {"context_uri": item["uri"]}
-    await call("PUT", "/me/player/play", params=target, body=body)
-    reply.title, reply.artist = describe(kind, item)
-    reply.kind, reply.uri = kind, item["uri"]
-    reply.url = (item.get("external_urls") or {}).get("spotify")
-    by = f" by {reply.artist}" if reply.artist and kind != "playlist" else ""
-    label = "" if kind == "track" else f" ({kind})"
-    reply.summary = f"▶️ Playing {reply.title}{by}{label} on {reply.device}."
-
-
-# --- One-time login on the laptop ----------------------------------------------------
-
-def login() -> None:
-    """Open the Spotify consent page and store the refresh token. Run once per laptop."""
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    cid = client_id()
-    verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    state = secrets.token_urlsafe(16)
-    url = AUTHORIZE_URL + "?" + urlencode({
-        "client_id": cid,
-        "response_type": "code",
-        "redirect_uri": REDIRECT_URI,
-        "code_challenge_method": "S256",
-        "code_challenge": challenge,
-        "scope": SCOPES,
-        "state": state,
-    })
-    result: dict = {}
-
-    class Callback(BaseHTTPRequestHandler):
-        def do_GET(self):
-            query = parse_qs(urlsplit(self.path).query)
-            ok = query.get("state", [None])[0] == state and "code" in query
-            if ok:
-                result["code"] = query["code"][0]
-            else:
-                result["error"] = query.get("error", ["state mismatch"])[0]
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(b"Spotify linked. You can close this tab." if ok else b"Spotify login failed.")
-
-        def log_message(self, *args):
-            pass
-
-    redirect = urlsplit(REDIRECT_URI)
-    server = HTTPServer((redirect.hostname, redirect.port), Callback)
-    print(f"Opening Spotify login. If no browser opens, visit:\n{url}")
-    webbrowser.open(url)
-    while not result:
-        server.handle_request()
-    server.server_close()
-    if "code" not in result:
-        raise SystemExit(f"Spotify login failed: {result['error']}")
-
-    async def exchange() -> dict:
-        form = {
-            "grant_type": "authorization_code",
-            "code": result["code"],
-            "redirect_uri": REDIRECT_URI,
-            "client_id": cid,
-            "code_verifier": verifier,
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(TOKEN_URL, data=form, timeout=TIMEOUT) as resp:
-                return await resp.json(content_type=None)
-
-    body = asyncio.run(exchange())
-    if "refresh_token" not in body:
-        raise SystemExit(f"Spotify login failed: {body.get('error_description') or body}")
-    save_token({"refresh_token": body["refresh_token"], "scope": body.get("scope")})
-    print(f"Spotify linked. Token saved to {token_path()}")
+    # Telling Spotify to play opens the app if it is closed.
+    await osascript("play_uri", uri)
+    reply.kind, reply.uri, reply.title = kind, uri, title
+    reply.url = f"https://open.spotify.com/{kind}/{uri.rsplit(':', 1)[1]}"
+    await asyncio.sleep(SETTLE)
+    playing = await now_playing()
+    if not playing or playing["state"] != "playing":
+        reply.state = playing["state"] if playing else "stopped"
+        reply.error = "Spotify didn't start playing."
+        reply.summary = f"Found {title} but Spotify didn't start. Is the app logged in?"
+        return
+    link = reply.url
+    fill(reply, playing)
+    # uri and url stay what was asked for (an album or playlist), not just its first track.
+    reply.uri, reply.url = uri, link
+    label = "" if kind == "track" else f" (from the {kind} {title})"
+    reply.summary = f"▶️ Playing {track_line(playing)}{label} on the laptop."
