@@ -110,7 +110,7 @@ a time, and the counter in the top-right corner shows the screen as 1/4.
 |---|---|---|
 | Swipe down / up | next / previous screen (moves the selection on list screens) | move cursor |
 | Tap | open the selected list item, otherwise the menu | select |
-| Double-tap | exit (system confirm); cancels while listening, searching or loading | exit |
+| Double-tap | back; cancels while listening, searching or loading; on a page with nothing to back out of, opens the menu (Exit is a menu item) | back to the page |
 
 Menu: Resume · Recommendations · Voice search · ◀ back to the previous page · Contents ·
 Links on page · Bookmark · Bookmarks · Recent pages · Agent ▸ · Settings ▸ · Exit (manga
