@@ -12,6 +12,33 @@ interface CompanionState {
   spec: PageSpec
   position: string
   kind?: SiteKind
+  voice: VoiceUi
+  handsFree: boolean
+  /** Hands-free is waiting for the wake phrase right now. */
+  listening: boolean
+  wakePhrase: string
+  /** Everything heard while hands-free, newest first. */
+  heard: HeardLine[]
+}
+
+export interface HeardLine {
+  text: string
+  /** A wake-phrase command that was sent to the server. */
+  command?: boolean
+  /** The page a command opened. */
+  opened?: boolean
+  /** Only the start of a sentence still being spoken. */
+  pending?: boolean
+}
+
+export interface VoiceUi {
+  phase: 'idle' | 'listening' | 'sending' | 'searching' | 'done' | 'error'
+  /** Transcript (live while listening, final when done), or the message when error. */
+  text: string
+  /** A live-preview failure shown while still listening. */
+  note?: string
+  /** The page the command opened. */
+  url?: string
 }
 
 interface CompanionOptions {
@@ -19,6 +46,9 @@ interface CompanionOptions {
   onLoad: (url: string) => void
   onStep: (delta: 1 | -1) => void
   onSelect: () => void
+  /** Start listening, or stop and send when already listening. */
+  onVoice: () => void
+  onHandsFree: (on: boolean) => void
 }
 
 const KIND_LABEL: Record<SiteKind, string> = {
@@ -34,6 +64,8 @@ export interface Companion {
   update(): void
   setBusy(busy: boolean): void
   setError(message: string): void
+  /** Live mic loudness (0..1), plus elapsed time while capturing a command. */
+  voiceLevel(level: number, ms?: number): void
 }
 
 const STYLE = `
@@ -78,6 +110,29 @@ const STYLE = `
     font: inherit; font-size: 14px; min-height: 44px; cursor: pointer; }
   .wr .recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
   .wr .recent button { width: 100%; text-align: left; padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; }
+  .wr .voice-row { display: flex; align-items: center; gap: 12px; }
+  .wr .voice-row .go { flex: none; padding: 0 18px; }
+  .wr .voice-row .go.on { background: var(--danger); color: #fff; }
+  .wr .meter { flex: 1; height: 8px; border-radius: 4px; background: var(--input); overflow: hidden; }
+  .wr .meter > div { height: 100%; width: 0; background: #5CFF5C; transition: width 80ms linear; }
+  .wr .heard { margin: 12px 0 0; font-size: 18px; font-weight: 500; }
+  .wr .heard:empty { display: none; }
+  .wr .hf { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px;
+    font-size: 16px; font-weight: 500; margin-bottom: 8px; }
+  .wr .hf input { width: 24px; height: 24px; accent-color: var(--text); }
+  .wr .feed { list-style: none; margin: 12px 0 0; padding: 12px 0 0; border-top: 1px solid var(--input);
+    display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+  .wr .feed:empty { display: none; }
+  .wr .feed li { font-size: 14px; color: var(--text-dim); line-height: 1.4; }
+  .wr .feed li.cmd { color: var(--text); font-weight: 600; }
+  .wr .feed li.cmd::before { content: 'Sent · '; font-weight: 500; color: var(--text-dim); }
+  .wr .feed li.open { color: var(--text); word-break: break-all; }
+  .wr .feed li.pending { font-style: italic; }
+  .wr .feed li.pending::after { content: ' …'; }
+  .wr .feed-head { margin: 12px 0 0; font-size: 11px; font-weight: 500; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--text-dim); }
+  .wr .feed-head[hidden] { display: none; }
+  .wr .feed li.open::before { content: 'Opened · '; color: var(--text-dim); }
   .wr .recent small { color: var(--text-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
   .wr .recent span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 `
@@ -114,6 +169,20 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
           </div>
         </div>
       </section>
+      <section>
+        <label class="lbl">Voice search</label>
+        <div class="card">
+          <label class="hf"><span id="hfLabel">Hands-free</span><input type="checkbox" id="hf" /></label>
+          <div class="voice-row">
+            <button class="go" id="mic" type="button">Start listening</button>
+            <div class="meter" aria-hidden="true"><div id="meter"></div></div>
+          </div>
+          <p class="msg" id="vmsg" role="status" style="margin-top:12px">Uses the glasses microphone.</p>
+          <p class="heard" id="heard"></p>
+          <p class="feed-head" id="feedHead" hidden>Always listening · what it hears</p>
+          <ul class="feed" id="feed" aria-label="Everything heard" aria-live="polite"></ul>
+        </div>
+      </section>
       <section id="recentWrap" hidden>
         <label class="lbl">Recent</label>
         <ul class="recent" id="recent"></ul>
@@ -137,6 +206,12 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
   $('prev').addEventListener('click', () => opts.onStep(-1))
   $('next').addEventListener('click', () => opts.onStep(1))
   $('sel').addEventListener('click', () => opts.onSelect())
+  $('mic').addEventListener('click', () => opts.onVoice())
+  const hf = $<HTMLInputElement>('hf')
+  hf.addEventListener('change', () => opts.onHandsFree(hf.checked))
+  const meter = $<HTMLDivElement>('meter')
+  const vmsg = $<HTMLParagraphElement>('vmsg')
+  let listenNote = ''
 
   const glass = $<HTMLDivElement>('glass')
   const mirror = $<HTMLDivElement>('mirror')
@@ -191,6 +266,37 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
         msg.classList.remove('err')
         msg.textContent = `${s.doc.site} · ${kind} · ${s.doc.wordCount.toLocaleString()} words.${note}`
       }
+      const v = s.voice
+      const mic = $<HTMLButtonElement>('mic')
+      mic.textContent = v.phase === 'listening' ? 'Stop & send' : 'Start listening'
+      mic.classList.toggle('on', v.phase === 'listening')
+      mic.disabled = v.phase === 'sending' || v.phase === 'searching'
+      hf.checked = s.handsFree
+      $('hfLabel').textContent = `Hands-free: say "${s.wakePhrase}", then your question`
+      if (v.phase !== 'listening' && !s.listening) meter.style.width = '0'
+      listenNote = (v.phase === 'listening' || v.phase === 'idle') && v.note ? ` · ${v.note}` : ''
+      vmsg.classList.toggle('err', v.phase === 'error' || !!listenNote)
+      vmsg.textContent = {
+        idle: s.listening ? `Waiting for "${s.wakePhrase}"...` : 'Uses the glasses microphone.',
+        listening: `Listening...${listenNote}`,
+        sending: 'Sending to the server...',
+        searching: 'Searching the web for:',
+        done: !v.text ? "Server couldn't make that out." : v.url ? `Opening ${v.url}` : 'Server heard:',
+        error: v.text,
+      }[v.phase]
+      $('heard').textContent = v.phase !== 'error' && v.phase !== 'idle' && v.phase !== 'sending' && v.text ? `"${v.text}"` : ''
+      $('feedHead').hidden = !s.handsFree
+      const feed = $<HTMLUListElement>('feed')
+      feed.replaceChildren(
+        ...s.heard.map(h => {
+          const li = document.createElement('li')
+          li.textContent = h.text
+          if (h.command) li.className = 'cmd'
+          else if (h.opened) li.className = 'open'
+          else if (h.pending) li.className = 'pending'
+          return li
+        }),
+      )
       $('recentWrap').hidden = !s.recent.length
       recentList.innerHTML = ''
       for (const r of s.recent) {
@@ -218,6 +324,10 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
     setError(message) {
       msg.classList.add('err')
       msg.textContent = message
+    },
+    voiceLevel(level, ms) {
+      meter.style.width = `${Math.round(level * 100)}%`
+      if (ms !== undefined) vmsg.textContent = `Listening... ${(ms / 1000).toFixed(1)}s${listenNote}`
     },
   }
 }

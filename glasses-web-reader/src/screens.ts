@@ -38,7 +38,7 @@ export interface PageSpec {
 }
 
 export interface ScreenContext {
-  /** "2 / 5" */
+  /** Progress bar, e.g. "━━━───". */
   position: string
   /** Selected item on list screens. */
   selected: number
@@ -149,8 +149,76 @@ const footer = (text: string, y = 256, position?: string): TextBox =>
     position ? `${line(text, w - 90)}   ${position}` : line(text, w),
   )
 
+/**
+ * Reading progress as a thin bar instead of "2 / 5", so the deck reads as one
+ * continuous scroll. Sized to the 88px slot headers and footers keep for it.
+ */
+export function progressBar(index: number, total: number, width = 78): string {
+  const cells = Math.max(4, Math.floor(width / Math.max(getTextWidth('━'), getTextWidth('─'))))
+  const filled = Math.max(1, Math.round(((index + 1) / Math.max(1, total)) * cells))
+  return '━'.repeat(filled) + '─'.repeat(cells - filled)
+}
+
 const nextHint = (ctx: ScreenContext) =>
   ctx.upcoming.length ? `▼ ${ctx.upcoming.slice(0, 3).join(' · ')}` : ''
+
+// ── Flow ────────────────────────────────────────────────────────────────────
+// Runs of plain-text screens join into one stream of lines. Each swipe rolls
+// it FLOW_STEP lines, a line per update when BLE keeps up, so it reads as
+// scrolling instead of flipping. Screens with images, grids or a selection
+// stay slides.
+
+export const FLOW_LINES = 9
+export const FLOW_STEP = 6
+const FLOW_PAD = 4
+
+export const isFlowable = (s: Screen) =>
+  (s.layout === 'headline' && !s.image) || s.layout === 'points' || s.layout === 'timeline' || s.layout === 'tagged'
+
+function flowSection(s: Screen, w: number): string[] {
+  const wrap = (entries: { marker: string; text: string }[]) => (entries.length ? hang(entries, w).split('\n') : [])
+  const head = (text: string) => [line(`■ ${text}`, w)]
+  switch (s.layout) {
+    case 'headline':
+      return [...wrap([{ marker: '■ ', text: s.headline }]), ...(s.source ? [line(s.source, w)] : []), ...wrap([{ marker: '', text: s.summary }])]
+    case 'points':
+      return [
+        ...head(s.heading),
+        ...wrap(s.points.map(p => ({ marker: '▶ ', text: p }))),
+        ...(s.quote ? wrap([{ marker: '', text: `"${s.quote.text}" - ${s.quote.by}` }]) : []),
+      ]
+    case 'timeline':
+      return [...head(s.heading), ...wrap(s.events.map(e => ({ marker: `${clean(e.date)}: `, text: e.text })))]
+    case 'tagged':
+      return [...head(s.heading), ...wrap(s.rows.map(r => ({ marker: `[${clean(r.tag).toUpperCase()}] `, text: r.text })))]
+    default:
+      return head(screenTitle(s))
+  }
+}
+
+/** A run's stream, with the line each screen's section starts on. */
+export function flowLines(run: Screen[]): { lines: string[]; starts: number[] } {
+  const w = 576 - 2 * FLOW_PAD
+  const lines: string[] = []
+  const starts: number[] = []
+  run.forEach((s, i) => {
+    if (i) lines.push('')
+    starts.push(lines.length)
+    lines.push(...flowSection(s, w))
+  })
+  return { lines, starts }
+}
+
+export function flowSpec(lines: string[], offset: number, ctx: ScreenContext): PageSpec {
+  const text = lines.slice(offset, offset + FLOW_LINES).join('\n')
+  return {
+    texts: [
+      { x: 0, y: 0, w: 576, h: FLOW_LINES * LINE + 2 * FLOW_PAD, text: text || ' ', pad: FLOW_PAD },
+      footer(nextHint(ctx), 256, ctx.position),
+    ],
+    images: [],
+  }
+}
 
 export function screenTitle(s: Screen): string {
   switch (s.layout) {

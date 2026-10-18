@@ -13,6 +13,10 @@
       "whitelist": [
         "https://your-condense-server.example.com"
       ]
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Listens through the glasses microphone when you choose Voice search, and sends that clip to the condense server to turn it into text."
     }
   ],
   "supported_languages": [
