@@ -12,7 +12,7 @@ This page explains what each team gets and how to plug in. Contract terms follow
 | `202610170002_shared_workflow.sql` | Contract tables, `laai_workflow` RPC | Applied (do not rerun) |
 | `202610170003_user_preferences.sql` | `user_preferences` + private notes | Applied (do not rerun) |
 | `202610170004_workflow_v1_1.sql` | Event ack, invalidation outbox, devices, rate-limit fix | Applied 2026-10-17 |
-| `202610170005_workflow_perf.sql` | Lock/index/retention fixes (no API change) | Not applied — apply in SQL editor after review |
+| `202610170005_workflow_perf.sql` | Lock/index/retention fixes (no API change) | Applied 2026-10-17 (pg_cron not installed: daily purge not scheduled) |
 
 004 and 005 only use `create or replace` / `if [not] exists`, so applying either twice is
 harmless. Apply in the Supabase SQL editor, then run `python check_supabase.py` in
