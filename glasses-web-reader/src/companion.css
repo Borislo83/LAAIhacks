@@ -83,13 +83,9 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .wr .value { font: 13px var(--mono); color: var(--body); }
 
 /* the glasses mirror: 576x288 drawn at phone width */
-.wr .glass { position: relative; width: 100%; aspect-ratio: 2 / 1; background: var(--lens-bg);
+.wr .glass { position: relative; width: 100%; aspect-ratio: 2 / 1; background: #000;
   border: 1px solid var(--grid-major); overflow: hidden; }
-.wr .glass-inner { position: absolute; left: 0; top: 0; width: 576px; height: 288px; transform-origin: 0 0;
-  font: 20px/27px 'FK Grotesk Neue', -apple-system, system-ui, sans-serif; color: var(--lens); letter-spacing: 0; }
-.wr .glass-inner > div { position: absolute; white-space: pre-wrap; overflow: hidden; border-style: solid; }
-.wr .glass-inner > img { position: absolute; image-rendering: pixelated; mix-blend-mode: screen;
-  filter: sepia(1) saturate(6) hue-rotate(62deg) brightness(1.05); }
+.wr .glass-inner { position: absolute; inset: 0; width: 100%; height: 100%; }
 .wr .now { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; }
 .wr .now > div { min-width: 0; }
 .wr .now strong { display: block; font: 400 22px/1.15 var(--serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -162,6 +158,7 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .wr .picks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
 .wr .picks button { width: 100%; min-height: 40px; padding: 0 12px; border: 1px solid var(--hair); border-radius: var(--r);
   background: transparent; color: var(--ink); font: 13px var(--mono); text-align: left; cursor: pointer; }
+.wr .picks button[aria-current] { border-color: var(--lens); }
 .wr pre.log { margin: 0; padding: 10px; background: var(--lens-bg); border: 1px solid var(--hair); border-radius: var(--r);
   font: 11px/17px var(--mono); color: var(--body); white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
 .wr .log .t { color: var(--lens); }

@@ -1,6 +1,7 @@
 import type { CondensedPage, CondenseEvent, SiteKind } from '../shared/types'
 import type { PageSpec } from './screens'
 import { mountBackendPanel } from './lensos/panel'
+import { paintLens } from './lens-canvas'
 import type { ActionGroup, BackendState } from './lensos/session'
 import type { DisplayState, Preferences } from './lensos/types'
 import { mountRecommendations, type RecommendationEvents } from './recommendations'
@@ -35,6 +36,8 @@ interface CompanionState {
   recommendationLayout: RecommendationLayout
   /** Item labels when the glasses show a list (menu, contents, links...). */
   list: string[] | null
+  /** The item the mirror's highlight is on in that list. */
+  listIndex: number
   /** Hands-free is waiting for the wake phrase right now. */
   listening: boolean
   wakePhrase: string
@@ -143,35 +146,15 @@ const focalLockup = (size: number) => `<span class="focal" role="img" aria-label
 
 /** A scaled copy of the 576x288 glasses display inside `glass`. */
 function mountMirror(glass: HTMLElement) {
-  const inner = document.createElement('div')
-  inner.className = 'glass-inner'
-  glass.append(inner)
-  const fit = () => { inner.style.transform = `scale(${glass.clientWidth / 576})` }
-  new ResizeObserver(fit).observe(glass)
-  const BORDER: Record<number, string> = { 13: '#8ee6a2', 5: '#3c6b4a' }
+  const canvas = document.createElement('canvas')
+  canvas.className = 'glass-inner'
+  canvas.width = 576
+  canvas.height = 288
+  glass.append(canvas)
   return {
     draw(spec: PageSpec) {
-      inner.replaceChildren()
-      for (const t of spec.texts) {
-        const el = document.createElement('div')
-        Object.assign(el.style, {
-          left: `${t.x}px`, top: `${t.y}px`, width: `${t.w}px`, height: `${t.h}px`,
-          padding: `${t.pad ?? 4}px`, borderWidth: `${t.border ?? 0}px`,
-          borderColor: BORDER[t.color ?? 13] ?? '#5fae75', borderRadius: `${t.radius ?? 0}px`,
-          ...(t.scroll ? { overflowY: 'auto' } : {}),
-        })
-        el.textContent = t.text
-        inner.append(el)
-      }
-      for (const im of spec.images) {
-        const img = document.createElement('img')
-        img.src = `data:image/png;base64,${im.image.png}`
-        img.alt = ''
-        Object.assign(img.style, { left: `${im.x}px`, top: `${im.y}px`, width: `${im.image.w}px`, height: `${im.image.h}px` })
-        inner.append(img)
-      }
+      paintLens(canvas, spec)
       glass.setAttribute('aria-label', spec.texts.map(t => t.text.trim()).filter(Boolean).join(' / ') || 'Glasses display preview')
-      fit()
     },
   }
 }
@@ -705,6 +688,7 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
       picks.replaceChildren(...(s.list ?? []).map((label, i) => {
         const btn = el('button', { type: 'button', textContent: label })
         btn.dataset.pick = String(i)
+        if (i === s.listIndex) btn.setAttribute('aria-current', 'true')
         return el('li', {}, btn)
       }))
       if (s.doc && document.activeElement !== raw) raw.value = s.doc.url

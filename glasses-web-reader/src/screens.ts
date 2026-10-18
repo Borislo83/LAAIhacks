@@ -24,6 +24,8 @@ export interface TextBox {
   radius?: number
   /** Scrolls natively and receives swipes; at most one per page. */
   scroll?: boolean
+  /** Text brightness 0-4; full (4) when unset. */
+  textColor?: number
 }
 
 export interface ImageBox {

@@ -1,8 +1,6 @@
 import {
   waitForEvenAppBridge,
   TextContainerProperty,
-  ListContainerProperty,
-  ListItemContainerProperty,
   ImageContainerProperty,
   CreateStartUpPageContainer,
   RebuildPageContainer,
@@ -33,6 +31,7 @@ import { matchRoute } from '../shared/routes'
 import { displayCommand } from '../shared/display'
 import { capabilityCommand, isRecommendationsCommand, STRIP_HEADING, type RecommendationBatch, type RecommendationContext, type RecommendedAction } from '../shared/recommendations'
 import { shortcutFor } from './shortcuts'
+import { listScroll, nativeListSpec } from './native-list'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
 // Status:  body 0..252 (9 lines at 27px)  +  footer 252..288 (1 line)
@@ -153,6 +152,10 @@ let recent: Recent[] = []
 let bookmarks: Bookmark[] = []
 let history: HistoryEntry[] = []
 let listItems: MenuItem[] = []
+/** The shown native list, for the phone mirror: its title, the mirror's cursor and scroll. */
+let listTitle = ''
+let listIndex = 0
+let listTop = 0
 let loadSeq = 0
 let renderSeq = 0
 let mirror: PageSpec = { texts: [], images: [] }
@@ -293,7 +296,8 @@ function readerContainers(body: string, footer: string) {
 
 const readerSpec = (body: string, footer: string): PageSpec => ({
   texts: [
-    { x: 0, y: 0, w: 576, h: BODY_H, text: body, pad: BODY_PAD },
+    // The body takes the swipes, so the firmware scrolls it (and draws its scrollbar).
+    { x: 0, y: 0, w: 576, h: BODY_H, text: body, pad: BODY_PAD, scroll: true },
     { x: 0, y: BODY_H, w: 576, h: 288 - BODY_H, text: footer, pad: FOOTER_PAD },
   ],
   images: [],
@@ -476,6 +480,7 @@ function textContainer(t: TextBox, id: number) {
     xPosition: t.x, yPosition: t.y, width: t.w, height: t.h,
     borderWidth: t.border ?? 0, borderColor: t.color ?? 13, borderRadius: t.radius ?? 0,
     paddingLength: t.pad ?? 4,
+    ...(t.textColor !== undefined ? { textColor: t.textColor } : {}),
     containerID: id, containerName: `t${id}`,
     content: t.text || ' ',
     isEventCapture: t.scroll ? 1 : 0,
@@ -872,41 +877,27 @@ function openPages() {
 
 async function renderList(next: View, title: string, items: MenuItem[]) {
   view = next
-  onScreen = 'other'
-  renderSeq++
   listItems = items.slice(0, MAX_LIST_ITEMS)
-  mirror = {
-    texts: [
-      { x: 0, y: 0, w: 576, h: 36, text: title },
-      { x: 0, y: 36, w: 576, h: 252, text: listItems.map(i => `  ${i.label}`).join('\n') },
-    ],
-    images: [],
-  }
-  companion.update()
-  const header = new TextContainerProperty({
-    xPosition: 0, yPosition: 0, width: 576, height: 36,
-    borderWidth: 0, borderColor: 5, paddingLength: 4,
-    containerID: 1, containerName: 'header',
-    content: pxTruncate(title, INNER_W),
-    isEventCapture: 0,
-  })
-  const list = new ListContainerProperty({
-    xPosition: 0, yPosition: 36, width: 576, height: 252,
-    borderWidth: 0, borderColor: 5, paddingLength: 4,
-    containerID: 2, containerName: 'list',
-    isEventCapture: 1,
-    itemContainer: new ListItemContainerProperty({
-      itemCount: listItems.length,
-      itemWidth: 0,
-      isItemSelectBorderEn: 1,
-      itemName: listItems.map(i => pxTruncate(i.label.slice(0, 61), LIST_ITEM_PX)),
-    }),
-  })
-  await enqueue(() =>
-    bridge.rebuildPageContainer(
-      new RebuildPageContainer({ containerTotalNum: 2, textObject: [header], listObject: [list] }),
-    ),
-  )
+  listTitle = title
+  listIndex = listTop = 0
+  return drawList()
+}
+
+const listLabel = (item: MenuItem) => pxTruncate(item.label.slice(0, 61), LIST_ITEM_PX)
+
+/** Moves the list highlight (a swipe on the glasses or the console remote). */
+function moveListCursor(index: number) {
+  index = Math.max(0, Math.min(index, listItems.length - 1))
+  if (index === listIndex) return
+  listIndex = index
+  listTop = listScroll(listTop, listIndex, listItems.length)
+  drawList().catch(console.error)
+}
+
+// Drawn by the app, not as a native list: the firmware never reports list swipes and
+// can't be told which item to highlight, so the phone couldn't follow or steer it.
+function drawList() {
+  return renderPageSpec(nativeListSpec(listTitle, listItems.map(listLabel), listIndex, listTop))
 }
 
 // ── Navigation ──────────────────────────────────────────────────────────────
@@ -1906,10 +1897,9 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   }
 
   if (isListView()) {
-    if (listType === OsEventTypeList.CLICK_EVENT) {
-      const item = listItems[event.listEvent?.currentSelectItemIndex ?? 0]
-      item?.run()
-    }
+    if (textType === OsEventTypeList.SCROLL_TOP_EVENT) moveListCursor(listIndex - 1)
+    else if (textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) moveListCursor(listIndex + 1)
+    else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) listItems[listIndex]?.run()
     return
   }
 
@@ -1953,6 +1943,7 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
     recommendations: recommendationsOn,
     recommendationLayout,
     list: isListView() ? listItems.map(i => i.label) : null,
+    listIndex,
     listening: !!wake,
     wakePhrase: WAKE_PHRASE,
     heard,
@@ -1977,12 +1968,14 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
     else if (view === 'voice' && agentCard && !recorder) agentGesture(delta > 0 ? 'down' : 'up')
     else if (view === 'voice') voiceBack()
     else if (view === 'actions' || view === 'recommendations' || isContentView()) step(delta)
+    else if (isListView()) moveListCursor(listIndex + delta)
     else void showContent()
   },
   onSelect: () => {
     if (view === 'action-popup') actionPopupGesture('tap')
     else if (view === 'voice') toggleVoice()
     else if (isContentView() || view === 'actions' || view === 'recommendations') select()
+    else if (isListView()) listItems[listIndex]?.run()
   },
   onBack: () => {
     if (view === 'voice') voiceBack()

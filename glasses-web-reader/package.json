@@ -29,7 +29,7 @@
   },
   "devDependencies": {
     "@evenrealities/evenhub-cli": "^0.1.12",
-    "@evenrealities/evenhub-simulator": "^0.7.2",
+    "@evenrealities/evenhub-simulator": "^0.9.5",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^26.6.5",
     "concurrently": "^10.0.6",
