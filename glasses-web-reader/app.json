@@ -2,7 +2,7 @@
   "package_id": "com.laaihacks.focal",
   "edition": "202601",
   "name": "Focal",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "min_app_version": "2.2.10",
   "min_sdk_version": "0.0.16",
   "entrypoint": "index.html",
@@ -11,7 +11,7 @@
       "name": "network",
       "desc": "Connects to your laptop running Focal (through your own HTTPS address) to read pages, run the agents and carry out actions you ask for.",
       "whitelist": [
-        "https://prix-lean-technique-gps.trycloudflare.com"
+        "https://assessments-cluster-sen-thy.trycloudflare.com"
       ]
     },
     {

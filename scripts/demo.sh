@@ -120,7 +120,8 @@ cart_mode() {
 
 start_tunnel() {
   command -v cloudflared >/dev/null || { echo "  ! cloudflared not installed (brew install cloudflared)"; return; }
-  launch tunnel cloudflared tunnel --url "http://localhost:$VITE_PORT" --metrics 127.0.0.1:20241 --no-autoupdate
+  # HTTP/2 over TCP and IPv4: QUIC (UDP) and IPv6 kept dropping on venue Wi-Fi.
+  launch tunnel cloudflared tunnel --url "http://localhost:$VITE_PORT" --metrics 127.0.0.1:20241 --no-autoupdate --protocol http2 --edge-ip-version 4
   local host="" i=0
   until [[ -n $host ]] || (( i >= 30 )); do
     sleep 1; i=$((i + 1))

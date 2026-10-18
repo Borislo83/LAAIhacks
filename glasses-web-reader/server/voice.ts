@@ -1,5 +1,9 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { setDefaultResultOrder } from 'node:dns'
+
+// IPv6 routes are broken on some venue Wi-Fi: reach the speech-to-text service over IPv4.
+setDefaultResultOrder('ipv4first')
 
 // Speech-to-text for voice commands from the glasses mic.
 //
@@ -33,6 +37,9 @@ function provider() {
 /** Silence added around a clip: StepFun returns nothing for short clips that start or end
  *  right on speech (a 2 s "Hey Focal, open YouTube"), and hears them fine when padded. */
 const PAD_MS = 500
+/** Per-attempt time limit and attempts for the speech-to-text request. */
+const ATTEMPT_MS = 8_000
+const ATTEMPTS = 3
 
 export async function transcribe(pcm: Uint8Array, sampleRate: number, keep = true): Promise<string> {
   const pad = new Uint8Array(Math.round((sampleRate * 2 * PAD_MS) / 1000) & ~1)
@@ -54,19 +61,25 @@ export async function transcribe(pcm: Uint8Array, sampleRate: number, keep = tru
       method: 'POST',
       headers: { authorization: `Bearer ${stt.key}` },
       body: form,
-      signal: AbortSignal.timeout(25_000),
+      signal: AbortSignal.timeout(ATTEMPT_MS),
     })
   }
-  // A dropped connection ("fetch failed") or a 5xx gets one quick retry.
-  let res: Response
-  try {
-    res = await send()
-    if (res.status >= 500) res = await send()
-  } catch (err) {
-    if ((err as Error)?.name === 'TimeoutError') throw err
-    await new Promise(r => setTimeout(r, 300))
-    res = await send()
+  // On venue Wi-Fi about half the requests stall until the timeout while the rest answer in
+  // 2-5 s, so each attempt gets a short timeout and a stalled, dropped ("fetch failed") or
+  // 5xx attempt is retried on a fresh connection.
+  let res: Response | null = null
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < ATTEMPTS && !res; attempt++) {
+    try {
+      const r = await send()
+      if (r.status >= 500 && attempt < ATTEMPTS - 1) { lastError = new Error(`Transcription failed (${r.status})`); continue }
+      res = r
+    } catch (err) {
+      lastError = err
+      await new Promise(r => setTimeout(r, 200))
+    }
   }
+  if (!res) throw lastError ?? new Error('Transcription failed')
   const body = res.ok ? '' : await res.text()
   // Silence or breath noise: nothing was said, which isn't a failure.
   if (res.status === 400 && body.includes('no speech found')) return ''
