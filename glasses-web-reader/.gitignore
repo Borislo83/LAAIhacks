@@ -4,3 +4,5 @@ dist
 *.ehpk
 glasses_*.png
 qr.png
+.tools/
+.run/

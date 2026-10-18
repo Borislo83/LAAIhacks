@@ -142,3 +142,25 @@ async def test_open_context_without_tabs_gets_a_tab_not_a_relaunch(monkeypatch):
     amazon_cart._browser.pages = []  # user closed the tab; the profile is still locked
     assert (await amazon_cart.add_to_cart(URL, 1))["status"] == "cart_added"
     assert opened == [page]
+
+
+async def test_signed_out_browser_opens_sign_in_instead_of_a_guest_cart(monkeypatch):
+    class SignedOutLocator(Locator):
+        async def count(self):
+            if self.selector.startswith("#nav-link-accountList"):
+                return 1
+            return await super().count()
+
+        async def inner_text(self):
+            return "Hello, sign in"
+
+    class SignedOutPage(Page):
+        def locator(self, selector):
+            return SignedOutLocator(self, selector)
+
+    page = SignedOutPage()
+    browser_fixture(monkeypatch, page)
+    result = await amazon_cart.add_to_cart(URL, 1)
+    assert result["status"] == "needs_sign_in" and "Sign in" in result["message"]
+    # Only the account link was clicked (to open sign-in); nothing was added.
+    assert page.clicks == ["#nav-link-accountList"] and page.visits == [CART]

@@ -33,6 +33,8 @@ class Offer(Model):
     cart_url: str | None = None
     rating: float | None = None
     review_count: int | None = None
+    # Product photo from the store listing (Amazon's image CDN).
+    image: str | None = None
 
 
 class PriceCompareRequest(Model):
@@ -43,6 +45,10 @@ class PriceCompareRequest(Model):
     max_price: float | None = None
     # Also run the store-focused search, e.g. when the verifier rejected every lead.
     deep: bool = False
+    # Only this store's offers ("amazon.com"), when the user asked for one.
+    store: str | None = None
+    # A category ("smart watches"), not one product: list what the store has in budget.
+    browse: bool = False
 
 
 class PriceCompareResponse(EvidenceResponse):
@@ -69,6 +75,7 @@ class Alternative(Model):
     store: str | None = None
     # Official add-to-cart link, only for Amazon and Best Buy listings.
     cart_url: str | None = None
+    image: str | None = None
 
 
 class AlternativesResponse(EvidenceResponse):
@@ -98,12 +105,18 @@ class ReviewsResponse(EvidenceResponse):
     cons: list[str] = Field(default_factory=list)
     review_url: str | None = None
     summary: str
+    # Advice drawn from the reviews' own text: what they conclude and who it suits.
+    verdict: str = ""
+    # Review sites whose text the verdict, pros and cons came from.
+    read_from: list[str] = Field(default_factory=list, max_items=6)
 
 
 class ConsiderRequest(Model):
     product: str = Field(min_length=1, max_length=500)
     progress_id: str | None = Field(default=None, min_length=32, max_length=64)
     max_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    store: str | None = Field(default=None, max_length=40)
+    browse: bool = False
 
 
 class Pick(Model):
@@ -117,6 +130,7 @@ class Pick(Model):
     cart_url: str | None = None
     rating: float | None = None
     reason: str
+    image: str | None = None
 
 
 class CartRequest(Model):
@@ -136,6 +150,11 @@ class CartLink(Model):
 class ConsiderResponse(Model):
     product: str
     max_price: float | None = None
+    store: str | None = None
+    # "consider" (price, reviews, alternatives) or "browse" (store listings in budget).
+    mode: str = "consider"
+    # A photo of the product researched, from its Amazon listing.
+    image: str | None = None
     price: PriceCompareResponse | None = None
     reviews: ReviewsResponse | None = None
     alternatives: AlternativesResponse | None = None
@@ -221,6 +240,10 @@ class NewsStory(Model):
     image_url: str | None = None
     # How many outlets in the results covered this story: a rough importance signal.
     coverage: int = 1
+    # Newsletter paragraph written from the full text of the articles read for it.
+    body: str = ""
+    # The outlets whose article text the paragraph was drawn from.
+    read_from: list[str] = Field(default_factory=list, max_items=3)
 
 
 class NewsResponse(Model):

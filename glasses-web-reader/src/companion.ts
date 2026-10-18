@@ -1,5 +1,12 @@
 import type { CondensedPage, SiteKind } from '../shared/types'
 import type { PageSpec } from './screens'
+import { mountBackendPanel } from './lensos/panel'
+import type { ActionGroup, BackendState } from './lensos/session'
+import type { Preferences } from './lensos/types'
+import { mountRecommendations, type RecommendationEvents } from './recommendations'
+import { recommendActions } from './api'
+import { toContext } from './lensos/page'
+import './recommendations.css'
 
 // Phone-side UI inside the Even app WebView: URL entry, recent
 // pages, and a live mirror of what the glasses are showing.
@@ -8,12 +15,19 @@ interface CompanionState {
   doc: CondensedPage | null
   status: string | null
   recent: { url: string; title: string }[]
+  bookmarks: { url: string; title: string; position: number; where?: string }[]
+  /** The page on the glasses is bookmarked. */
+  bookmarked: boolean
   /** Exactly what the glasses are showing, drawn as a scaled preview. */
   spec: PageSpec
   position: string
   kind?: SiteKind
   voice: VoiceUi
   handsFree: boolean
+  /** Claude suggests next steps after each page loads. */
+  recommendations: boolean
+  /** Item labels when the glasses show a list (menu, contents, links...). */
+  list: string[] | null
   /** Hands-free is waiting for the wake phrase right now. */
   listening: boolean
   wakePhrase: string
@@ -44,11 +58,31 @@ export interface VoiceUi {
 interface CompanionOptions {
   getState: () => CompanionState
   onLoad: (url: string) => void
+  /** Bookmark the page on the glasses, or remove its bookmark. */
+  onBookmark: () => void
+  onOpenBookmark: (url: string) => void
+  onRemoveBookmark: (url: string) => void
   onStep: (delta: 1 | -1) => void
   onSelect: () => void
+  onBack: () => void
+  /** Open the glasses menu, or close it when already open. */
+  onMenu: () => void
+  /** Run item `index` of the list on the glasses. */
+  onPick: (index: number) => void
   /** Start listening, or stop and send when already listening. */
   onVoice: () => void
   onHandsFree: (on: boolean) => void
+  onRecommendations: (on: boolean) => void
+  recommendations?: RecommendationEvents
+  backend: {
+    state(): BackendState
+    connect(token: string, g2Token: string): void
+    disconnect(): void
+    save(p: Omit<Preferences, 'notes'>): void
+    review(group: ActionGroup): void
+    sync(): void
+    back(): void
+  }
 }
 
 const KIND_LABEL: Record<SiteKind, string> = {
@@ -64,6 +98,11 @@ export interface Companion {
   update(): void
   setBusy(busy: boolean): void
   setError(message: string): void
+  resetRecommendations(): void
+  recommend(page: CondensedPage): void
+  selectRecommendation(index: number): void
+  closeRecommendations(): void
+  reopenRecommendations(): boolean
   /** Live mic loudness (0..1), plus elapsed time while capturing a command. */
   voiceLevel(level: number, ms?: number): void
 }
@@ -89,6 +128,11 @@ const STYLE = `
   .wr input[type=url] { width: 100%; box-sizing: border-box; border: 0; border-radius: 12px;
     background: var(--input); color: var(--text); font: inherit; padding: 14px 16px; min-height: 48px; }
   .wr input[type=url]:focus { outline: 2px solid var(--text-dim); }
+  .wr .url-field { position: relative; }
+  .wr .url-field input[type=url] { padding-right: 48px; }
+  .wr .clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px;
+    border: 0; border-radius: 50%; background: transparent; color: var(--text-dim); font: inherit; font-size: 20px;
+    line-height: 1; cursor: pointer; }
   .wr .go { border: 0; border-radius: 12px; background: var(--accent); color: var(--on-accent); font: inherit;
     font-weight: 600; min-height: 48px; cursor: pointer; }
   .wr .go:disabled { opacity: 0.6; cursor: progress; }
@@ -131,10 +175,29 @@ const STYLE = `
   .wr .feed li.pending::after { content: ' …'; }
   .wr .feed-head { margin: 12px 0 0; font-size: 11px; font-weight: 500; letter-spacing: 0.04em;
     text-transform: uppercase; color: var(--text-dim); }
-  .wr .feed-head[hidden] { display: none; }
   .wr .feed li.open::before { content: 'Opened · '; color: var(--text-dim); }
+  .wr .bm-toggle { margin-top: 8px; width: 100%; }
+  .wr .bm-toggle[aria-pressed=true] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+  .wr .bookmarks li { display: flex; gap: 8px; align-items: stretch; }
+  .wr .bookmarks li > button:first-child { flex: 1; min-width: 0; }
+  .wr .bookmarks .remove { flex: none; width: 44px; padding: 0; align-items: center; justify-content: center;
+    font-size: 20px; color: var(--text-dim); }
   .wr .recent small { color: var(--text-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
   .wr .recent span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .wr [hidden] { display: none !important; }
+  .wr .backend-panel { display: grid; gap: 12px; }
+  .wr .backend-panel label { display: grid; gap: 6px; font-size: 13px; }
+  .wr .backend-panel input[type=password], .wr .backend-panel select { width: 100%; box-sizing: border-box;
+    border: 1px solid var(--text-dim); border-radius: 8px; min-height: 44px; padding: 8px; background: var(--bg); color: var(--text); }
+  .wr .backend-panel button, .wr .back-button { min-height: 44px; border: 0; border-radius: 8px; padding: 10px 12px;
+    background: var(--input); color: var(--text); cursor: pointer; font: inherit; font-size: 14px; }
+  .wr .backend-panel .check { display: flex; align-items: center; }
+  .wr .backend-panel .check input { width: 20px; height: 20px; }
+  .wr .backend-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+  .wr .backend-panel summary { cursor: pointer; font-size: 13px; }
+  .wr .compact .backend-panel { gap: 6px; padding: 12px; }
+  .wr .back-button { width: 100%; margin-top: 8px; }
+  .wr .picks { margin-top: 12px; max-height: 360px; overflow-y: auto; }
 `
 
 export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Companion {
@@ -152,7 +215,10 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
       <form id="f">
         <div>
           <label class="lbl" for="url">Page URL</label>
-          <input id="url" type="url" inputmode="url" autocomplete="url" placeholder="https://example.com/article" required />
+          <div class="url-field">
+            <input id="url" type="url" inputmode="url" autocomplete="url" placeholder="https://example.com/article" required />
+            <button class="clear" id="clear" type="button" aria-label="Clear URL" hidden>×</button>
+          </div>
         </div>
         <button class="go" id="go" type="submit">Send to glasses</button>
         <p class="msg" id="msg" role="status"></p>
@@ -167,6 +233,12 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
             <button type="button" id="sel" class="sel">Select</button>
             <button type="button" id="next">Next</button>
           </div>
+          <ul class="recent picks" id="picks" aria-label="Glasses list" hidden></ul>
+          <div class="pager">
+            <button type="button" id="menu">Menu</button>
+            <button type="button" id="back-control" style="grid-column: span 2">Back / cancel</button>
+          </div>
+          <button type="button" id="bm" class="back-button bm-toggle" aria-pressed="false" hidden>☆ Bookmark this page</button>
         </div>
       </section>
       <section>
@@ -183,10 +255,21 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
           <ul class="feed" id="feed" aria-label="Everything heard" aria-live="polite"></ul>
         </div>
       </section>
+      <section>
+        <div class="card">
+          <label class="hf" style="margin-bottom:0"><span>Suggest next steps after each page</span><input type="checkbox" id="recs" /></label>
+        </div>
+      </section>
+      <section id="backend"></section>
+      <section id="bookmarksWrap" hidden>
+        <label class="lbl">Bookmarks</label>
+        <ul class="recent bookmarks" id="bookmarks"></ul>
+      </section>
       <section id="recentWrap" hidden>
         <label class="lbl">Recent</label>
         <ul class="recent" id="recent"></ul>
       </section>
+      <aside id="recommendations" hidden></aside>
     </main>
   `
 
@@ -194,6 +277,14 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
   const input = $<HTMLInputElement>('url')
   const go = $<HTMLButtonElement>('go')
   const msg = $<HTMLParagraphElement>('msg')
+  const clear = $<HTMLButtonElement>('clear')
+  const syncClear = () => { clear.hidden = !input.value }
+  input.addEventListener('input', syncClear)
+  clear.addEventListener('click', () => {
+    input.value = ''
+    syncClear()
+    input.focus()
+  })
 
   $('f').addEventListener('submit', e => {
     e.preventDefault()
@@ -206,12 +297,23 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
   $('prev').addEventListener('click', () => opts.onStep(-1))
   $('next').addEventListener('click', () => opts.onStep(1))
   $('sel').addEventListener('click', () => opts.onSelect())
+  $('back-control').addEventListener('click', () => opts.onBack())
+  $('menu').addEventListener('click', () => opts.onMenu())
+  const picks = $<HTMLUListElement>('picks')
+  picks.addEventListener('click', e => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-pick]')
+    if (btn) opts.onPick(Number(btn.dataset.pick))
+  })
   $('mic').addEventListener('click', () => opts.onVoice())
   const hf = $<HTMLInputElement>('hf')
   hf.addEventListener('change', () => opts.onHandsFree(hf.checked))
+  const recs = $<HTMLInputElement>('recs')
+  recs.addEventListener('change', () => opts.onRecommendations(recs.checked))
   const meter = $<HTMLDivElement>('meter')
   const vmsg = $<HTMLParagraphElement>('vmsg')
   let listenNote = ''
+  const backendPanel = mountBackendPanel($('backend'), opts.backend)
+  const recommendations = mountRecommendations($('recommendations'), recommendActions, opts.recommendations)
 
   const glass = $<HTMLDivElement>('glass')
   const mirror = $<HTMLDivElement>('mirror')
@@ -245,20 +347,52 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
     glass.setAttribute('aria-label', spec.texts.map(t => t.text.trim()).filter(Boolean).join(' / ') || 'Glasses display preview')
   }
 
+  $('bm').addEventListener('click', () => opts.onBookmark())
+  const bookmarkList = $<HTMLUListElement>('bookmarks')
+  bookmarkList.addEventListener('click', e => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-url]')
+    if (!btn) return
+    if (btn.dataset.remove) opts.onRemoveBookmark(btn.dataset.url!)
+    else opts.onOpenBookmark(btn.dataset.url!)
+  })
+
   const recentList = $<HTMLUListElement>('recent')
   recentList.addEventListener('click', e => {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-url]')
     if (!btn) return
     input.value = btn.dataset.url!
+    syncClear()
     opts.onLoad(btn.dataset.url!)
   })
 
   return {
+    resetRecommendations() { recommendations.reset() },
+    selectRecommendation(index) { recommendations.select(index) },
+    closeRecommendations() { recommendations.close() },
+    reopenRecommendations() { return recommendations.reopen() },
+    recommend(page) {
+      if (opts.backend.state().preferences?.proactive_enabled === false) return
+      const context = toContext(page)
+      if (context.text.trim()) void recommendations.show({ url: context.url, title: context.title, text: context.text })
+    },
     update() {
+      backendPanel.update()
       const s = opts.getState()
       $('title').textContent = s.doc?.title ?? 'Nothing loaded'
       $('count').textContent = s.doc && !s.status ? s.position : ''
       drawMirror(s.spec)
+      picks.hidden = !s.list
+      picks.replaceChildren(
+        ...(s.list ?? []).map((label, i) => {
+          const li = document.createElement('li')
+          const btn = document.createElement('button')
+          btn.type = 'button'
+          btn.dataset.pick = String(i)
+          btn.textContent = label
+          li.append(btn)
+          return li
+        }),
+      )
       fitMirror()
       if (s.doc && !s.status) {
         const kind = s.kind ? `${KIND_LABEL[s.kind]} layout` : 'Manga'
@@ -272,6 +406,7 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
       mic.classList.toggle('on', v.phase === 'listening')
       mic.disabled = v.phase === 'sending' || v.phase === 'searching'
       hf.checked = s.handsFree
+      recs.checked = s.recommendations
       $('hfLabel').textContent = `Hands-free: say "${s.wakePhrase}", then your question`
       if (v.phase !== 'listening' && !s.listening) meter.style.width = '0'
       listenNote = (v.phase === 'listening' || v.phase === 'idle') && v.note ? ` · ${v.note}` : ''
@@ -294,6 +429,33 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
           if (h.command) li.className = 'cmd'
           else if (h.opened) li.className = 'open'
           else if (h.pending) li.className = 'pending'
+          return li
+        }),
+      )
+      const bm = $<HTMLButtonElement>('bm')
+      bm.hidden = !s.doc || !!s.status
+      bm.setAttribute('aria-pressed', String(s.bookmarked))
+      bm.textContent = s.bookmarked ? '★ Bookmarked' : '☆ Bookmark this page'
+      $('bookmarksWrap').hidden = !s.bookmarks.length
+      bookmarkList.replaceChildren(
+        ...s.bookmarks.map(b => {
+          const li = document.createElement('li')
+          const open = document.createElement('button')
+          open.type = 'button'
+          open.dataset.url = b.url
+          const t = document.createElement('span')
+          t.textContent = b.title
+          const u = document.createElement('small')
+          u.textContent = b.position && b.where ? `${b.where} · ${b.url}` : b.url
+          open.append(t, u)
+          const remove = document.createElement('button')
+          remove.type = 'button'
+          remove.className = 'remove'
+          remove.dataset.url = b.url
+          remove.dataset.remove = '1'
+          remove.setAttribute('aria-label', `Remove bookmark: ${b.title}`)
+          remove.textContent = '×'
+          li.append(open, remove)
           return li
         }),
       )

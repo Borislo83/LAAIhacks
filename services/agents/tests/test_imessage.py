@@ -321,3 +321,14 @@ async def test_link_delivery_returns_messages_link_once(monkeypatch):
     assert (await imessage.send(send)).status == "failed"  # single use
     wrong = imessage.MessageSendRequest(draft_id=draft.draft_id, text=draft.text, executor_token="x" * 32)
     assert (await imessage.send(wrong)).status == "failed"
+
+
+def test_send_name_a_message_phrasing_is_parsed():
+    from laai_agents.imessage import extract_by_pattern, tidy
+
+    book = {"Jonathan": "+12135550100", "Alex": "+12135550101"}
+    recipient, body = extract_by_pattern('Send jonathan a message "lol"', book)
+    assert recipient.lower() == "jonathan" and tidy(body) == "Lol"
+    assert extract_by_pattern("shoot Alex a quick text saying I'm running late", book) == (
+        "Alex", "I'm running late",
+    )

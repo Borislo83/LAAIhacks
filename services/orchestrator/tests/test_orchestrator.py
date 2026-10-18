@@ -656,7 +656,31 @@ async def test_coordinator_picks_reach_the_chat_reply():
         reply = await chat.chat(
             [ChatMessage(role="user", content="Are there Sony headphones under $300?")], config(), http
         )
-    assert reply.source == "coordinator" and reply.picks == [pick]
+    assert reply.source == "coordinator" and reply.picks == [{**pick, "image": None}]
+
+
+async def test_only_store_photos_reach_the_dashboard():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    amazon = "https://m.media-amazon.com/images/I/61abc.jpg"
+    picks = [
+        {"label": "Best price", "product": "A", "url": "https://www.amazon.com/dp/B0DFZPR9Z4",
+         "reason": "r", "image": amazon},
+        {"label": "Alternative", "product": "B", "url": "https://example.com/b",
+         "reason": "r", "image": "https://tracker.example.com/pixel.gif"},
+    ]
+
+    def handle(request):
+        return httpx.Response(200, json={"product": "Sony WH-1000XM5", "summary": "s",
+                                         "image": "http://m.media-amazon.com/x.jpg", "picks": picks})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        reply = await chat.chat(
+            [ChatMessage(role="user", content="Consider Sony XM5 under $300")], config(), http
+        )
+    assert [p["image"] for p in reply.picks] == [amazon, None]
+    assert reply.product == "Sony WH-1000XM5" and reply.image is None  # http is refused
 
 
 async def test_reply_to_what_to_say_becomes_the_draft():
@@ -757,3 +781,159 @@ def test_brief_stories_are_sanitized():
     })
     assert result["brief"] is True and [s["headline"] for s in result["stories"]] == ["Real story"]
     assert result["stories"][0]["image_url"] is None and result["stories"][0]["coverage"] == 5
+
+
+def test_brief_story_paragraphs_pass_through_capped():
+    from laai_orchestrator.chat import NEWS_BODY_MAX, safe_news
+
+    story = {"section": "U.S.", "headline": "Story", "summary": "Lead.", "url": "https://www.nbcnews.com/a",
+             "publisher": "NBC News", "body": "x" * 5000, "read_from": ["NBC News", "AP", "KSN", "Extra"]}
+    result = safe_news({"summary": "s", "brief": True, "stories": [story]})
+    assert len(result["stories"][0]["body"]) <= NEWS_BODY_MAX
+    assert result["stories"][0]["read_from"] == ["NBC News", "AP", "KSN"]
+
+
+# Audit 4: after "What would you like to say to X?", other requests and "never mind" are
+# not turned into the message.
+@pytest.mark.parametrize(
+    "reply, expected",
+    [
+        ("running 10 minutes late", ["/imessage/prepare"]),
+        ("Big news, I got the job!", ["/imessage/prepare"]),
+        ("find the song Toxic by BoywithUke", ["/youtube"]),
+        ("Brief me on the news today.", ["/news"]),
+        ("never mind", []),
+    ],
+)
+async def test_message_follow_up_only_takes_plain_replies(reply, expected):
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    seen = []
+
+    def handle(request):
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"summary": "ok", "status": "ready", "sources": []})
+
+    history = [
+        ChatMessage(role="user", content="send a message to Jonathan"),
+        ChatMessage(role="assistant", content="What would you like to say to Jonathan?"),
+        ChatMessage(role="user", content=reply),
+    ]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        result = await chat.chat(history, config(), http)
+    assert seen == expected
+    if reply == "never mind":
+        assert result.reply == "OK, nothing will be sent."
+
+
+# Audit 5: a news result without a summary must not crash the chat.
+def test_news_without_summary_does_not_crash():
+    from laai_orchestrator.chat import safe_news
+
+    assert safe_news({"headline": "x", "summary": None})["summary"] == ""
+    assert safe_news({"headline": "x"})["summary"] == ""
+
+
+@pytest.mark.parametrize(
+    "text, coordinated",
+    [
+        ("Is there a better alteranate for the garmin 5 forerunning watch", True),
+        ("any alternate to the Kindle", True),
+        ("is there a better option than the Kindle", True),
+        ("replacement for my AirPods", True),
+        ("alter the font size", False),
+    ],
+)
+def test_alternative_questions_with_typos_use_the_coordinator(text, coordinated):
+    import re
+
+    from laai_orchestrator.chat import COORDINATE, COORDINATE_WITHOUT_LLM
+
+    found = re.search(COORDINATE, text, re.IGNORECASE) or re.search(COORDINATE_WITHOUT_LLM, text, re.IGNORECASE)
+    assert bool(found) is coordinated
+
+
+# The coordinator follows the ask: songs and videos go to YouTube whatever the title
+# says, and a store constraint ("in amazon") goes to the coordinator.
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Play Bad Guy by Billie Eilish", ["/youtube"]),
+        ("Find a song like the Blinding Lights", ["/youtube"]),
+        ("find the music video for Shape of You", ["/youtube"]),
+        ("Are there any smart watches under 50 dollars in amazon", ["/consider"]),
+        ("AirPods Pro 2 on amazon", ["/consider"]),
+        ("video doorbells under 100 dollars", ["/consider"]),
+    ],
+)
+async def test_routing_follows_what_was_asked(text, expected):
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    seen = []
+
+    def handle(request):
+        seen.append(request.url.path)
+        if request.url.path == "/consider":
+            return httpx.Response(200, json={"product": "x", "summary": "ok", "mode": "browse",
+                                             "price": {"summary": "ok", "offers": []}})
+        return httpx.Response(200, json={"summary": "ok", "url": "https://www.youtube.com/watch?v=abcdefghijk"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        await chat.chat([ChatMessage(role="user", content=text)], config(), http)
+    assert seen == expected
+
+
+async def test_a_browse_answer_shows_only_the_listings_card():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    def handle(request):
+        return httpx.Response(200, json={
+            "product": "smart watches", "max_price": 50, "store": "amazon.com", "mode": "browse",
+            "summary": "Yes. Amazon has smart watches under $50.",
+            "price": {"product": "smart watches", "summary": "Yes.", "offers": []},
+            "picks": [{"label": "Most popular", "product": "Redmi Watch 5 Active", "price": 43.49,
+                       "store": "amazon.com", "url": "https://www.amazon.com/dp/B0DFZPR9Z4",
+                       "reason": "4.5★"}],
+        })
+
+    text = "Are there any smart watches under 50 dollars in amazon"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        reply = await chat.chat([ChatMessage(role="user", content=text)], config(), http)
+    assert reply.source == "coordinator" and [c.kind for c in reply.calls] == ["price"]
+    assert reply.picks[0]["product"] == "Redmi Watch 5 Active"
+
+
+# The orchestrator decides: a message ask reaches the messenger agent however it's
+# phrased, and before any shopping rule.
+@pytest.mark.parametrize(
+    "text",
+    [
+        'Send jonathan a message "lol"',
+        "shoot alex a text saying im late",
+        'text jonathan "lol"',
+        "Send Jonathan a message about the cheaper AirPods",
+    ],
+)
+async def test_message_asks_go_to_the_messenger(text):
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    seen = []
+
+    def handle(request):
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"status": "ready", "summary": "Draft ready."})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        await chat.chat([ChatMessage(role="user", content=text)], config(), http)
+    assert seen == ["/imessage/prepare"]
+
+
+@pytest.mark.parametrize("text", ["tell me about the Sony XM5", "Send me the best AirPods deal"])
+async def test_shopping_asks_are_not_messages(text):
+    from laai_orchestrator.chat import _is_message_request
+
+    assert not _is_message_request(text)

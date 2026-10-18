@@ -1,6 +1,17 @@
 import type { CondenseEvent, CondenseError, MangaStrip, SearchResult, VoiceCommand, VoiceMode } from '../shared/types'
+import { validBatch, type RecommendationBatch, type RecommendationContext } from '../shared/recommendations'
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
+
+export async function recommendActions(context: RecommendationContext, signal: AbortSignal): Promise<RecommendationBatch> {
+  const res = await fetch(`${API_BASE}/api/recommendations`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(context), signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+  })
+  const body: unknown = await res.json()
+  if (!res.ok || !validBatch(body) || body.page.url !== context.url) throw new Error('Recommendations unavailable.')
+  return body
+}
 
 /**
  * Streams a page's condense events into `onEvent` (page, kind, screens…) and
