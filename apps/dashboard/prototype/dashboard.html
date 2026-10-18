@@ -156,10 +156,20 @@ body[data-density="compact"] .agent{padding:10px}
 .composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--hair)}
 .composer input{flex:1;min-width:0;font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
 .starters{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 4px}
-.work{border:1px solid var(--hair);border-radius:10px;padding:12px;font-size:13px;background:var(--paper)}
-.work-row{display:flex;gap:9px;align-items:center;padding:9px 0;border-bottom:1px solid var(--hair)}
-.work-row:last-child{border-bottom:0}.work-row .detail{flex:1;min-width:0}.work-row small{display:block;color:var(--muted);overflow-wrap:anywhere}
-.work-row .phase{font:11px var(--mono);color:var(--muted)}.work-row[data-state="completed"] .phase{color:#139A4E}.work-row[data-state="failed"] .phase{color:#B83A32}
+/* live agent work: each agent's own orb animates beside a shimmering status line until it finishes */
+.work{display:flex;flex-direction:column;font-size:13px}
+.work-title{font-weight:500;font-size:13px;margin-bottom:4px}
+.work-row{display:flex;gap:10px;align-items:center;min-height:30px;padding:3px 0}
+.work-row .detail{flex:1;min-width:0;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.work-row b{font-weight:500}
+.work-row small{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.work-row:not([data-done]) small{color:transparent;background:linear-gradient(90deg,var(--muted) 0 38%,var(--ink) 50%,var(--muted) 62% 100%) 0 0/250% 100%;-webkit-background-clip:text;background-clip:text;animation:shimmer 2.4s linear infinite}
+@keyframes shimmer{from{background-position:100% 0}to{background-position:-150% 0}}
+.work-row .phase{font:11px var(--mono);color:var(--muted);white-space:nowrap}
+.work-row[data-state="completed"] .phase,.work-row[data-state="review_ready"] .phase{color:var(--signal)}
+.work-row[data-state="failed"] .phase{color:var(--warn)}
+.coord circle+circle{animation:pulse 1.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+@keyframes pulse{50%{transform:scale(.55)}}
 .work-history{margin-top:10px;color:var(--muted);font-size:11px;max-height:180px;overflow:auto}.work-history p{margin:4px 0}
 .demo-checkout{padding:14px;border:1px solid var(--hair);border-radius:10px;display:flex;flex-direction:column;gap:10px}.demo-checkout strong{color:#139A4E}
 
@@ -175,7 +185,7 @@ body[data-density="compact"] .agent{padding:10px}
   .endpoint{width:100%}
   .pc{grid-template-columns:1fr}
 }
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.work-row small{background:none!important;color:var(--muted)!important}}
 </style>
 </head>
 <body>
@@ -507,21 +517,26 @@ async function readEvents(path,body,onProgress){
     return result;
   }finally{await reader.cancel().catch(()=>{});reader.releaseLock();response.authComplete?.()}
 }
+const DONE=["completed","failed","review_ready"];
 function makeProgress(container){
   const started=performance.now(),rows=new Map();
   const el=document.createElement("div");el.className="work";el.setAttribute("aria-live","polite");
-  el.innerHTML='<b class="work-title">Live agent activity</b><div class="work-rows"></div><details class="work-history"><summary>Activity log</summary><div></div></details>';
+  el.innerHTML='<b class="work-title" hidden></b><div class="work-rows"></div><details class="work-history"><summary>Activity log</summary><div></div></details>';
   container.replaceChildren(el);
   function update(event){
     const key=event.kind;if(key!=="coordinator"&&!AGENTS[key])return;
     let row=rows.get(key);
-    if(!row){row=document.createElement("div");row.className="work-row";row.innerHTML=`${orb(AGENTS[key]?.v||2,24)}<span class="detail"><b></b><small></small></span><span class="phase"></span>`;row.querySelector("b").textContent=key==="coordinator"?"Focal coordinator":AGENTS[key].name;el.querySelector(".work-rows").append(row);rows.set(key,row)}
-    row.dataset.state=event.stage;row.querySelector("small").textContent=event.message||"";row.querySelector(".phase").textContent=event.stage.replaceAll("_"," ");row.querySelector(".orb").classList.toggle("idle",["completed","failed","review_ready"].includes(event.stage));
+    if(!row){row=document.createElement("div");row.className="work-row";row.dataset.t0=performance.now();row.innerHTML=`${key==="coordinator"?logoMark(20,"orb coord"):orb(AGENTS[key].v,20)}<span class="detail"><b></b><small></small></span><span class="phase"></span>`;row.querySelector("b").textContent=key==="coordinator"?"Focal coordinator":AGENTS[key].name;el.querySelector(".work-rows").append(row);rows.set(key,row)}
+    const done=DONE.includes(event.stage);
+    row.dataset.state=event.stage;row.toggleAttribute("data-done",done);row.querySelector("small").textContent=event.message||"";
+    // While working the status line speaks for itself; once done, show how long it took.
+    row.querySelector(".phase").textContent=event.stage==="failed"?"failed":done?`${((performance.now()-row.dataset.t0)/1000).toFixed(1)} s`:"";
+    row.querySelector(".orb").classList.toggle("idle",done);
     const line=document.createElement("p");line.textContent=`${((performance.now()-started)/1000).toFixed(1)}s · ${key} · ${event.message}`;el.querySelector(".work-history div").append(line);
     if(el.querySelector(".work-history div").children.length>100)el.querySelector(".work-history div").firstChild.remove();
     if(event.result&&AGENTS[key]){let slot=el.querySelector(`[data-partial="${key}"]`);if(!slot){slot=document.createElement("div");slot.dataset.partial=key;el.append(slot)}slot.innerHTML=miniCard({kind:key,result:event.result,error:event.result.error,ms:event.ms||0})}
   }
-  function finish(ok){el.querySelector(".work-title").textContent=`${ok?"Request finished":"Request interrupted"} · ${((performance.now()-started)/1000).toFixed(1)}s`;rows.forEach((row,key)=>{if(!["completed","failed","review_ready"].includes(row.dataset.state)){row.querySelector(".phase").textContent=ok&&key==="coordinator"?"completed":ok?"finished":"interrupted";row.querySelector(".orb").classList.add("idle")}});el.querySelectorAll("[data-partial]").forEach(slot=>slot.remove())}
+  function finish(ok){el.querySelector(".work-title").hidden=false;el.querySelector(".work-title").textContent=`${ok?"Request finished":"Request interrupted"} · ${((performance.now()-started)/1000).toFixed(1)}s`;rows.forEach(row=>{if(!row.hasAttribute("data-done")){row.setAttribute("data-done","");row.querySelector(".phase").textContent=ok?`${((performance.now()-row.dataset.t0)/1000).toFixed(1)} s`:"interrupted";row.querySelector(".orb").classList.add("idle")}});el.querySelectorAll("[data-partial]").forEach(slot=>slot.remove())}
   return {el,update,finish};
 }
 $("#chat-form").onsubmit=async e=>{
