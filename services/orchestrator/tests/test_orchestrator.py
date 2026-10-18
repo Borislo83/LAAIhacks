@@ -904,3 +904,36 @@ async def test_a_browse_answer_shows_only_the_listings_card():
         reply = await chat.chat([ChatMessage(role="user", content=text)], config(), http)
     assert reply.source == "coordinator" and [c.kind for c in reply.calls] == ["price"]
     assert reply.picks[0]["product"] == "Redmi Watch 5 Active"
+
+
+# The orchestrator decides: a message ask reaches the messenger agent however it's
+# phrased, and before any shopping rule.
+@pytest.mark.parametrize(
+    "text",
+    [
+        'Send jonathan a message "lol"',
+        "shoot alex a text saying im late",
+        'text jonathan "lol"',
+        "Send Jonathan a message about the cheaper AirPods",
+    ],
+)
+async def test_message_asks_go_to_the_messenger(text):
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    seen = []
+
+    def handle(request):
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"status": "ready", "summary": "Draft ready."})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        await chat.chat([ChatMessage(role="user", content=text)], config(), http)
+    assert seen == ["/imessage/prepare"]
+
+
+@pytest.mark.parametrize("text", ["tell me about the Sony XM5", "Send me the best AirPods deal"])
+async def test_shopping_asks_are_not_messages(text):
+    from laai_orchestrator.chat import _is_message_request
+
+    assert not _is_message_request(text)
