@@ -42,24 +42,35 @@ const IMAGE_TIMEOUT_MS = 10_000
 
 const STATE_KEY = 'webreader.v2.state'
 const RECENT_KEY = 'webreader.v1.recent'
+const BOOKMARKS_KEY = 'webreader.v1.bookmarks'
 const MANGA_STYLE_KEY = 'webreader.v1.mangaStyle'
 // Start with the chosen bottom strip, replacing preferences from the layout trial.
 const RECOMMENDATION_LAYOUT_KEY = 'webreader.v2.recommendationLayout'
 const SESSION_KEY = 'webreader.lensos.session'
 const HANDS_FREE_KEY = 'webreader.v1.handsFree'
+const RECOMMENDATIONS_KEY = 'webreader.v1.recommendations'
 /** Must match the server's WAKE_NAME. Not "Hey Even": that wakes the system assistant. */
 const WAKE_PHRASE = 'Hey Search'
 /** The assistant's name on the glasses card and spinner. */
 const ASSISTANT = 'Search'
 const MAX_RECENT = 15
+const MAX_BOOKMARKS = 50
 const MAX_HISTORY = 10
 
 type View =
-  | 'reader' | 'deck' | 'manga' | 'menu' | 'contents' | 'links' | 'recent'
+  | 'reader' | 'deck' | 'manga' | 'menu' | 'contents' | 'links' | 'recent' | 'bookmarks'
   | 'actions' | 'recommendations' | 'recommendation-layout' | 'voice'
 interface Recent {
   url: string
   title: string
+}
+/** A saved page and the place in it; the place follows along as the page is read. */
+interface Bookmark {
+  url: string
+  title: string
+  position: number
+  /** The place in words: "Screen 3", "Page 12". */
+  where?: string
 }
 interface MenuItem {
   label: string
@@ -118,6 +129,7 @@ let shownTiles: (string | undefined)[] = []
 let mangaStyle: MangaStyle = 'natural'
 let status: string | null = null
 let recent: Recent[] = []
+let bookmarks: Bookmark[] = []
 let history: HistoryEntry[] = []
 let listItems: MenuItem[] = []
 let loadSeq = 0
@@ -146,6 +158,8 @@ const wakeChecks = new WeakMap<
 >()
 let glassRecommendations: RecommendationBatch | undefined
 let recommendationsOpen = false
+/** Whether Claude suggests next steps after each page loads. */
+let recommendationsOn = true
 let recommendationLayout: RecommendationLayout = 'bottom'
 let recommendationIndex = 0
 let recommendationSelected = false
@@ -864,8 +878,10 @@ function openMenu() {
   } else if (ready) {
     if (glassRecommendations) items.push({ label: 'Recommendations (3)', run: () => { companion.reopenRecommendations() } })
     items.push({ label: 'Resume', run: () => void showContent() })
-    items.push({ label: `Recommendation layout: ${RECOMMENDATION_LAYOUTS.find(layout => layout.id === recommendationLayout)!.label}`,
-      run: openRecommendationLayouts })
+    if (recommendationsOn) {
+      items.push({ label: `Recommendation layout: ${RECOMMENDATION_LAYOUTS.find(layout => layout.id === recommendationLayout)!.label}`,
+        run: openRecommendationLayouts })
+    }
     if (isManga()) items.push(...mangaMenuItems())
   } else {
     items.push({
@@ -877,6 +893,13 @@ function openMenu() {
     })
   }
   items.push({ label: 'Voice search', run: startVoice })
+  items.push({
+    label: `Recommendations: ${recommendationsOn ? 'on' : 'off'}`,
+    run: () => {
+      setRecommendations(!recommendationsOn)
+      openMenu()
+    },
+  })
   items.push({
     label: handsFree ? `Hands-free "${WAKE_PHRASE}": on` : `Hands-free "${WAKE_PHRASE}": off`,
     run: () => {
@@ -899,6 +922,16 @@ function openMenu() {
     if (doc.links.length) items.push({ label: `Links on page (${doc.links.length})`, run: openLinks })
     if (position() > 0) items.push({ label: 'Back to start', run: () => goTo(0) })
   }
+  if (ready && doc) {
+    items.push({
+      label: bookmarkOf(doc.url) ? 'Remove bookmark' : 'Bookmark this page',
+      run: () => {
+        toggleBookmark()
+        openMenu()
+      },
+    })
+  }
+  if (bookmarks.length) items.push({ label: `Bookmarks (${bookmarks.length})`, run: openBookmarks })
   if (ready && isManga() && position() > 0) items.push({ label: 'Back to first page', run: () => goTo(0) })
   if (recent.length) items.push({ label: `Recent pages (${recent.length})`, run: openRecent })
   if (backend.state.connected) {
@@ -933,6 +966,41 @@ function openLinks() {
   if (!doc) return
   const items = doc.links.map(l => ({ label: l.text, run: () => void load(l.url, 0, true) }))
   renderList('links', 'Links · tap to open', [back, ...items]).catch(console.error)
+}
+
+// ── Bookmarks ───────────────────────────────────────────────────────────────
+const bookmarkOf = (url: string) => bookmarks.find(b => b.url === url)
+const where = () => `${isManga() ? 'Page' : 'Screen'} ${position() + 1}`
+
+function toggleBookmark() {
+  if (!doc) return
+  const { url, title } = doc
+  bookmarks = bookmarkOf(url)
+    ? bookmarks.filter(b => b.url !== url)
+    : [{ url, title, position: position(), where: where() }, ...bookmarks].slice(0, MAX_BOOKMARKS)
+  companion.update()
+  void flushSave()
+}
+
+function removeBookmark(url: string) {
+  bookmarks = bookmarks.filter(b => b.url !== url)
+  companion.update()
+  void flushSave()
+  if (view === 'bookmarks') openBookmarks()
+}
+
+/** Reopens a bookmark where it was left. */
+function openBookmark(url: string) {
+  const b = bookmarkOf(url)
+  if (b) void load(b.url, b.position, true)
+}
+
+function openBookmarks() {
+  const items = bookmarks.map(b => ({
+    label: b.position && b.where ? `${b.title} · ${b.where}` : b.title,
+    run: () => openBookmark(b.url),
+  }))
+  renderList('bookmarks', 'Bookmarks', [back, ...items]).catch(console.error)
 }
 
 function openRecent() {
@@ -1055,6 +1123,18 @@ function setHandsFree(on: boolean) {
     if (!recorder) void setMic(false)
     companion.update()
   }
+}
+
+function setRecommendations(on: boolean) {
+  recommendationsOn = on
+  void enqueue(() => bridge.setLocalStorage(RECOMMENDATIONS_KEY, on ? '1' : '0')).catch(() => {})
+  if (on) {
+    if (doc && !status && !loading) companion.recommend(doc)
+  } else {
+    companion.resetRecommendations()
+    if (view === 'recommendations') void showContent()
+  }
+  companion.update()
 }
 
 /** Sends the start of an ambient utterance to see whether it opens with the wake phrase. */
@@ -1300,7 +1380,7 @@ async function load(url: string, restore = 0, pushHistory = false, fromVoice = f
     scheduleSave()
     if (doc) {
       void backend.publish(doc)
-      if (!fromVoice) companion.recommend(doc)
+      if (!fromVoice && recommendationsOn) companion.recommend(doc)
     }
   } catch (err) {
     if (seq !== loadSeq) return
@@ -1334,7 +1414,11 @@ function scheduleSave() {
 async function flushSave() {
   clearTimeout(saveTimer)
   const state = doc ? { url: doc.url, position: position() } : null
+  // A bookmark keeps up with reading, so it reopens where you stopped.
+  const mark = doc && !status && !loading ? bookmarkOf(doc.url) : undefined
+  if (mark) Object.assign(mark, { position: position(), where: where() })
   await enqueue(() => bridge.setLocalStorage(STATE_KEY, JSON.stringify(state))).catch(() => {})
+  await enqueue(() => bridge.setLocalStorage(BOOKMARKS_KEY, JSON.stringify(bookmarks))).catch(() => {})
   await enqueue(() => bridge.setLocalStorage(RECENT_KEY, JSON.stringify(recent))).catch(() => {})
   await enqueue(() => bridge.setLocalStorage(MANGA_STYLE_KEY, mangaStyle)).catch(() => {})
 }
@@ -1348,11 +1432,16 @@ async function restore() {
       if (typeof parsed?.url === 'string') savedSessionUrl = parsed.url
     } catch { savedSession = connection }
     recent = JSON.parse((await enqueue(() => bridge.getLocalStorage(RECENT_KEY))) || '[]')
+    try {
+      const saved = JSON.parse((await enqueue(() => bridge.getLocalStorage(BOOKMARKS_KEY))) || '[]')
+      if (Array.isArray(saved)) bookmarks = saved.filter(b => typeof b?.url === 'string' && typeof b?.title === 'string')
+    } catch {}
     const saved = JSON.parse((await enqueue(() => bridge.getLocalStorage(STATE_KEY))) || 'null')
     if ((await enqueue(() => bridge.getLocalStorage(MANGA_STYLE_KEY)).catch(() => '')) === 'lines') mangaStyle = 'lines'
     const savedLayout = await enqueue(() => bridge.getLocalStorage(RECOMMENDATION_LAYOUT_KEY)).catch(() => '')
     if (RECOMMENDATION_LAYOUTS.some(layout => layout.id === savedLayout)) recommendationLayout = savedLayout as RecommendationLayout
     if ((await enqueue(() => bridge.getLocalStorage(HANDS_FREE_KEY)).catch(() => '')) === '0') handsFree = false
+    if ((await enqueue(() => bridge.getLocalStorage(RECOMMENDATIONS_KEY)).catch(() => '')) === '0') recommendationsOn = false
     void armWake()
     companion.update()
     // Deep link: index.html?open=<page> opens straight into a page.
@@ -1423,7 +1512,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
     return
   }
 
-  if (!isContentView() && view !== 'actions' && view !== 'recommendations') {
+  if (isListView()) {
     if (listType === OsEventTypeList.CLICK_EVENT) {
       const item = listItems[event.listEvent?.currentSelectItemIndex ?? 0]
       item?.run()
@@ -1435,6 +1524,11 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   if (textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) return step(1)
   if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) select()
 })
+
+/** A native glasses list (menu, contents, links...) is on screen. */
+function isListView() {
+  return !isContentView() && view !== 'actions' && view !== 'recommendations' && view !== 'voice'
+}
 
 function cleanup() {
   if (cleanedUp) return
@@ -1453,6 +1547,8 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
     doc,
     status,
     recent,
+    bookmarks,
+    bookmarked: !!doc && !!bookmarkOf(doc.url),
     spec: mirror,
     position: isManga()
       ? `Page ${mangaPage + 1} / ${doc!.manga!.pages}${mangaStrips > 1 ? ` · ${mangaStrip + 1}/${mangaStrips}` : ''}`
@@ -1460,11 +1556,16 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
     kind: isDeck() ? doc?.deck?.kind : undefined,
     voice: voiceUi,
     handsFree,
+    recommendations: recommendationsOn,
+    list: isListView() ? listItems.map(i => i.label) : null,
     listening: !!wake,
     wakePhrase: WAKE_PHRASE,
     heard,
   }),
   onLoad: url => void load(url),
+  onBookmark: toggleBookmark,
+  onOpenBookmark: openBookmark,
+  onRemoveBookmark: removeBookmark,
   onStep: delta => {
     if (view === 'voice') voiceBack()
     else if (view === 'actions' || view === 'recommendations' || isContentView()) step(delta)
@@ -1480,8 +1581,16 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
     else if (view === 'actions') actionBack()
     else void showContent()
   },
+  onMenu: () => {
+    if (view === 'menu') void showContent()
+    else openMenu()
+  },
+  onPick: index => {
+    if (isListView()) listItems[index]?.run()
+  },
   onVoice: toggleVoice,
   onHandsFree: setHandsFree,
+  onRecommendations: setRecommendations,
   recommendations: {
     ready(batch) {
       if (batch.page.url !== doc?.url || cleanedUp) return
