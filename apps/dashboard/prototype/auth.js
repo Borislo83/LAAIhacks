@@ -43,12 +43,14 @@ export function setupAuth({endpoint, onUserChange}) {
       }
       if (url.username || url.password || url.search || url.hash) throw new Error('Invalid backend URL.');
       backend = url.href.replace(/\/$/, '');
+      // Load the SDK while the config request is in flight.
+      const sdk = import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/+esm');
+      sdk.catch(() => {});
       const response = await fetch(backend + '/v1/auth/config', {
         redirect: 'error', signal: AbortSignal.timeout(10000),
       });
       if (!response.ok) throw new Error('Could not load sign-in settings.');
-      const config = await response.json();
-      const {createClient} = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/+esm');
+      const [config, {createClient}] = await Promise.all([response.json(), sdk]);
       client = createClient(config.supabase_url, config.supabase_publishable_key, {
         auth: {flowType: 'pkce', persistSession: true, autoRefreshToken: true, detectSessionInUrl: true},
       });
@@ -58,7 +60,10 @@ export function setupAuth({endpoint, onUserChange}) {
       render(data.session);
     } catch (error) {
       el('account-status').textContent = 'Sign-in unavailable';
-      message(error.message || 'Could not connect. Check the backend and try again.', true);
+      // fetch() reports an unreachable server or a CORS refusal only as "Failed to fetch".
+      message(error instanceof TypeError
+        ? `Couldn't reach the orchestrator at ${endpoint.value.trim()}. Check that it's running and allows ${location.origin}.`
+        : error.message || 'Could not connect. Check the backend and try again.', true);
       el('auth-retry').hidden = false;
     }
   }

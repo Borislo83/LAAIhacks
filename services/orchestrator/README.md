@@ -36,6 +36,17 @@ Chat confirmation requires both an explicit affirmative message and the preparat
 and delegates to the local visible Chrome executor. The selected ASIN must be verified in
 the active cart before success is reported. The executor stops before checkout; no Amazon
 order or payment occurs. Browser profiles are local to the agents process.
+
+iMessage drafts come from chat ("text Alex I'm late"; the LLM's `message_friend` tool or the
+rules fallback), which only calls the agent's `/imessage/prepare` and returns the draft in
+`calls[].result`. Nothing is sent from chat. After the user reviews it, the client calls
+`POST /v1/messages/send {draft_id, text}`. That route always requires a verified sign-in
+with the `web` role (even with `CHAT_AUTH_REQUIRED=false`), allows 5 sends per user per minute,
+and adds the private `IMESSAGE_EXECUTOR_TOKEN`; it returns 503 while that is unset. Responses
+contain only `status` (`sent|failed|needs_permission`), `summary` and `dry_run` (true when the
+agent only simulated the send). For a local end-to-end dry run, set the same
+`IMESSAGE_EXECUTOR_TOKEN` value in both `services/orchestrator/.env` and `services/agents/.env`;
+the agent rejects sends whose token does not match its own.
 Set `AGENTS_URL` for a remote agent Bureau and `CORS_ORIGINS` for frontend origins.
 Optional `ASI_ONE_API_KEY` enables ASI:One page understanding. Without it, an explicit `product`
 field produces deterministic shopping suggestions; unstructured pages produce no tasks.

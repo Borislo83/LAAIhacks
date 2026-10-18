@@ -12,10 +12,22 @@ This page explains what each team gets and how to plug in. Contract terms follow
 | `202610170002_shared_workflow.sql` | Contract tables, `laai_workflow` RPC | Applied (do not rerun) |
 | `202610170003_user_preferences.sql` | `user_preferences` + private notes | Applied (do not rerun) |
 | `202610170004_workflow_v1_1.sql` | Event ack, invalidation outbox, devices, rate-limit fix | Applied 2026-10-17 |
+| `202610170005_workflow_perf.sql` | Lock/index/retention fixes (no API change) | Applied 2026-10-17 (pg_cron not installed: daily purge not scheduled) |
 
-004 only uses `create or replace` / `if not exists`, so applying it twice is harmless. Apply it
-in the Supabase SQL editor, then run `python check_supabase.py` in `services/orchestrator`
-(read-only; it reports whether 004 is live).
+004 and 005 only use `create or replace` / `if [not] exists`, so applying either twice is
+harmless. Apply in the Supabase SQL editor, then run `python check_supabase.py` in
+`services/orchestrator` (read-only; it reports whether 004 is live).
+
+005 keeps `laai_workflow`'s signature and every response shape. It changes:
+- Reads (`status`, `display`, `events`, `ack`) no longer lock the session row; only writes do.
+  `display` is one statement, so its revision, page and actions always come from one snapshot.
+- The rate-limit counter is read without a lock before the operation and bumped after it, so a
+  user's calls no longer queue on their bucket row. Still shared, still 600/user/min, failed and
+  refused requests still count; concurrent in-flight calls can overshoot by their number.
+- Drops `laai_session_owner_revision` (revision in an index made every write non-HOT) and the
+  unused `laai_events_unconsumed`; adds `laai_sessions_user_expiry (user_id, expires_at)` for
+  preference saves and Auth-user cascades.
+- Adds `laai_purge_expired()` and schedules it daily (03:17 UTC) if pg_cron is installed.
 
 ## Contract tables → Supabase
 
@@ -30,11 +42,19 @@ in the Supabase SQL editor, then run `python check_supabase.py` in `services/orc
 | `idempotency_keys` | `laai_idempotency_keys` | Unique `(session_id, request_id, operation)`; stores request + response. |
 | `user_preferences` | `laai_user_preferences` | Plus `notes` (≤10,000 chars, never sent to models). |
 
-The contract's indexes all exist (session+revision, actions session+page+status, events cursor,
-idempotency composite). Every query is scoped to the verified user. Direct client access is
-revoked; only the service role can call the functions. Retention: expired sessions are kept 30
-days and then removed by `laai_purge_expired_sessions()` (schedule it with Supabase Cron).
-Deleting an Auth user cascades all their data.
+The contract's indexes exist (actions session+page+status, events cursor, idempotency
+composite). Its session+revision index is served by the primary key (sessions are always looked
+up by id, and revision is read from that row); 005 drops the extra `(user_id, id, revision)` index
+because it made every revision bump a non-HOT update. Every query is scoped to the verified user. Direct client access is
+revoked; only the service role can call the functions. Deleting an Auth user cascades all their data.
+
+Retention (from 005): `laai_purge_expired()` removes sessions expired over 30 days (and their
+pages, actions, events and idempotency keys) plus dashboard `laai_contexts`/`laai_tasks` created
+over 30 days ago, and returns `{sessions, contexts, tasks}` counts. If the pg_cron extension is
+installed when 005 is applied, it is scheduled as job `laai-purge-expired`; otherwise nothing is
+scheduled. To schedule it later, enable pg_cron (Database → Extensions) and run
+`select cron.schedule('laai-purge-expired', '17 3 * * *', 'select public.laai_purge_expired()');`,
+or run `select public.laai_purge_expired();` by hand in the SQL editor.
 
 ## Glasses team: repository adapter
 
@@ -127,5 +147,7 @@ curl -s -X POST localhost:8001/v1/sessions -H 'Authorization: Bearer demo-web'
 ## Tests
 
 - `cd supabase/tests && npm test`: runs the real migration SQL in embedded Postgres (PGlite).
+  Every behavior suite runs twice, against the live schema (001-004) and with 005 on top;
+  `workflow_perf.test.mjs` covers what 005 changes. Shared setup is in `tests/helpers.mjs`.
 - `cd services/orchestrator && uv run pytest -q`: API, roles, error envelope, demo auth.
 - `cd services/agents && uv run pytest -q`: executor journal, retries, invalidated approvals.

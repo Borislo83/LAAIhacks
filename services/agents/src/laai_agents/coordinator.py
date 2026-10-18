@@ -4,19 +4,12 @@ import asyncio
 import os
 import re
 import time
-from datetime import UTC, datetime
 
-from uagents import Context, Protocol
-from uagents_core.contrib.protocols.chat import (
-    ChatAcknowledgement,
-    ChatMessage,
-    TextContent,
-    chat_protocol_spec,
-)
+from uagents import Context
 
 from . import catalog, llm
 from .agents import make_agent
-from .chat import text_message
+from .chat import build_chat_protocol
 from .models import (
     AlternativesRequest,
     AlternativesResponse,
@@ -30,9 +23,11 @@ from .models import (
 )
 from .progress import ProgressBatch, ProgressQuery, publish, read
 
-
 ATTEMPTS = 3
 RETRY_DELAY = 1.0
+# Alternatives searches and price-checks up to three candidates, so it gets longer.
+TIMEOUTS = {"laai-alternatives": 90}
+DEFAULT_TIMEOUT = 45
 
 
 BUDGET = re.compile(
@@ -67,6 +62,12 @@ def budget_from(text: str) -> float | None:
 
 
 async def parse_request(text: str) -> ConsiderRequest | None:
+    if re.fullmatch(
+        r"(?:consider\s+)?(?:this|that)(?:\s+product)?[.!?]?",
+        text.strip(),
+        re.IGNORECASE,
+    ):
+        return None
     known = catalog.find_product(text)
     if known:
         product = known.name
@@ -75,12 +76,6 @@ async def parse_request(text: str) -> ConsiderRequest | None:
     else:
         # No LLM: "Are there Sony headphones under 300 dollars?" -> "Sony headphones".
         product = search_phrase(text) or text
-    if re.fullmatch(
-        r"(?:consider\s+)?(?:this|that)(?:\s+product)?[.!?]?",
-        text.strip(),
-        re.IGNORECASE,
-    ):
-        return None
     return ConsiderRequest(product=product[:500], max_price=budget_from(text))
 
 
@@ -208,7 +203,8 @@ async def consider(
             req.progress_id, field, "delegated", "Coordinator sent work to specialist"
         )
         result = None
-        # Retry an unreachable specialist or a failed search; keep the last answer.
+        # Retry only when no answer arrived. An answer carrying an error (search
+        # unavailable) is final: asking again would just repeat the heavy work.
         for attempt in range(ATTEMPTS):
             if attempt:
                 publish(
@@ -223,14 +219,13 @@ async def consider(
                     addresses[name],
                     request,
                     response_type,
-                    timeout=45,
+                    timeout=TIMEOUTS.get(name, DEFAULT_TIMEOUT),
                 )
             except Exception:  # noqa: BLE001 -- isolate a failed specialist from the remaining work
                 answer = None
             if isinstance(answer, response_type):
                 result = answer
-                if not answer.error:
-                    break
+                break
         return field, result, round((time.perf_counter() - started) * 1000)
 
     async def alternatives_then_reviews():
@@ -299,40 +294,19 @@ def build_coordinator(addresses: dict[str, str]):
         "focal-shopping-assistant",
         os.getenv("COORDINATOR_AGENT_SEED", "laai coordinator dev seed"),
     )
-    proto = Protocol(spec=chat_protocol_spec)
 
-    @proto.on_message(ChatMessage)
-    async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
-        await ctx.send(
-            sender,
-            ChatAcknowledgement(
-                timestamp=datetime.now(UTC),
-                acknowledged_msg_id=msg.msg_id,
-            ),
-        )
-        text = " ".join(
-            c.text for c in msg.content if isinstance(c, TextContent)
-        ).strip()
-        if not text:
-            return
+    async def answer(ctx: Context, text: str) -> str:
         req = await parse_request(text)
         if req is None:
-            answer = (
-                "Which product should I consider? Include its name and optional budget."
-            )
-        else:
-            result = await consider(ctx, addresses, req)
-            answer = result.summary
-            for section in (result.price, result.reviews, result.alternatives):
-                if section:
-                    answer += "\n" + "\n".join(
-                        f"{s.title}: {s.url}" for s in section.sources[:3]
-                    )
-        await ctx.send(sender, text_message(answer))
-
-    @proto.on_message(ChatAcknowledgement)
-    async def on_ack(ctx: Context, sender: str, msg: ChatAcknowledgement):
-        pass
+            return "Which product should I consider? Include its name and optional budget."
+        result = await consider(ctx, addresses, req)
+        reply = result.summary
+        for section in (result.price, result.reviews, result.alternatives):
+            if section:
+                reply += "\n" + "\n".join(
+                    f"{s.title}: {s.url}" for s in section.sources[:3]
+                )
+        return reply
 
     @agent.on_rest_post("/consider", ConsiderRequest, ConsiderResponse)
     async def on_rest(ctx: Context, req: ConsiderRequest) -> ConsiderResponse:
@@ -353,5 +327,5 @@ def build_coordinator(addresses: dict[str, str]):
     async def progress(ctx: Context, req: ProgressQuery) -> ProgressBatch:
         return ProgressBatch(events=read(req.progress_id, req.after))
 
-    agent.include(proto, publish_manifest=True)
+    agent.include(build_chat_protocol(answer, extract_product=False), publish_manifest=True)
     return agent

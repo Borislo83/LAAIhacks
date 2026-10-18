@@ -3,6 +3,16 @@
 import os
 
 from . import catalog, llm
+from .models import (
+    Alternative,
+    AlternativesRequest,
+    AlternativesResponse,
+    Offer,
+    PriceCompareRequest,
+    PriceCompareResponse,
+    ReviewsRequest,
+    ReviewsResponse,
+)
 from .progress import tracked
 from .search import SearchUnavailable
 
@@ -14,16 +24,14 @@ def demo_mode() -> bool:
     return mode == "demo"
 
 
-from .models import (
-    Alternative,
-    AlternativesRequest,
-    AlternativesResponse,
-    Offer,
-    PriceCompareRequest,
-    PriceCompareResponse,
-    ReviewsRequest,
-    ReviewsResponse,
-)
+async def _live(name: str, req, unavailable):
+    """Run live.<name>; if search is down, say so instead of substituting catalog data."""
+    from . import live
+
+    try:
+        return await getattr(live, name)(req)
+    except SearchUnavailable:
+        return unavailable
 
 
 def _not_found(product: str) -> str:
@@ -33,19 +41,18 @@ def _not_found(product: str) -> str:
 @tracked("price")
 async def compare_prices(req: PriceCompareRequest) -> PriceCompareResponse:
     if not demo_mode():
-        from .live import compare
-
-        try:
-            return await compare(req)
-        except SearchUnavailable:
-            return PriceCompareResponse(
+        return await _live(
+            "compare",
+            req,
+            PriceCompareResponse(
                 product=req.product,
                 offers=[],
                 data_source="unavailable",
                 notice=None,
                 error="Live price search unavailable",
                 summary="Live price search unavailable; no prices were substituted.",
-            )
+            ),
+        )
     product = catalog.find_product(req.product)
     if product is None:
         return PriceCompareResponse(
@@ -84,19 +91,18 @@ async def compare_prices(req: PriceCompareRequest) -> PriceCompareResponse:
 @tracked("alternatives")
 async def find_alternatives(req: AlternativesRequest) -> AlternativesResponse:
     if not demo_mode():
-        from .live import alternatives
-
-        try:
-            return await alternatives(req)
-        except SearchUnavailable:
-            return AlternativesResponse(
+        return await _live(
+            "alternatives",
+            req,
+            AlternativesResponse(
                 product=req.product,
                 alternatives=[],
                 data_source="unavailable",
                 notice=None,
                 error="Live alternative search unavailable",
                 summary="Live alternative search unavailable; no recommendation was fabricated.",
-            )
+            ),
+        )
     product = catalog.find_product(req.product)
     if product is None:
         return AlternativesResponse(
@@ -135,18 +141,17 @@ async def find_alternatives(req: AlternativesRequest) -> AlternativesResponse:
 @tracked("reviews")
 async def get_reviews(req: ReviewsRequest) -> ReviewsResponse:
     if not demo_mode():
-        from .live import reviews
-
-        try:
-            return await reviews(req)
-        except SearchUnavailable:
-            return ReviewsResponse(
+        return await _live(
+            "reviews",
+            req,
+            ReviewsResponse(
                 product=req.product,
                 data_source="unavailable",
                 notice=None,
                 error="Live review search unavailable",
                 summary="Live review search unavailable; no ratings were substituted.",
-            )
+            ),
+        )
     product = catalog.find_product(req.product)
     if product is None:
         return ReviewsResponse(product=req.product, summary=_not_found(req.product))

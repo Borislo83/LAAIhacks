@@ -55,18 +55,26 @@ class Page:
     def locator(self, selector):
         return Locator(self, selector)
 
+    def is_closed(self):
+        return False
+
     async def wait_for_selector(self, *_, **__):
         pass
 
 
 def browser_fixture(monkeypatch, page):
+    opened = []
+
     async def new_page():
+        opened.append(page)
         return page
 
     monkeypatch.setattr(amazon_cart, "_playwright", object())
+    monkeypatch.setattr(amazon_cart, "_page", None)
     monkeypatch.setattr(
         amazon_cart, "_browser", SimpleNamespace(pages=[page], new_page=new_page)
     )
+    return opened
 
 
 async def test_adds_only_exact_asin_and_stops_in_verified_cart(monkeypatch):
@@ -118,3 +126,11 @@ async def test_amazon_duplicate_asin_fields_and_ubb_add_button(monkeypatch):
     browser_fixture(monkeypatch, page)
     assert (await amazon_cart.add_to_cart(URL, 1))["status"] == "cart_added"
     assert page.clicks == ["#add-to-cart-button-ubb:visible"]
+
+
+async def test_repeated_approvals_reuse_one_tab(monkeypatch):
+    page = Page(added=True)
+    opened = browser_fixture(monkeypatch, page)
+    for _ in range(3):
+        assert (await amazon_cart.add_to_cart(URL, 1))["status"] == "cart_added"
+    assert len(opened) == 1

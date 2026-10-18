@@ -1,6 +1,7 @@
 """Relay real per-request agent events; final JSON endpoints remain compatible."""
 
 import asyncio
+import json
 from contextlib import suppress
 from uuid import uuid4
 
@@ -35,7 +36,9 @@ async def agent_request(route, payload, config, http, emit=None, timeout=120):
     try:
         while not task.done():
             await asyncio.wait({task}, timeout=0.4)
-            await drain()
+            if not task.done():
+                await drain()
+        await drain()  # Events emitted just before the response, even during the last poll.
         return await task
     finally:
         if not task.done():
@@ -57,8 +60,6 @@ async def event_stream(work):
             )
         finally:
             queue.put_nowait(None)
-
-    import json
 
     task = asyncio.create_task(run())
     try:
