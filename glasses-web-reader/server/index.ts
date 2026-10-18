@@ -22,7 +22,7 @@ import { findPage } from './search'
 // site (news, shop, software, forum, live info, reference). The reply is
 // NDJSON (CondenseEvent per line) so screens reach the glasses as they're built.
 
-const PORT = Number(process.env.PORT ?? 8787)
+const PORT = Number(process.env.CONDENSE_PORT ?? process.env.PORT ?? 8787)
 const CACHE_TTL_MS = 10 * 60_000
 const CACHE_MAX = 100
 // Below this the fast path probably hit a bot check or a JS-only shell.

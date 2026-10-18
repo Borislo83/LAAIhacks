@@ -46,7 +46,28 @@
         "run",
         "server"
       ],
-      "port": 8787
+      "port": 8787,
+      "env": {
+        "ORCHESTRATOR_ALLOWED_ORIGINS": "http://localhost:5180,http://127.0.0.1:5180"
+      },
+      "autoPort": false
+    },
+    {
+      "name": "glasses-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "glasses-web-reader",
+        "run",
+        "dev"
+      ],
+      "env": {
+        "VITE_PORT": "5180",
+        "ORCHESTRATOR_ALLOWED_ORIGINS": "http://localhost:5180,http://127.0.0.1:5180",
+        "CONDENSE_PORT": "8797"
+      },
+      "port": 5180,
+      "autoPort": false
     }
   ]
 }

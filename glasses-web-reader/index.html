@@ -4,13 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
     <title>Web Reader</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500&family=Instrument+Serif&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" />
     <style>
       html, body {
         margin: 0;
         height: 100%;
-        /* ER brand dark-theme surface (#232323) + Neutral-200 text (#E5E5E5). */
-        background: #232323;
-        color: #E5E5E5;
+        /* Focal blueprint sheet and ink (see src/companion.ts). */
+        background: #23272b;
+        color: #e8ebe4;
         font: 14px/1.4 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
         /* Kill WebView zoom + iOS auto-sizing + rubber-band scroll. */
         touch-action: manipulation;
