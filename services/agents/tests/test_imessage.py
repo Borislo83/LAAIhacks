@@ -20,6 +20,7 @@ def setup(monkeypatch):
     )
     monkeypatch.setenv("IMESSAGE_EXECUTOR_TOKEN", TOKEN)
     monkeypatch.setenv("IMESSAGE_DRY_RUN", "0")  # dry-run tests switch it back on
+    monkeypatch.delenv("IMESSAGE_DELIVERY", raising=False)  # link tests set it themselves
     monkeypatch.setattr(imessage, "dry_run_log", imessage.deque(maxlen=20))
     monkeypatch.delenv("ASI_ONE_API_KEY", raising=False)
     monkeypatch.setattr(imessage.sys, "platform", "darwin")
@@ -80,14 +81,14 @@ async def test_llm_extraction_is_used_when_available(monkeypatch):
 
     monkeypatch.setattr(imessage.llm, "complete", complete)
     result = await draft("could you let Sam know I'll see them soon")
-    assert (result.status, result.recipient_name, result.text) == ("ready", "Sam", "see you soon")
+    assert (result.status, result.recipient_name, result.text) == ("ready", "Sam", "See you soon.")
 
 
 async def test_prepare_returns_a_masked_draft_and_never_sends(setup):
     result = await draft()
     assert result.status == "ready" and result.draft_id
     assert (result.recipient_name, result.recipient_masked) == ("Alex", "+1•••••4567")
-    assert result.text == "running late, be there at 7" and result.expires_at
+    assert result.text == "Running late, be there at 7." and result.expires_at
     assert "+15551234567" not in result.json()
     assert setup == []
 
@@ -138,9 +139,9 @@ async def test_expired_draft_and_changed_text_are_refused(setup, monkeypatch):
 
 
 async def test_injection_text_only_ever_travels_as_argv(setup):
-    hostile = 'hi"; do shell script "rm -rf ~" --'
+    hostile = 'Hi"; do shell script "rm -rf ~" --'
     result = await draft(f"text Alex {hostile}")
-    assert result.text == hostile
+    assert result.text == hostile  # already capitalized and ending in punctuation
     assert (await send(result)).status == "sent"
     [argv] = setup
     assert argv == ["osascript", "-e", imessage.SEND_SCRIPT, "+15551234567", hostile]
@@ -216,7 +217,7 @@ async def test_rest_routes(setup):
     assert result.status == "ready"
     response = await send_route(
         None,
-        MessageSendRequest(draft_id=result.draft_id, text="hi", executor_token=TOKEN),
+        MessageSendRequest(draft_id=result.draft_id, text=result.text, executor_token=TOKEN),
     )
     assert response.status == "sent" and setup[0][3] == "sam@icloud.com"
 
@@ -235,7 +236,7 @@ def test_dry_run_is_on_unless_explicitly_disabled(monkeypatch):
 async def test_dry_run_records_the_exact_call_and_never_executes(setup, monkeypatch):
     monkeypatch.delenv("IMESSAGE_DRY_RUN")
     monkeypatch.setattr(imessage.sys, "platform", "linux")  # works anywhere
-    hostile = 'hi"; do shell script "rm -rf ~"'
+    hostile = 'Hi"; do shell script "rm -rf ~"'
     result = await draft(f"text Alex {hostile}")
     response = await send(result)
     assert (response.status, response.dry_run) == ("sent", True)
@@ -276,8 +277,47 @@ async def test_dry_run_log_route_masks_handles_and_needs_the_token(setup, monkey
     assert denied.error and not denied.calls
     log = await route(None, imessage.DryRunLogRequest(executor_token=TOKEN))
     [call] = log.calls
-    assert call["argv"][3] == "+1•••••4567" and call["text"] == "see you at 7"
+    assert call["argv"][3] == "+1•••••4567" and call["text"] == "See you at 7."
     assert "5551234567" not in log.json()
     monkeypatch.setenv("IMESSAGE_DRY_RUN", "0")
     off = await route(None, imessage.DryRunLogRequest(executor_token=TOKEN))
     assert off.error and not off.calls
+
+
+async def test_contact_without_text_asks_what_to_say(monkeypatch):
+    from laai_agents import imessage
+
+    monkeypatch.setenv("IMESSAGE_CONTACTS", "Jonathan=+12137930070")
+
+    async def no_llm(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(imessage.llm, "complete", no_llm)
+    reply = await imessage.prepare(imessage.MessageDraftRequest(request="Hey send a message to Jonathan"))
+    assert reply.status == "needs_message" and reply.draft_id is None
+    assert reply.summary == "What would you like to say to Jonathan?"
+    draft = await imessage.prepare(
+        imessage.MessageDraftRequest(request="text Jonathan running 10 minutes late")
+    )
+    assert draft.status == "ready" and draft.text == "Running 10 minutes late."
+
+
+async def test_link_delivery_returns_messages_link_once(monkeypatch):
+    from laai_agents import imessage
+
+    monkeypatch.setenv("IMESSAGE_CONTACTS", "Jonathan=+12137930070")
+    monkeypatch.setenv("IMESSAGE_EXECUTOR_TOKEN", "t" * 32)
+    monkeypatch.setenv("IMESSAGE_DELIVERY", "link")
+
+    async def no_llm(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(imessage.llm, "complete", no_llm)
+    draft = await imessage.prepare(imessage.MessageDraftRequest(request="text Jonathan see you at 7"))
+    send = imessage.MessageSendRequest(draft_id=draft.draft_id, text=draft.text, executor_token="t" * 32)
+    first = await imessage.send(send)
+    assert first.status == "open_link"
+    assert first.open_url == "sms:+12137930070?&body=See%20you%20at%207."
+    assert (await imessage.send(send)).status == "failed"  # single use
+    wrong = imessage.MessageSendRequest(draft_id=draft.draft_id, text=draft.text, executor_token="x" * 32)
+    assert (await imessage.send(wrong)).status == "failed"

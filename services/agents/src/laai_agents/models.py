@@ -29,6 +29,10 @@ class Offer(Model):
     source: str = "structured"
     # high: trusted store + page evidence; medium: one of the two; low: neither.
     trust: str = "high"
+    # Store listings (Best Buy API, SerpApi) carry these; web evidence does not.
+    cart_url: str | None = None
+    rating: float | None = None
+    review_count: int | None = None
 
 
 class PriceCompareRequest(Model):
@@ -36,6 +40,7 @@ class PriceCompareRequest(Model):
     progress_id: str | None = Field(default=None, min_length=32, max_length=64)
     current_store: str | None = None
     current_price: float | None = None
+    max_price: float | None = None
     # Also run the store-focused search, e.g. when the verifier rejected every lead.
     deep: bool = False
 
@@ -61,6 +66,9 @@ class Alternative(Model):
     rating: float | None = None
     url: str
     reason: str
+    store: str | None = None
+    # Official add-to-cart link, only for Amazon and Best Buy listings.
+    cart_url: str | None = None
 
 
 class AlternativesResponse(EvidenceResponse):
@@ -98,6 +106,33 @@ class ConsiderRequest(Model):
     max_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
+class Pick(Model):
+    """One of the three recommendations: best price, alternative, recommended."""
+
+    label: str
+    product: str
+    price: float | None = None
+    store: str | None = None
+    url: str
+    cart_url: str | None = None
+    rating: float | None = None
+    reason: str
+
+
+class CartRequest(Model):
+    product_id: str = Field(min_length=1, max_length=20)  # Amazon ASIN or Best Buy SKU
+    quantity: int = Field(default=1, ge=1, le=10)
+
+
+class CartLink(Model):
+    store: str
+    product_id: str
+    quantity: int
+    cart_url: str | None = None
+    error: str | None = None
+    summary: str
+
+
 class ConsiderResponse(Model):
     product: str
     max_price: float | None = None
@@ -106,6 +141,7 @@ class ConsiderResponse(Model):
     alternatives: AlternativesResponse | None = None
     # Reviews for the top alternative, so the two products can be compared.
     alternative_reviews: ReviewsResponse | None = None
+    picks: list[Pick] = Field(default_factory=list)
     # The verifier agent's audit of the price offers, when a verifier is available.
     verification: dict | None = None
     errors: dict[str, str] = Field(default_factory=dict)
