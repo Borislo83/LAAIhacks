@@ -144,7 +144,7 @@ section:first-child{min-height:100vh}
     <div class="copy">
       <p class="sheetno">The approval gate</p>
       <h2>Nothing happens without your OK.</h2>
-      <p>Ask Focal to add something to your Amazon cart and it shows you the exact listing first. You approve, it adds it and checks it's there. It has no way to check out. Messages to friends work the same way: you see the draft, you send it.</p>
+      <p>Ask Focal to add something to your Amazon cart and it shows you the exact listing first. You approve, it adds it and checks it's there. Checkout works the same way: Focal asks, you approve, and payment runs through Stripe on Fetch.ai's Payment Protocol. Messages to friends too: you see the draft, you send it.</p>
     </div>
   </section>
   <section data-sheet="7">
@@ -299,7 +299,11 @@ const P = {
   msg:     new THREE.Vector3(2.4,0,3.7),
   gate:    new THREE.Vector3(-1.0,0,6.6),
   cart:    new THREE.Vector3(0.8,0,6.6),
-  stop:    new THREE.Vector3(2.9,0,6.6),
+  checkout: new THREE.Vector3(-1.6,0,9.4),
+  // the stores the price and alternatives agents read, outside the Agentverse
+  bestbuy: new THREE.Vector3(8.0,0,-2.8),
+  amazon:  new THREE.Vector3(8.0,0,-0.6),
+  others:  new THREE.Vector3(8.0,0,1.6),
   studio:  new THREE.Vector3(-7.0,0,4.8),
 };
 const N = {};
@@ -336,13 +340,14 @@ gate.add(lineObj([...boxEdges(0.08,0.9,0.08).map(p=>p.add(new THREE.Vector3(0,0.
 const bar = new THREE.Group(); bar.position.set(0,0.6,-0.45);
 bar.add(lineObj(boxEdges(0.06,0.06,0.92).map(p=>p.add(new THREE.Vector3(0,0,0.46)))));
 gate.add(bar); track(gate, 5);
-// checkout: a wall Focal never crosses
-{
-  const s=P.stop, segs=[];
-  segs.push(...loop([new THREE.Vector3(s.x,0,s.z-0.7),new THREE.Vector3(s.x,1.1,s.z-0.7),new THREE.Vector3(s.x,1.1,s.z+0.7),new THREE.Vector3(s.x,0,s.z+0.7)]));
-  segs.push(new THREE.Vector3(s.x,0,s.z-0.7),new THREE.Vector3(s.x,1.1,s.z+0.7), new THREE.Vector3(s.x,1.1,s.z-0.7),new THREE.Vector3(s.x,0,s.z+0.7));
-  N.stop = track(lineObj(segs, MUTED, .9), 5.15);
-}
+// checkout: a real path, reached only through the approval gate
+N.checkout = node(P.checkout, 1.1, 0.6, 0.9, 5.12);
+// stores: one box each for Best Buy and Amazon, a stack for every other retailer
+N.bestbuy = node(P.bestbuy, 1.0, 0.55, 0.8, 4.0);
+N.amazon = node(P.amazon, 1.0, 0.55, 0.8, 4.03);
+N.others = node(P.others, 1.0, 0.55, 0.8, 4.06);
+node(P.others.clone().add(new THREE.Vector3(0.12,0.1,-0.12)), 1.0, 0.55, 0.8, 4.08, MUTED, .6);
+node(P.others.clone().add(new THREE.Vector3(0.24,0.2,-0.24)), 1.0, 0.55, 0.8, 4.1, MUTED, .35);
 // Studio: a panel with a priority slider
 const studio = new THREE.Group(); studio.position.copy(P.studio);
 {
@@ -375,6 +380,12 @@ const W = {
   msg:     wire(P.coord, P.msg, 3.18, .25, MUTED),
   gate:    wire(P.orch, P.gate, 5),
   cart:    wire(P.gate, P.cart, 5.08),
+  checkout: wire(P.gate, P.checkout, 5.12),
+  pBestbuy: wire(P.price, P.bestbuy, 4.0, .25),
+  pAmazon:  wire(P.price, P.amazon, 4.03, .25),
+  pOthers:  wire(P.price, P.others, 4.06, .25),
+  aAmazon:  wire(P.alts, P.amazon, 4.05, .2),
+  aOthers:  wire(P.alts, P.others, 4.08, .2),
   studio:  wire(P.studio, P.memory, 6),
 };
 // once its sheet is reached an object draws itself over DRAW seconds, so nothing is left half-drawn
@@ -393,9 +404,12 @@ packets(W.down, 2, {dir:1});
 packets(W.memory, 1, {dir:1, speed:.5});
 packets(W.coord, 2, {dir:1});
 for(const k of ["price","alts","reviews"]) packets(W[k], 1, {dir:1, sync:true});
-for(const k of ["price","alts","reviews"]) packets(W[k], 1, {stage:[4], dir:-1, sync:true, source:true});
+packets(W.reviews, 1, {stage:[4], dir:-1, sync:true, source:true});
+// prices come back from every store at once
+for(const k of ["pBestbuy","pAmazon","pOthers","aAmazon","aOthers"]) packets(W[k], 1, {stage:[4], dir:-1, sync:true, source:true});
 packets(W.gate, 1, {dir:1, gated:true});
 packets(W.cart, 1, {dir:1, afterGate:true});
+packets(W.checkout, 1, {dir:1, afterGate:true});
 packets(W.studio, 2, {dir:1, speed:.6});
 
 /* ---------- labels ---------- */
@@ -428,12 +442,13 @@ const L = {
   reviews:  label("Reviews", "", above(P.reviews, 0.95), 3.2),
   youtube:  label("YouTube finder", "on request", above(P.youtube, 0.8), 3.28),
   msg:      label("Messenger", "drafts, you send", above(P.msg, 0.8), 3.32),
-  bestbuy:  label("bestbuy.com", "high trust, read from the page", P.price.clone().add(new THREE.Vector3(0.75,0.3,0)), 4.05, 99, "lead live"),
-  amazon:   label("amazon.com", "high trust", P.alts.clone().add(new THREE.Vector3(0.75,0.3,0)), 4.1, 99, "lead live"),
+  bestbuy:  label("Best Buy", "high trust, read from the page", P.bestbuy.clone().add(new THREE.Vector3(0.7,0.3,0)), 4.05, 99, "lead live"),
+  amazon:   label("Amazon", "high trust", P.amazon.clone().add(new THREE.Vector3(0.7,0.3,0)), 4.1, 99, "lead live"),
+  others:   label("Other retailers", "Walmart, Target, Costco and more", P.others.clone().add(new THREE.Vector3(0.95,0.4,0)), 4.15, 99, "lead live"),
   reviewers: label("Reviewer sources", "pros and cons cited", P.reviews.clone().add(new THREE.Vector3(0.75,0.3,0)), 4.15, 99, "lead live"),
   approval: label("Your approval", "the exact listing or message", above(P.gate, 1.75), 5.05),
   cart:     label("Amazon cart", "adds, then verifies", above(P.cart, 0.95), 5.15),
-  checkout: label("Checkout", "no code path", above(P.stop, 1.45), 5.25),
+  checkout: label("Checkout", "Stripe, via Fetch.ai Payment Protocol", above(P.checkout, 0.95), 5.2),
   studio:   label("Focal Studio", "price, balanced or quality", above(P.studio, 0.45), 6.1),
 };
 
@@ -445,9 +460,9 @@ const K = [
   {az:-0.14, el:0.12, focus:[g(-0.2,-0.55,0.05), g(1.66,0.55,0.05), L.display, L.touch, L.lens]},
   {az:-0.4, el:0.45, focus:[glasses, W.down.line, N.orch, N.memory, N.discs, L.orch, L.memory]},
   {az:-0.4, el:0.6, focus:[N.floor, N.coord, N.price, N.alts, N.reviews, N.youtube, N.msg, L.coord, L.price, L.alts, L.reviews, L.youtube, L.msg]},
-  {az:-0.4, el:0.66, focus:[N.coord, N.price, N.alts, N.reviews, L.coord, L.bestbuy, L.amazon, L.reviewers]},
-  {az:-0.4, el:0.5, focus:[N.orch, gate, N.cart, N.stop, L.approval, L.cart, L.checkout]},
-  {az:-0.4, el:0.58, focus:[glasses, N.memory, N.floor, gate, N.stop, studio, L.orch, L.studio]},
+  {az:-0.4, el:0.66, focus:[N.price, N.alts, N.reviews, N.bestbuy, N.amazon, N.others, L.bestbuy, L.amazon, L.others, L.reviewers]},
+  {az:-0.4, el:0.5, focus:[N.orch, gate, N.cart, N.checkout, L.approval, L.cart, L.checkout]},
+  {az:-0.4, el:0.58, focus:[glasses, N.memory, N.floor, gate, N.checkout, N.others, studio, L.orch, L.studio]},
 ];
 const HOLD = 0.6;   // the camera holds each sheet's framing for this much of its scroll, then moves on
 const ease = x => x<.5 ? 4*x*x*x : 1-Math.pow(-2*x+2,3)/2;
