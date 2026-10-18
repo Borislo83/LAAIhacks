@@ -22,6 +22,11 @@ import {
 import { mountCompanion, type Companion, type HeardLine, type VoiceUi } from './companion'
 import { clockFrame, loadingSpec, spinnerFrame, SPIN_MS } from './loading'
 import { VoiceRecorder, WakeListener, concat } from './voice'
+import { BackendClient } from './lensos/client'
+import { BackendSession, type ActionGroup } from './lensos/session'
+import { apiActionCards } from './lensos/action-cards'
+import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
+import type { RecommendationBatch } from '../shared/recommendations'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
 // Status:  body 0..252 (9 lines at 27px)  +  footer 252..288 (1 line)
@@ -38,6 +43,9 @@ const IMAGE_TIMEOUT_MS = 10_000
 const STATE_KEY = 'webreader.v2.state'
 const RECENT_KEY = 'webreader.v1.recent'
 const MANGA_STYLE_KEY = 'webreader.v1.mangaStyle'
+// Start with the chosen bottom strip, replacing preferences from the layout trial.
+const RECOMMENDATION_LAYOUT_KEY = 'webreader.v2.recommendationLayout'
+const SESSION_KEY = 'webreader.lensos.session'
 const HANDS_FREE_KEY = 'webreader.v1.handsFree'
 /** Must match the server's WAKE_NAME. Not "Hey Even": that wakes the system assistant. */
 const WAKE_PHRASE = 'Hey Search'
@@ -46,7 +54,9 @@ const ASSISTANT = 'Search'
 const MAX_RECENT = 15
 const MAX_HISTORY = 10
 
-type View = 'reader' | 'deck' | 'manga' | 'menu' | 'contents' | 'links' | 'recent' | 'voice'
+type View =
+  | 'reader' | 'deck' | 'manga' | 'menu' | 'contents' | 'links' | 'recent'
+  | 'actions' | 'recommendations' | 'recommendation-layout' | 'voice'
 interface Recent {
   url: string
   title: string
@@ -115,6 +125,8 @@ let renderSeq = 0
 let mirror: PageSpec = { texts: [], images: [] }
 /** Container ID of the shown deck screen's first text box (1 when it has no capture layer). */
 let deckTextId = 2
+let savedSession = ''
+let savedSessionUrl = ''
 /** Set while the glasses mic is capturing a voice command. */
 let recorder: VoiceRecorder | null = null
 /** Set while hands-free is waiting for the wake phrase (and no command is being captured). */
@@ -132,6 +144,29 @@ const wakeChecks = new WeakMap<
   Uint8Array[],
   { result: Promise<VoiceCommand | null>; bytes: number; line?: HeardLine }
 >()
+let glassRecommendations: RecommendationBatch | undefined
+let recommendationsOpen = false
+let recommendationLayout: RecommendationLayout = 'bottom'
+let recommendationIndex = 0
+let recommendationSelected = false
+let recommendationBase: PageSpec | undefined
+let actionGroup: ActionGroup = 'tasks'
+const actionCards = new Map<ActionGroup, ReturnType<typeof apiActionCards>>()
+const backend = new BackendSession({
+  saveSession(id, pageUrl) {
+    savedSessionUrl = pageUrl ?? (id === savedSession ? savedSessionUrl : '')
+    savedSession = id
+    const value = JSON.stringify({ id, url: savedSessionUrl })
+    void enqueue(() => bridge.setLocalStorage(SESSION_KEY, value)).catch(console.error)
+  },
+  changed() {
+    for (const [group, cards] of actionCards) {
+      cards.show(backend.actionDisplay(group))
+      cards.setEnabled(backend.state.connected && backend.state.online)
+    }
+    companion.update()
+  },
+})
 
 const bridge = await waitForEvenAppBridge()
 
@@ -201,6 +236,7 @@ if (created !== 0) console.error('createStartUpPageContainer failed:', created)
 /** Shows the current page in whichever form it has: status text, deck or manga. */
 function showContent() {
   if (loading && !status) return renderLoading()
+  if (glassRecommendations && recommendationsOpen && !status) return renderGlassesRecommendations()
   if (!status && doc && isManga()) return showStrip(mangaPage, mangaStrip)
   if (!status && doc && isDeck()) return renderDeck()
   return renderReader()
@@ -452,9 +488,12 @@ async function flowRoll() {
 
 async function renderDeck() {
   view = 'deck'
+  return renderPageSpec(currentSpec())
+}
+
+async function renderPageSpec(spec: PageSpec) {
   onScreen = 'other'
   const seq = ++renderSeq
-  const spec = currentSpec()
   mirror = spec
   companion.update()
 
@@ -784,6 +823,12 @@ function goTo(index: number) {
 
 /** Swipe: through list items, then onto the next screen once you pass the last one. */
 function step(delta: 1 | -1) {
+  if (view === 'recommendations') {
+    recommendationIndex = recommendationCursor(recommendationIndex, delta)
+    void renderGlassesRecommendations()
+    return
+  }
+  if (view === 'actions') { actionCards.get(actionGroup)?.dispatch(delta > 0 ? 'down' : 'up'); return }
   if (loading && !status) return
   if (isManga() && !status) return mangaStep(delta)
   if (stepList(delta) || flowStep(delta)) return
@@ -792,6 +837,12 @@ function step(delta: 1 | -1) {
 
 /** Tap: open the selected list item, otherwise the menu. */
 function select() {
+  if (view === 'recommendations') {
+    if (recommendationIndex === 3) companion.closeRecommendations()
+    else companion.selectRecommendation(recommendationIndex)
+    return
+  }
+  if (view === 'actions') { actionCards.get(actionGroup)?.dispatch('tap'); return }
   const s = isDeck() && !status && !loading ? screens[screenIdx] : undefined
   if (s?.layout === 'list') {
     const url = s.items[selected.get(screenIdx) ?? 0]?.url
@@ -811,7 +862,10 @@ function openMenu() {
   if (loading && !status) {
     items.push({ label: `Keep loading ${loading.host}`, run: () => void showContent() })
   } else if (ready) {
+    if (glassRecommendations) items.push({ label: 'Recommendations (3)', run: () => { companion.reopenRecommendations() } })
     items.push({ label: 'Resume', run: () => void showContent() })
+    items.push({ label: `Recommendation layout: ${RECOMMENDATION_LAYOUTS.find(layout => layout.id === recommendationLayout)!.label}`,
+      run: openRecommendationLayouts })
     if (isManga()) items.push(...mangaMenuItems())
   } else {
     items.push({
@@ -847,6 +901,11 @@ function openMenu() {
   }
   if (ready && isManga() && position() > 0) items.push({ label: 'Back to first page', run: () => goTo(0) })
   if (recent.length) items.push({ label: `Recent pages (${recent.length})`, run: openRecent })
+  if (backend.state.connected) {
+    items.push({ label: `Saved suggestions (${backend.state.tasks.length})`, run: () => openActions('tasks') })
+    items.push({ label: `Session actions (${backend.state.display?.actions.length ?? 0})`, run: () => openActions('session') })
+    items.push({ label: 'Saved task history', run: () => openActions('history') })
+  }
   items.push({ label: 'Exit', run: () => void bridge.shutDownPageContainer(1) })
   renderList('menu', doc ? `Menu · ${doc.site}` : 'Menu', items).catch(console.error)
 }
@@ -855,6 +914,19 @@ function openContents() {
   if (!doc) return
   const items = screens.map((s, i) => ({ label: `${i + 1}. ${screenTitle(s)}`, run: () => goToScreen(i) }))
   renderList('contents', 'Contents', [back, ...items]).catch(console.error)
+}
+
+function openRecommendationLayouts() {
+  const items: MenuItem[] = RECOMMENDATION_LAYOUTS.map(layout => ({
+    label: `${layout.id === recommendationLayout ? '* ' : ''}${layout.label}`,
+    run: () => {
+      recommendationLayout = layout.id
+      void enqueue(() => bridge.setLocalStorage(RECOMMENDATION_LAYOUT_KEY, layout.id)).catch(console.error)
+      if (!companion.reopenRecommendations()) openMenu()
+    },
+  }))
+  items.push({ label: '< Back to menu', run: openMenu })
+  void renderList('recommendation-layout', 'Choose recommendation layout', items).catch(console.error)
 }
 
 function openLinks() {
@@ -1052,6 +1124,19 @@ function startVoice() {
   void capture([], false)
 }
 
+/** Tap on the voice card (or the phone's mic / Select): send what's been said, or listen again. */
+function toggleVoice() {
+  if (recorder) void stopVoice(true)
+  else startVoice()
+}
+
+/** Swipe on the voice card (or the phone's Back): cancel the capture, or leave the card. */
+function voiceBack() {
+  if (recorder) return void stopVoice(false)
+  voiceSeq++ // drops a search still in flight
+  void showContent()
+}
+
 async function capture(seed: Uint8Array[], fromWake: boolean) {
   const seq = ++voiceSeq
   const rec = (recorder = new VoiceRecorder(reason => void stopVoice(reason !== 'no-speech'), seed))
@@ -1132,7 +1217,8 @@ async function stopVoice(send: boolean) {
     voiceUi = { phase: 'done', text: command, url: page.url }
     logHeard({ text: page.url, opened: true })
     // Opens like a typed URL: the spinner carries on, then the page shows.
-    void load(page.url, 0, true)
+    // Recommendations don't pop up over a page the user just asked for by voice.
+    void load(page.url, 0, true, true)
   } catch (err) {
     if (seq !== voiceSeq) return
     const detail = err instanceof Error ? err.message : String(err)
@@ -1141,8 +1227,10 @@ async function stopVoice(send: boolean) {
 }
 
 // ── Loading ─────────────────────────────────────────────────────────────────
-async function load(url: string, restore = 0, pushHistory = false) {
+async function load(url: string, restore = 0, pushHistory = false, fromVoice = false) {
   const seq = ++loadSeq
+  companion.resetRecommendations()
+  backend.beginPage()
   loadAbort?.abort()
   const abort = (loadAbort = new AbortController())
   let host = url
@@ -1210,6 +1298,10 @@ async function load(url: string, restore = 0, pushHistory = false) {
       enterScreen(Math.max(0, Math.min(restore, screens.length - 1)))
     }
     scheduleSave()
+    if (doc) {
+      void backend.publish(doc)
+      if (!fromVoice) companion.recommend(doc)
+    }
   } catch (err) {
     if (seq !== loadSeq) return
     deckLoading = false
@@ -1249,9 +1341,17 @@ async function flushSave() {
 
 async function restore() {
   try {
+    const connection = (await enqueue(() => bridge.getLocalStorage(SESSION_KEY)).catch(() => '')) || ''
+    try {
+      const parsed = JSON.parse(connection)
+      if (typeof parsed?.id === 'string') savedSession = parsed.id
+      if (typeof parsed?.url === 'string') savedSessionUrl = parsed.url
+    } catch { savedSession = connection }
     recent = JSON.parse((await enqueue(() => bridge.getLocalStorage(RECENT_KEY))) || '[]')
     const saved = JSON.parse((await enqueue(() => bridge.getLocalStorage(STATE_KEY))) || 'null')
     if ((await enqueue(() => bridge.getLocalStorage(MANGA_STYLE_KEY)).catch(() => '')) === 'lines') mangaStyle = 'lines'
+    const savedLayout = await enqueue(() => bridge.getLocalStorage(RECOMMENDATION_LAYOUT_KEY)).catch(() => '')
+    if (RECOMMENDATION_LAYOUTS.some(layout => layout.id === savedLayout)) recommendationLayout = savedLayout as RecommendationLayout
     if ((await enqueue(() => bridge.getLocalStorage(HANDS_FREE_KEY)).catch(() => '')) === '0') handsFree = false
     void armWake()
     companion.update()
@@ -1292,11 +1392,14 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   const listType = eventTypeOf(event.listEvent)
 
   if ([sysType, textType, listType].includes(OsEventTypeList.DOUBLE_CLICK_EVENT)) {
+    if (view === 'recommendations') { companion.closeRecommendations(); return }
+    if (view === 'actions') { actionBack(); return }
     // Don't clean up here: the user may cancel the system dialog.
     bridge.shutDownPageContainer(1)
     return
   }
   if (sysType === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
+    backend.setSuspended(true)
     // The WebView may be suspended in the background; don't leave the mic on.
     void stopVoice(false)
     disarmWake()
@@ -1305,6 +1408,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
     return
   }
   if (sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
+    backend.setSuspended(false)
     void armWake()
     return
   }
@@ -1314,20 +1418,12 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   }
 
   if (view === 'voice') {
-    if (textType === OsEventTypeList.SCROLL_TOP_EVENT || textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
-      if (recorder) void stopVoice(false)
-      else {
-        voiceSeq++ // drops a search still in flight
-        void showContent()
-      }
-    } else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
-      if (recorder) void stopVoice(true)
-      else startVoice()
-    }
+    if (textType === OsEventTypeList.SCROLL_TOP_EVENT || textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) voiceBack()
+    else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) toggleVoice()
     return
   }
 
-  if (!isContentView()) {
+  if (!isContentView() && view !== 'actions' && view !== 'recommendations') {
     if (listType === OsEventTypeList.CLICK_EVENT) {
       const item = listItems[event.listEvent?.currentSelectItemIndex ?? 0]
       item?.run()
@@ -1343,9 +1439,11 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
 function cleanup() {
   if (cleanedUp) return
   cleanedUp = true
+  companion.resetRecommendations()
   if (micOn) void bridge.audioControl(false)
   void flushSave()
   unsubscribe()
+  backend.disconnect()
 }
 window.addEventListener('beforeunload', cleanup)
 
@@ -1368,18 +1466,130 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
   }),
   onLoad: url => void load(url),
   onStep: delta => {
-    if (!isContentView()) void showContent()
-    else step(delta)
+    if (view === 'voice') voiceBack()
+    else if (view === 'actions' || view === 'recommendations' || isContentView()) step(delta)
+    else void showContent()
   },
   onSelect: () => {
-    if (isContentView()) select()
+    if (view === 'voice') toggleVoice()
+    else if (isContentView() || view === 'actions' || view === 'recommendations') select()
   },
-  onVoice: () => {
-    if (recorder) void stopVoice(true)
-    else startVoice()
+  onBack: () => {
+    if (view === 'voice') voiceBack()
+    else if (view === 'recommendations') companion.closeRecommendations()
+    else if (view === 'actions') actionBack()
+    else void showContent()
   },
+  onVoice: toggleVoice,
   onHandsFree: setHandsFree,
+  recommendations: {
+    ready(batch) {
+      if (batch.page.url !== doc?.url || cleanedUp) return
+      glassRecommendations = batch
+      recommendationsOpen = true
+      recommendationIndex = 0
+      recommendationSelected = false
+      recommendationBase = undefined
+      if (isContentView() && !loading && !status) void renderGlassesRecommendations()
+    },
+    selected(selection) {
+      if (!glassRecommendations) return
+      recommendationIndex = glassRecommendations.actions.findIndex(action => action.id === selection.action.id)
+      recommendationSelected = true
+      if (view === 'recommendations') void renderGlassesRecommendations()
+    },
+    reset() { glassRecommendations = undefined; recommendationBase = undefined; recommendationsOpen = false },
+    closed() {
+      recommendationsOpen = false
+      recommendationBase = undefined
+      if (view === 'recommendations') void showContent()
+    },
+    opened() {
+      if (!glassRecommendations || glassRecommendations.page.url !== doc?.url || cleanedUp) return
+      recommendationsOpen = true
+      recommendationIndex = 0
+      recommendationBase = undefined
+      void renderGlassesRecommendations()
+    },
+  },
+  backend: {
+    state: () => backend.state,
+    connect: (token, g2Token) => { void connectBackend(token, g2Token) },
+    disconnect: () => { backend.disconnect(); actionCards.clear(); void showContent() },
+    save: p => { void backend.updatePreferences(p) },
+    review: openActions,
+    sync: () => { if (doc && !loading && !deckLoading) { backend.beginPage(); void backend.publish(doc) } },
+    back: () => { void showContent() },
+  },
 })
+
+async function renderGlassesRecommendations() {
+  if (!glassRecommendations) return
+  const alreadyVisible = view === 'recommendations'
+  recommendationBase ??= isDeck() ? currentSpec() : mirror
+  const spec = glassesRecommendationSpec(recommendationBase,
+    glassRecommendations.actions.map(action => action.title), recommendationIndex, recommendationSelected, recommendationLayout)
+  view = 'recommendations'
+  if (!alreadyVisible) return renderPageSpec(spec).catch(console.error)
+  // Swiping only updates the small text panel; do not resend images over BLE.
+  const previous = mirror
+  mirror = spec
+  companion.update()
+  for (const [index, box] of spec.texts.entries()) {
+    if (previous.texts[index]?.text === box.text) continue
+    const id = index + 2 // Full-screen capture is container 1.
+    await enqueue(() => bridge.textContainerUpgrade(new TextContainerUpgrade({
+      containerID: id, containerName: `t${id}`, content: box.text,
+    }))).catch(console.error)
+  }
+}
+
+async function connectBackend(token: string, g2Token: string) {
+  try {
+    actionCards.clear()
+    const api = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
+    const resumeId = savedSession, resumeUrl = savedSessionUrl
+    const restoreDisplay = !loading && !deckLoading && (!doc || doc.url === resumeUrl)
+    await backend.connect(new BackendClient(`${api}/api/backend`, token, g2Token), resumeId, restoreDisplay)
+    // A page PUT invalidates session actions, even for the same URL. Resume instead
+    // of submitting again when the device is showing this session's saved page.
+    if (backend.state.connected && doc && !loading && !deckLoading &&
+        (backend.state.sessionId !== resumeId || doc.url !== resumeUrl)) {
+      backend.beginPage(); void backend.publish(doc)
+    }
+  } catch (e) { backend.state.message = e instanceof Error ? e.message : 'Could not connect.'; companion.update() }
+}
+
+function openActions(group: ActionGroup) {
+  actionGroup = group
+  let cards = actionCards.get(group)
+  if (!cards) {
+    cards = apiActionCards(intent => {
+      void backend.decide(group, intent).then(result => cards!.finish(intent.request_id, result.outcome, result.message))
+    }, () => { if (view === 'actions' && actionGroup === group) void renderActions() })
+    actionCards.set(group, cards)
+  }
+  cards.show(backend.actionDisplay(group))
+  cards.setEnabled(backend.state.connected && backend.state.online)
+  view = 'actions'
+  cards.open()
+  void renderActions()
+}
+
+function actionBack() {
+  if (actionCards.get(actionGroup)?.dispatch('back') === 'exit') void showContent()
+}
+
+async function renderActions() {
+  const card = actionCards.get(actionGroup)?.view()
+  if (!card) return
+  view = 'actions'; onScreen = 'other'; renderSeq++
+  const body = [card.title, '', ...card.lines].join('\n')
+  mirror = readerSpec(body, card.hint); companion.update()
+  await enqueue(() => bridge.rebuildPageContainer(new RebuildPageContainer({
+    containerTotalNum: 2, textObject: readerContainers(body, card.hint),
+  }))).catch(console.error)
+}
 
 companion.update()
 void restore()

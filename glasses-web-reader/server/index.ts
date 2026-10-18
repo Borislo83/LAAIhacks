@@ -9,6 +9,8 @@ import { buildDeck } from './deck'
 import { renderPage } from './render'
 import { isMangaDex, mangaPage, mangaStrip, type MangaStyle } from './manga'
 import type { Extracted } from './extract'
+import { orchestratorGateway } from './orchestrator'
+import { recommendationRoutes } from './recommendations'
 import { parseWake, transcribe } from './voice'
 import { findPage } from './search'
 
@@ -138,6 +140,11 @@ function forWire({ images: _images, allLinks: _allLinks, products: _products, ..
 export const app = new Hono()
 
 app.use('/api/*', cors({ origin: process.env.CORS_ORIGIN ?? '*' }))
+app.route('/api/recommendations', recommendationRoutes())
+app.route('/api/backend', orchestratorGateway({
+  base: process.env.ORCHESTRATOR_URL ?? 'http://127.0.0.1:8001',
+  origins: (process.env.ORCHESTRATOR_ALLOWED_ORIGINS ?? process.env.CORS_ORIGIN ?? '').split(',').map(s => s.trim()).filter(Boolean),
+}))
 
 app.get('/api/health', c => c.json({ ok: true }))
 
