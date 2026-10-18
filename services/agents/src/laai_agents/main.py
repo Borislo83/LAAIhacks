@@ -16,12 +16,15 @@ from . import llm
 from .agents import (
     build_alternatives_agent,
     build_messenger_agent,
+    build_news_agent,
     build_price_agent,
     build_reviews_agent,
     build_youtube_agent,
 )
 from .buyer import build_buyer_agent
 from .carts import build_amazon_cart_agent, build_bestbuy_cart_agent
+from .memory import build_memory_agent
+from .verifier import build_verifier_agent
 
 BUILDERS = {
     "price": build_price_agent,
@@ -29,9 +32,12 @@ BUILDERS = {
     "reviews": build_reviews_agent,
     "youtube": build_youtube_agent,
     "messenger": build_messenger_agent,
+    "news": build_news_agent,
     "buyer": build_buyer_agent,
     "amazon-cart": build_amazon_cart_agent,
     "bestbuy-cart": build_bestbuy_cart_agent,
+    "verifier": build_verifier_agent,
+    "memory": build_memory_agent,
 }
 
 

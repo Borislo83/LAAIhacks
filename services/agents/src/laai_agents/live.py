@@ -98,7 +98,7 @@ async def compare(req):
         listings_task.cancel()
         raise
     offers = await _candidates(sources, name)
-    if not offers:
+    if not offers or getattr(req, "deep", False):
         # A second, store-focused query widens the pool only when the first found nothing.
         try:
             more, _ = await search(f"buy {name} online store")
@@ -107,7 +107,7 @@ async def compare(req):
         seen = {s.url for s in sources}
         more = [s for s in more if s.url not in seen]
         sources += more
-        offers = await _candidates(more, name)
+        offers += await _candidates(more, name)
     meta["sources"] = sources
     # Stage 2: rank by trust, then price; only clear mismatches were dropped.
     offers = rank(offers)
