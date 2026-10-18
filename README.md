@@ -95,15 +95,63 @@ scripts/demo.sh start --sim
 The first time, macOS asks to allow the microphone (simulator), Automation of Messages and
 Spotify, and Chrome. Allow them.
 
-### 6. Use real glasses
+### 6. Use real glasses (G2)
+
+**Even Hub app name: Focal** (package id `com.laaihacks.focal`), shared as a Beta build.
+
+Focal on the glasses is a thin client: the Even Realities app on your phone shows it on the G2,
+and every page read, agent and action runs on a laptop running the stack above. The glasses
+reach that laptop over HTTPS through a Cloudflare tunnel, and a pairing code signs them in.
+
+**What a tester needs**
+
+| Needed | For | Where |
+| --- | --- | --- |
+| Even Realities G2 glasses | the display, touchpad and mic | |
+| Even Realities app, signed in to an Even account | connects the glasses; installs Focal | App Store / Google Play |
+| An invite to the Focal Beta (send us the Even account email) | installing the Beta build | Even Hub developer portal |
+| The pairing link for the running laptop | signs Focal in to that laptop | printed by `scripts/demo.sh start --pair` |
+
+A tester using our laptop needs no API keys. To run your own laptop, you also need the keys
+from step 1 (Anthropic, StepFun, Supabase; ASI:One optional) and your own Even Hub build
+(below).
+
+**Install the Beta on G2**
+
+1. Pair the G2 with the Even Realities app (the app walks you through it).
+2. Accept the Focal Beta invite, then install **Focal** from Even Hub in the Even Realities app.
+3. On the laptop, start the stack with pairing. It prints a pairing link (and a QR code):
+   ```bash
+   scripts/demo.sh start --pair
+   ```
+4. Open Focal from the Even Realities app. On its phone screen, paste the pairing link
+   (`https://...trycloudflare.com/?pair=...`) into the address box and tap Go. The phone shows
+   "Paired with the laptop".
+5. Say "Hey Focal, open up the AirPods page on Apple" (see step 7 for more).
+
+**Without the Beta (developer mode)**
+
+Scan the QR printed by `scripts/demo.sh start --pair` in the Even Realities app. Focal opens
+straight from the laptop and signs in for that run.
+
+**Build and upload your own Beta**
+
+Even Hub only lets a packaged app reach the HTTPS addresses in `app.json`, so a build is tied
+to one laptop address. A quick tunnel's address changes on every start, so re-pack and
+re-upload after a restart.
 
 ```bash
-scripts/demo.sh restart --pair
+scripts/demo.sh start --pair
+scripts/pack-evenhub.sh
 ```
 
-This starts a Cloudflare tunnel and prints a QR code (also saved as `.runtime/demo/pair-qr.png`).
-Scan it in the Even app on your phone: the glasses open Focal and sign in for this run only.
-Each start makes a new code, so scan again after a restart.
+1. The script writes `demo/focal-beta.ehpk`. Pass `scripts/pack-evenhub.sh https://your-address`
+   to use a fixed address instead.
+2. Sign in at [hub.evenrealities.com](https://hub.evenrealities.com) and upload the `.ehpk`.
+   It arrives as a Draft.
+3. Move it to Test, and add testers to a Beta group.
+
+Each start makes a new pairing code; the old one stops working.
 
 ### 7. Try it
 
