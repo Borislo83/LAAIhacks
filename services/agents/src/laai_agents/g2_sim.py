@@ -14,6 +14,7 @@ Point --base-url at our orchestrator or at any server implementing the contract.
 import argparse
 import asyncio
 import json
+import textwrap
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -49,10 +50,6 @@ def clip_bytes(text, limit=LIST_ITEM_BYTES):
     return data[: limit - 3].decode(errors="ignore") + "..."
 
 
-def clip_line(text, limit=LINE_CHARS):
-    return text if len(text) <= limit else text[: limit - 3] + "..."
-
-
 @dataclass
 class Frame:
     """What the lens shows: text lines plus a list of selectable action labels."""
@@ -74,9 +71,8 @@ def render(display, selected=None):
     lines = []
 
     def add(text):
-        if len(text) > LINE_CHARS:
-            overflow.append(text)
-        lines.append(clip_line(text))
+        # Text containers wrap like the lens does; whatever is past one screen overflows.
+        lines.extend(textwrap.wrap(text, LINE_CHARS) or [""])
 
     def listing():
         proposed = [a for a in actions if a["status"] == "proposed"]
