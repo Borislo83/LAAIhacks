@@ -112,17 +112,17 @@ export function apiActionCards(send: (intent: DecisionIntent) => void, changed =
         [pending.intent.operation === 'approve' ? 'Approve' : 'Reject', pending.intent.action_id,
           pending.state === 'sending' ? 'Waiting for API acknowledgment' : 'No new decision will be created',
           pending.message], pending.state === 'uncertain' ? 'Tap: retry same request' : 'Please wait');
-      if (!display) return make('LensOS | API', ['Waiting for API display'], 'Connecting');
+      if (!display) return make('Focal', ['Connecting to your session'], 'Connecting');
       const a = action();
       if (mode === 'actions') {
         const start = Math.floor(selected / 6) * 6;
-        return make('Actions | API', display.actions.slice(start, start + 6).map((a, i) =>
+        return make('Actions', display.actions.slice(start, start + 6).map((a, i) =>
           `${start + i === selected ? '>' : ' '} ${a.label} (${a.status})`), 'Swipe: select | Tap: detail | Double: back');
       }
       if (mode === 'detail' && a) {
         const lines = review();
         const pages = Math.ceil(lines.length / 6);
-        return make(pages === 1 ? 'Review action | API' : `Review ${reviewPage + 1}/${pages} | API`,
+        return make(pages === 1 ? 'Review action' : `Review ${reviewPage + 1}/${pages}`,
           lines.slice(reviewPage * 6, reviewPage * 6 + 6), reviewPage < pages - 1
             ? 'Tap/down: next page | Double: back' : a.status === 'proposed'
               ? 'Tap: confirmation | Up: review | Double: back' : 'Up: review | Double: back');
@@ -130,11 +130,18 @@ export function apiActionCards(send: (intent: DecisionIntent) => void, changed =
       if (mode === 'confirm' && a) return make('Confirm action', [clip(a.label),
         `${choice === 'approve' ? '>' : ' '} ${a.source === 'task' ? 'Run recommendation' : 'Approve'}`,
         `${choice === 'reject' ? '>' : ' '} ${a.source === 'task' ? 'Dismiss for this page' : 'Reject'}`], 'Swipe: choose | Tap: confirm | Double: cancel');
-      if (notice) return make('Decision status | API', [notice], 'Tap: actions | Double: summary');
-      if (['loading', 'result', 'error'].includes(display.mode)) return make(
-        { loading: 'Pending | API', result: 'Completed | API', error: 'Failed | API' }[display.mode]!,
-        [display.notice ?? 'Waiting for worker'], 'Tap: actions | Double: summary');
-      return make(`LensOS | API r${display.revision}`, display.page ?
+      if (notice) return make('Decision status', [notice], 'Tap: actions | Double: summary');
+      if (['loading', 'result', 'error'].includes(display.mode)) {
+        // The server sends the outcome on the action, not in notice (which is null today).
+        const status = display.mode === 'loading' ? ['approved', 'running'] : display.mode === 'result' ? ['completed'] : ['failed'];
+        const done = [...display.actions].reverse().find(x => status.includes(x.status));
+        const lines = display.mode === 'loading'
+          ? [`Working: ${done?.label ?? 'your action'}`]
+          : [...(done ? [done.label] : []), ...wrap(done?.result?.message ?? display.notice ?? 'No details were returned.')];
+        return make({ loading: 'Working', result: 'Done', error: 'Failed' }[display.mode]!,
+          lines, done?.status === 'completed' || done?.status === 'failed' ? 'Tap: actions for details | Double: summary' : 'Tap: actions | Double: summary');
+      }
+      return make('Focal', display.page ?
         [display.page.title, ...(display.notice ? [display.notice] : []), ...display.page.summary,
           ...display.page.facts.map(f => `${f.label}: ${f.value}`)] : ['Waiting for page'],
         display.actions.length ? 'Tap: actions | No action runs without approval' : 'Live | No proposed actions');

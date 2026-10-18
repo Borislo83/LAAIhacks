@@ -71,10 +71,8 @@ def action_payload(action_id, plan, product, max_price):
         "action_id": action_id,
         "type": plan["handler"],
         "label": LABELS[plan["handler"]],
-        "description": (
-            f"Research {product}; alternative budget: "
-            f"{max_price if max_price is not None else 'not set'} USD"
-        ),
+        "description": f"Research {product}"
+        + (f"; alternatives under ${max_price:g}" if max_price is not None else ""),
         "expires_at": plan["expires_at"],
         "requires_approval": True,
     }
