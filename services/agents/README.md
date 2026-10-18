@@ -1,6 +1,6 @@
 # Agents
 
-Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are four specialists and a coordinator:
+Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are five specialists and a coordinator:
 
 | Agent | Agent protocol | REST | What it does |
 |---|---|---|---|
@@ -8,6 +8,7 @@ Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are fou
 | `laai-alternatives` | `AlternativesRequest` → `AlternativesResponse` | `POST /alternatives` | Cheaper or better-rated competitors in the same category |
 | `laai-reviews` | `ReviewsRequest` → `ReviewsResponse` | `POST /reviews` | Rating, pros/cons, a review link, and a one-line summary |
 | `laai-youtube` | `YouTubeRequest` → `YouTubeResponse` | `POST /youtube` | A YouTube link for a song or video the user asks for |
+| `laai-messenger` | `MessageDraftRequest` → `MessageDraftResponse` | `POST /imessage/prepare`, `POST /imessage/send` | Drafts an iMessage to an allowlisted friend; sends only after approval |
 
 Every agent also speaks the **Agent Chat Protocol**, so ASI:One and Agentverse chat can talk to it in plain language.
 
@@ -55,6 +56,37 @@ links are returned, always as `https://www.youtube.com/watch?v=<11-character id>
 (`youtu.be` links are rewritten). Shorts, playlists, channels and other sites are dropped,
 and no URL from the query or the results is fetched. No match gives `url: null` with a
 summary that says so. If every provider fails, `error` is set and no link is guessed.
+
+## iMessage agent
+
+`laai-messenger` sends a message to a friend through the Messages app on the Mac running
+the agents. It works in two steps, like the Amazon cart agent:
+
+1. `POST /imessage/prepare` with `{"request":"text Alex running late, be there at 7"}`
+   finds the recipient and the message (ASI:One when configured, otherwise a pattern for
+   "text/message/tell <name> <message>"). It returns `draft_id`, `recipient_name`,
+   `recipient_masked` (for example `+1•••••4567`), `text`, `expires_at` (5 minutes) and a
+   summary. It never sends. Chat and the typed protocol only prepare drafts.
+2. After the user approves the draft, the backend calls `POST /imessage/send` with
+   `{"draft_id":"…","text":"<the exact draft text>","executor_token":"…"}`.
+
+Recipients come only from `IMESSAGE_CONTACTS`, for example
+`Alex=+15551234567,Sam=sam@icloud.com`. Names match case-insensitively. A name that
+matches more than one contact returns `ambiguous` with the candidates, and an unknown
+name returns `unknown_contact`; neither creates a draft.
+
+Sending requires `IMESSAGE_EXECUTOR_TOKEN` (compared in constant time; set it in the
+agents and orchestrator `.env` files and never send it to the browser), an unexpired
+draft, and text identical to the draft. Each draft is used once, even if Messages fails,
+so an uncertain send is never repeated automatically. Messages are 1–1000 characters and
+at most 10 are sent per minute. Sending only works on macOS.
+
+The agent runs `osascript` directly (no shell) with a 15-second timeout. The script is
+fixed; the handle and the message are passed as arguments, never written into the script.
+The first send asks macOS for permission to control Messages. If it was denied, the result
+is `needs_permission`: allow it under System Settings > Privacy & Security > Automation.
+Results are `sent`, `failed` or `needs_permission`. Message text and phone numbers are not
+written to info-level logs.
 
 ## Live dashboard progress
 
