@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/", "destination": "/blueprint.html" },
+    { "source": "/studio", "destination": "/dashboard.html" }
+  ]
+}
