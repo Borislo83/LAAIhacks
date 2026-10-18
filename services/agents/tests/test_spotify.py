@@ -295,3 +295,24 @@ async def test_rest_route_itself_is_token_gated(app, monkeypatch):
         assert reply.error and calls == []
     reply = await route(None, spotify.SpotifyControlRequest(action="pause", executor_token=TOKEN))
     assert reply.error is None and ("pause",) in calls
+
+
+async def test_a_found_song_is_remembered_and_a_failed_search_retried(monkeypatch):
+    from laai_agents.search import SearchUnavailable
+
+    calls = []
+
+    async def flaky_search(query):
+        calls.append(query)
+        if len(calls) == 1:
+            raise SearchUnavailable("rate limited")
+        from laai_agents.models import Source
+
+        return [Source(title="Blinding Lights - song by The Weeknd | Spotify",
+                       url="https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b")], {}
+
+    monkeypatch.setattr(spotify, "search", flaky_search)
+    first = await spotify.find("Blinding Lights", "auto")
+    again = await spotify.find("blinding lights", "auto")
+    assert first == again and first[1] == "spotify:track:0VjIjW4GlUZAMYd2vXMi3b"
+    assert len(calls) == 2  # one failure, one retry; the second ask came from memory

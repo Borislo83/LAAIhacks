@@ -519,7 +519,57 @@ def weather_summary(place: dict, data: dict, tomorrow: bool) -> str | None:
     return " ".join(parts) or None
 
 
+WTTR = "https://wttr.in/{place}"
+
+
+def wttr_summary(place_name: str, data: dict, tomorrow: bool) -> str | None:
+    """wttr.in's JSON (format=j1) as one line, like weather_summary."""
+    try:
+        area = (data.get("nearest_area") or [{}])[0]
+        name = ", ".join(x for x in (
+            ((area.get("areaName") or [{}])[0].get("value")), ((area.get("region") or [{}])[0].get("value"))
+        ) if x) or place_name  # fmt: skip
+        days = data.get("weather") or []
+        day = days[1 if tomorrow else 0] if len(days) > (1 if tomorrow else 0) else {}
+        parts = []
+        if not tomorrow:
+            now = (data.get("current_condition") or [{}])[0]
+            sky = ((now.get("weatherDesc") or [{}])[0].get("value") or "").strip().lower()
+            if now.get("temp_F"):
+                parts.append(f"{name}: {now['temp_F']}°F{' and ' + sky if sky else ''} now")
+        if day.get("maxtempF") and day.get("mintempF"):
+            label = "Tomorrow" if tomorrow else "Today"
+            parts.append(f"{label}: high {day['maxtempF']}°F, low {day['mintempF']}°F"
+                         if parts else f"{name}, {label.lower()}: high {day['maxtempF']}°F, low {day['mintempF']}°F")
+        return ". ".join(parts) + "." if parts else None
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
+async def wttr_answer(query: str, place_name: str, budget: float) -> SearchResponse | None:
+    """The backup when Open-Meteo doesn't answer (it drops out on some networks)."""
+    from urllib.parse import quote
+
+    data = await _get_json(WTTR.format(place=quote(place_name)), {"format": "j1"}, budget)
+    summary = wttr_summary(place_name, data or {}, bool(re.search(r"\btomorrow\b", query, re.IGNORECASE)))
+    if not summary:
+        return None
+    headline = f"Weather in {place_name}"
+    return SearchResponse(
+        query=query, headline=headline, title=headline, summary=summary, data_source="wttr.in",
+        sources=[NewsSource(title=f"wttr.in forecast for {place_name}", url="https://wttr.in/",
+                            publisher="wttr.in")],
+    )  # fmt: skip
+
+
 async def weather_answer(query: str, place_name: str, budget: float) -> SearchResponse | None:
+    until = time.monotonic() + budget
+    # Open-Meteo first, with most of the time; wttr.in gets what is left if it fails.
+    answer = await _open_meteo_answer(query, place_name, budget * 0.6)
+    return answer or await wttr_answer(query, place_name, max(until - time.monotonic(), 1.0))
+
+
+async def _open_meteo_answer(query: str, place_name: str, budget: float) -> SearchResponse | None:
     until = time.monotonic() + budget
     place = _PLACES.get(place_name.lower())
     if place is None:

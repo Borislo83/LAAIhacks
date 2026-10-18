@@ -13,7 +13,7 @@ REAL_PICK_LISTING = cart_action.pick_listing
 
 
 @pytest.fixture(autouse=True)
-def offline_amazon_page(monkeypatch):
+def offline_amazon_page(monkeypatch, tmp_path_factory):
     async def nothing(query, max_price=None):
         return []
 
@@ -33,6 +33,8 @@ def offline_amazon_page(monkeypatch):
     monkeypatch.setenv("AMAZON_CART_DRY_RUN", "1")
     # Never the live agents on :8000: a closed port, so adds run in-process on the fakes.
     monkeypatch.setenv("AGENTS_URL", "http://127.0.0.1:9")
+    # Remembered Spotify lookups go to a per-test file, never the real one.
+    monkeypatch.setenv("SPOTIFY_FOUND_FILE", str(tmp_path_factory.mktemp("spotify") / "found.json"))
     monkeypatch.setattr(cart_action, "_picks", {})
 
     async def no_listing(page, product):

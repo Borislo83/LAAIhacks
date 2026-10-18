@@ -374,3 +374,14 @@ def test_a_temperature_relabeled_to_another_unit_is_dropped():
     good = "The forecast high is 30 °C (86 °F)."
     assert websearch.grounded(good, sources) == good
     assert websearch.grounded("Winds reach 9 mph.", "wind 9 mph") == "Winds reach 9 mph."
+
+
+def test_wttr_backup_reads_now_and_tomorrow():
+    from laai_agents.websearch import wttr_summary
+
+    data = {"nearest_area": [{"areaName": [{"value": "Los Angeles"}], "region": [{"value": "California"}]}],
+            "current_condition": [{"temp_F": "79", "weatherDesc": [{"value": "Sunny"}]}],
+            "weather": [{"maxtempF": "86", "mintempF": "75"}, {"maxtempF": "83", "mintempF": "72"}]}
+    assert wttr_summary("LA", data, False) == "Los Angeles, California: 79°F and sunny now. Today: high 86°F, low 75°F."
+    assert wttr_summary("LA", data, True) == "Los Angeles, California, tomorrow: high 83°F, low 72°F."
+    assert wttr_summary("LA", {}, False) is None
