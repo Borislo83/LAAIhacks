@@ -164,6 +164,8 @@ let recorder: VoiceRecorder | null = null
 let wake: WakeListener | null = null
 /** The question said in the same breath as the wake phrase, used if the capture hears nothing new. */
 let wakeCommand = ''
+/** The capture's audio starts with the wake sentence, so its transcript already holds wakeCommand. */
+let wakeInSeed = false
 let handsFree = true
 let micOn = false
 let voiceSeq = 0
@@ -1122,6 +1124,8 @@ const WAKE_LISTEN_HINT = 'Listening...   Swipe: cancel'
 const PARTIAL_MS = 1200
 /** A hands-free result stays on the glasses this long, then the page comes back. */
 const WAKE_RESULT_MS = 6000
+/** A question said with the wake phrase is sent after this long if nothing more is said. */
+const WAKE_COMMAND_WAIT_MS = 2000
 /** Agent answers are longer to read; each swipe restarts this. */
 const AGENT_RESULT_MS = 10_000
 const MAX_HEARD = 40
@@ -1270,6 +1274,7 @@ async function recheckWake(window: Uint8Array[], from: number, utterance: Uint8A
   if (!listener || !res?.wake || wake !== listener || recorder) return
   wake = null
   wakeCommand = res.command ?? ''
+  wakeInSeed = true
   void capture(listener.tail(utterance, from), true, listener.floor)
 }
 
@@ -1281,7 +1286,8 @@ async function recheckWake(window: Uint8Array[], from: number, utterance: Uint8A
  */
 function wakeSeed(listener: WakeListener, utterance: Uint8Array[]): Uint8Array[] {
   const live = listener.current
-  return live === utterance ? utterance.slice() : live.slice()
+  wakeInSeed = live === utterance
+  return live.slice()
 }
 
 /**
@@ -1299,6 +1305,7 @@ async function transcribeAmbient(utterance: Uint8Array[]) {
   const full = pcm.length > check.bytes ? await sendVoice(pcm, 'check').catch(() => null) : null
   if (full?.wake && listener && wake === listener && !recorder) {
     wake = null
+    wakeCommand = full.command ?? ''
     void capture(wakeSeed(listener, utterance), true, listener.floor)
   }
   const text = full?.transcript || res.transcript
@@ -1338,8 +1345,10 @@ async function capture(seed: Uint8Array[], fromWake: boolean, floor?: NoiseFloor
   agentCard = null
   // After a wake the room's measured noise level carries over, so its chatter doesn't keep
   // the capture open; a capture from a tap starts from a quiet-room level.
-  const rec = (recorder = new VoiceRecorder(reason => void stopVoice(reason !== 'no-speech'), seed,
-    floor ? new NoiseFloor(floor.level) : undefined))
+  // "Hey Focal, find me news" in one breath already holds the question: send it after a
+  // short wait unless more speech comes. A hands-free capture that hears nothing says so.
+  const rec = (recorder = new VoiceRecorder(reason => void stopVoice(reason !== 'no-speech' || fromWake), seed,
+    floor ? new NoiseFloor(floor.level) : undefined, fromWake && wakeCommand ? WAKE_COMMAND_WAIT_MS : undefined))
   wakeCapture = fromWake
   voiceUi = { phase: 'listening', text: '' }
   await renderAssistant(rerecordFor ? `Say your new message to ${rerecordFor}.` : GREETING, fromWake ? WAKE_LISTEN_HINT : LISTEN_HINT)
@@ -1379,6 +1388,10 @@ async function stopVoice(send: boolean) {
   recorder = null
   const seq = nextVoice()
   const { signal } = voiceAbort
+  // Said in one breath with the wake phrase: the capture may hear nothing new.
+  const spokenWithWake = wakeCapture ? wakeCommand : ''
+  const wakeHeardAgain = wakeInSeed
+  wakeCommand = ''
   // Hands-free keeps the mic on and goes back to waiting for the wake phrase.
   if (handsFree) void armWake()
   else void setMic(false)
@@ -1400,11 +1413,9 @@ async function stopVoice(send: boolean) {
     await renderAssistant(message, quiet ? `Say "${WAKE_PHRASE}" to try again` : VOICE_HINT)
     fadeLater()
   }
-  // Said in one breath with the wake phrase: the capture may hear nothing new.
-  const spokenWithWake = quiet ? wakeCommand : ''
   if (!rec.hasSpeech && !spokenWithWake) {
     voiceUi = { phase: 'error', text: "Didn't hear anything. Is the mic on?" }
-    if (quiet) return void showContent()
+    if (quiet) return void fail("Sorry, I didn't hear anything.", voiceUi.text)
     return void renderAssistant("Sorry, I didn't hear anything.", VOICE_HINT)
   }
   voiceUi = { phase: 'sending', text: voiceUi.text }
@@ -1412,9 +1423,10 @@ async function stopVoice(send: boolean) {
   try {
     // The recording starts with the wake sentence, so transcribe it whole; the wake check
     // only heard its start ("Compare prices for.").
-    const heard = rec.hasSpeech || spokenWithWake ? (await sendVoice(rec.pcm())).command : ''
-    const said = heard || spokenWithWake
-    wakeCommand = ''
+    // Without new speech the recording is room noise, which speech-to-text can turn into words.
+    const heard = rec.hasSpeech ? (await sendVoice(rec.pcm())).command : ''
+    // "Hey Focal, find me... news": after a pause the recording holds only "news".
+    const said = heard && spokenWithWake && !wakeHeardAgain ? `${spokenWithWake} ${heard}` : heard || spokenWithWake
     // A re-recorded message goes back to the same contact.
     const command = rerecord && said ? `text ${rerecord} ${said}` : said
     if (seq !== voiceSeq) return
