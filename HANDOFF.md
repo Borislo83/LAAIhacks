@@ -17,9 +17,13 @@ events consumed; polling remains at-least-once. Notes are never sent to agent/mo
 Dashboard: `http://localhost:5173/dashboard.html`; orchestrator: port 8001; agents: port 8000.
 Google OAuth is enabled in Supabase and uses PKCE. Google Cloud project `laaihacks-focal`
 contains the dedicated client. Both localhost and loopback dashboard redirects are allowlisted.
-Google is in **Testing** mode with `borislo830@gmail.com` allowed. Add teammate emails in
-Google Auth Platform → Audience → Test users; broader access requires completing Branding
-and publishing the Google app. Credentials stay out of the repository.
+Google is **In production** with an External audience; Google sign-in no longer requires
+adding teammate emails as test users. Credentials stay out of the repository.
+
+Google Branding uses temporary public Focal [homepage](https://focal-laaihacks-info.primepin4.chatgpt.site/)
+and [privacy](https://focal-laaihacks-info.primepin4.chatgpt.site/privacy.html) pages hosted with Sites.
+Source and hosting details: [apps/public-info](apps/public-info/README.md). Replace the temporary
+Branding URLs with the final product site later. The application repository remains private.
 
 ## Validation and next handoff
 
