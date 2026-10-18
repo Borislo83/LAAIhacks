@@ -1,0 +1,86 @@
+/* Blueprint design tokens, shared by focal.html and dashboard.html.
+   Same sheet, ink and lens green as blueprint.html: graphite drafting film with
+   off-white line work. Green is the G2's display colour, so it only marks live
+   things: what lands on the lens, active states, data in motion. */
+:root{
+  color-scheme:dark;
+  --sheet:#23272b;      /* graphite drafting film */
+  --grid:#2c3136;
+  --grid-major:#353b41;
+  --panel:#272b30;      /* opaque surface so the grid doesn't show through text */
+  --well:#1d2024;       /* inputs and recessed areas */
+  --hair:#41484f;       /* 1px rules and borders */
+  --ink:#e8ebe4;        /* line work and text */
+  --body:#c3c8c0;       /* long-form copy */
+  --muted:#8d949a;      /* 4.9:1 on --sheet */
+  --lens:#8ee6a2;       /* the G2's own display green: lens content and live data only */
+  --lens-soft:rgba(142,230,162,.12);
+  --lens-bg:#121417;    /* the dark glass behind lens previews */
+  --warn:#f2a477;       /* errors and cautions; 7:1 on --sheet */
+  --warn-soft:rgba(242,164,119,.12);
+  --r:3px;              /* near-square corners */
+  --serif:"Instrument Serif",Georgia,serif;
+  --sans:"Instrument Sans",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html{background:var(--sheet)}
+body{margin:0;color:var(--ink);font:16px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+/* the drafting grid and the sheet's inset frame line */
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.55;
+  background:
+    linear-gradient(var(--grid-major) 1px,transparent 1px) 0 0/120px 120px,
+    linear-gradient(90deg,var(--grid-major) 1px,transparent 1px) 0 0/120px 120px,
+    linear-gradient(var(--grid) 1px,transparent 1px) 0 0/24px 24px,
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/24px 24px}
+body::after{content:"";position:fixed;inset:14px;z-index:50;pointer-events:none;border:1px solid var(--grid-major)}
+::selection{background:var(--lens);color:var(--sheet)}
+a{color:var(--ink);text-underline-offset:3px}
+:focus-visible{outline:2px solid var(--lens);outline-offset:2px}
+
+/* buttons: solid ink like blueprint's Open Studio, or a hairline outline */
+.btn{font:500 14px/1 var(--sans);padding:12px 16px;border-radius:var(--r);border:1px solid var(--hair);background:transparent;color:var(--ink);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:8px}
+.btn:hover{border-color:var(--ink)}
+.btn.dark{background:var(--ink);color:var(--sheet);border-color:var(--ink)}
+.btn.dark:hover{background:transparent;color:var(--ink)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn:disabled:hover{border-color:var(--hair)}
+.btn.dark:disabled:hover{background:var(--ink);color:var(--sheet);border-color:var(--ink)}
+.chip{font:13px/1.2 var(--sans);background:transparent;border:1px solid var(--hair);border-radius:var(--r);padding:7px 11px;cursor:pointer;color:var(--ink)}
+.chip:hover{border-color:var(--ink)}
+
+/* the small technical label: blueprint's sheet numbers and tags */
+.label{font:12px/1.4 var(--mono);color:var(--muted);letter-spacing:.02em}
+/* blueprint's copy hierarchy: big serif name, smaller serif tagline, short muted paragraph */
+.tagline{font:400 clamp(22px,2vw,28px)/1.2 var(--serif);color:var(--ink);opacity:.82;margin:0;max-width:26ch}
+/* "Example case" caption: mono, with a small lens-green square */
+.caption{font:12px/1.2 var(--mono);color:var(--muted);margin:0}
+.caption::before{content:"";display:inline-block;width:6px;height:6px;margin-right:8px;background:var(--lens);vertical-align:1px}
+/* approval gates: drawn with a green bar across the top, like the blueprint's gate arm */
+.gate{border-top:2px solid var(--lens)}
+
+/* agent orbs: off-white marks on a dark disc with a hairline ring (see orb.js) */
+.orb{display:block;flex-shrink:0}
+.orb .s1{animation:sweep 2.4s ease-in-out infinite}
+@keyframes sweep{0%,100%{opacity:.14}35%{opacity:1}60%{opacity:.3}}
+.orb .s2{animation:wave 1.6s ease-in-out infinite alternate;transform-box:fill-box}
+@keyframes wave{from{transform:translateY(-34%)}to{transform:translateY(34%)}}
+.orb .s3{animation:scan 2.2s linear infinite;transform-box:view-box}
+@keyframes scan{from{transform:translateX(-60%)}to{transform:translateX(110%)}}
+.orb .s4{animation:flick 1.1s steps(3) infinite;transform-box:fill-box;transform-origin:center}
+@keyframes flick{0%{opacity:1;transform:scaleY(1)}33%{opacity:.35;transform:scaleY(.5)}66%{opacity:1;transform:scaleY(1.6)}100%{opacity:.6;transform:scaleY(1)}}
+.orb .s5{animation:play 1.8s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+@keyframes play{50%{transform:scale(.78);opacity:.55}}
+.orb .s6{animation:typing 1.2s ease-in-out infinite;transform-box:fill-box}
+@keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.5}30%{transform:translateY(-45%);opacity:1}}
+.orb .s7{animation:read 2.2s ease-in-out infinite;transform-box:fill-box;transform-origin:left center}
+@keyframes read{0%,100%{transform:scaleX(.35);opacity:.45}50%{transform:scaleX(1);opacity:1}}
+.orb.idle *{animation-play-state:paused}
+
+/* what lands on the lens: dark glass, green type */
+.lensbox{background:var(--lens-bg);border:1px solid var(--hair);border-radius:var(--r);padding:14px 16px;font-family:var(--mono);color:var(--lens);font-size:12px;line-height:19px;display:flex;flex-direction:column;gap:2px}
+.lensbox .l1{color:#86b392;font-size:11px;letter-spacing:.04em;text-transform:uppercase}
+.lensbox .l2{font-size:15px;line-height:22px}
+
+@media (max-width:560px){body::after{inset:8px}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
