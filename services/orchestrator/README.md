@@ -43,7 +43,10 @@ rules fallback), which only calls the agent's `/imessage/prepare` and returns th
 `POST /v1/messages/send {draft_id, text}`. That route always requires a verified sign-in
 with the `web` role (even with `CHAT_AUTH_REQUIRED=false`), allows 5 sends per user per minute,
 and adds the private `IMESSAGE_EXECUTOR_TOKEN`; it returns 503 while that is unset. Responses
-contain only `status` (`sent|failed|needs_permission`) and `summary`.
+contain only `status` (`sent|failed|needs_permission`), `summary` and `dry_run` (true when the
+agent only simulated the send). For a local end-to-end dry run, set the same
+`IMESSAGE_EXECUTOR_TOKEN` value in both `services/orchestrator/.env` and `services/agents/.env`;
+the agent rejects sends whose token does not match its own.
 Set `AGENTS_URL` for a remote agent Bureau and `CORS_ORIGINS` for frontend origins.
 Optional `ASI_ONE_API_KEY` enables ASI:One page understanding. Without it, an explicit `product`
 field produces deterministic shopping suggestions; unstructured pages produce no tasks.

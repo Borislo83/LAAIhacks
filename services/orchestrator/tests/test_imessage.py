@@ -161,9 +161,16 @@ def test_send_forwards_the_confirmed_draft_and_never_returns_the_token():
     with client:
         response = client.post("/v1/messages/send", json=BODY, headers=AUTH)
     assert response.status_code == 200
-    assert response.json() == {"status": "sent", "summary": "Sent to A*** K**."}
+    assert response.json() == {"status": "sent", "summary": "Sent to A*** K**.", "dry_run": False}
     assert TOKEN not in response.text
     assert seen == [("/imessage/send", {**BODY, "executor_token": TOKEN})]
+
+
+def test_send_passes_dry_run_through():
+    client, _ = send_client(send={"status": "sent", "dry_run": True, "summary": "Dry run only."})
+    with client:
+        response = client.post("/v1/messages/send", json=BODY, headers=AUTH)
+    assert response.json() == {"status": "sent", "summary": "Dry run only.", "dry_run": True}
 
 
 @pytest.mark.parametrize(

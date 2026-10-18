@@ -146,3 +146,5 @@ class MessageSend(InputModel):
 class MessageSent(BaseModel):
     status: Literal["sent", "failed", "needs_permission"]
     summary: str = Field(max_length=2000)
+    # True when the agent only simulated the send (local development).
+    dry_run: bool = False
