@@ -30,8 +30,15 @@ function provider() {
   return null
 }
 
+/** Silence added around a clip: StepFun returns nothing for short clips that start or end
+ *  right on speech (a 2 s "Hey Focal, open YouTube"), and hears them fine when padded. */
+const PAD_MS = 500
+
 export async function transcribe(pcm: Uint8Array, sampleRate: number, keep = true): Promise<string> {
-  const wav = toWav(pcm, sampleRate)
+  const pad = new Uint8Array(Math.round((sampleRate * 2 * PAD_MS) / 1000) & ~1)
+  const padded = new Uint8Array(pad.length * 2 + pcm.length)
+  padded.set(pcm, pad.length)
+  const wav = toWav(padded, sampleRate)
   if (keep && process.env.VOICE_SAVE_DIR) void save(wav)
 
   const stt = provider()
@@ -124,7 +131,27 @@ const WAKE_ALIASES = new Set(
   (process.env.WAKE_ALIASES ?? DEFAULT_ALIASES[WAKE_NAME] ?? '')
     .split(',').map(a => a.trim().toLowerCase().replace(/[^a-z]/g, '')).filter(Boolean),
 )
-const GREETINGS = new Set(['hey', 'hi', 'hello', 'ok', 'okay', 'yo', 'hay'])
+const GREETINGS = new Set(['hey', 'hi', 'hello', 'ok', 'okay', 'yo', 'hay', 'hei', 'hej', 'heya', 'hiya', 'heyy', 'oi'])
+/** "Hey" as speech-to-text sometimes writes it, flat or clipped ("A, focal.", "Eh focal").
+ *  After these only a sound-alike of the name counts, never a near spelling like "local". */
+const WEAK_GREETINGS = new Set(['a', 'eh', 'he', 'ay', 'aye', 'ah', 'uh', 'hm', 'hmm', 'k', 'kay', 'yeah'])
+
+/**
+ * How a word sounds, roughly: ph/v as f; c/k/g/q as k; r or l before that k dropped
+ * ("forcal", "folkal"); vowels, h, w and y dropped; repeats collapsed.
+ * "focal", "vocal", "fokal", "fogle", "phocal", "fickle", "for cal" all give "fkl".
+ */
+export function soundKey(word: string): string {
+  return word.toLowerCase().replace(/[^a-z]/g, '')
+    .replace(/ph/g, 'f').replace(/v/g, 'f').replace(/[cgq]/g, 'k')
+    .replace(/[rl](?=k)/g, '')
+    .replace(/[aeiouhwy]/g, '')
+    .replace(/(.)\1+/g, '$1')
+}
+const NAME_KEY = soundKey(WAKE_NAME)
+/** The name's sound, and with a dropped last consonant ("foco" for "focal"). */
+const NAME_KEYS = new Set([NAME_KEY, NAME_KEY.slice(0, -1)].filter(k => k.length >= 2))
+const soundsLikeName = (joined: string) => NAME_KEYS.has(soundKey(joined)) && soundKey(joined)[0] === NAME_KEY[0]
 /** The name can be split over this many words ("for cal", "folk all"). */
 const MAX_NAME_WORDS = 3
 const NAME_SLIPS = WAKE_NAME.length >= 7 ? 2 : 1
@@ -134,7 +161,7 @@ const letters = (word: string) => word.toLowerCase().replace(/[^a-z]/g, '')
 
 /** How far these letters are from the name (after a greeting); null when not close. */
 function nameDistance(joined: string, slips: number): number | null {
-  if (WAKE_ALIASES.has(joined)) return 0
+  if (WAKE_ALIASES.has(joined) || soundsLikeName(joined)) return 0
   const d = editDistance(joined, WAKE_NAME)
   return d <= slips ? d : null
 }
@@ -152,6 +179,26 @@ function matchName(words: string[], from: number, slips: number): number | null 
   return best?.end ?? null
 }
 
+/** After a bare "Hey" opening the sentence, these start a command ("Hey, open YouTube"). */
+const COMMAND_START = new Set([
+  'open', 'play', 'pause', 'resume', 'skip', 'stop', 'next', 'previous', 'show', 'hide', 'send', 'text',
+  'message', 'imessage', 'tell', 'add', 'put', 'compare', 'find', 'search', 'look', 'pull', 'bring',
+  'take', 'go', 'launch', 'turn', 'please', 'give', 'check', 'read', 'reviews', 'price', 'prices',
+  'weather', 'latest', 'news',
+])
+// Small talk ("Hey, how are you?", "hey what's up") never counts: only action words do.
+
+/** Where a sound-alike of the name ends if it starts at `from` (after a weak greeting). */
+function matchSound(words: string[], from: number): number | null {
+  let joined = ''
+  let found: number | null = null
+  for (let end = from + 1; end <= Math.min(words.length, from + MAX_NAME_WORDS); end++) {
+    joined += letters(words[end - 1])
+    if (soundsLikeName(joined) || WAKE_ALIASES.has(joined) && joined !== 'focus') found = end
+  }
+  return found
+}
+
 export function parseWake(transcript: string): { wake: boolean; command: string } {
   const text = transcript.trim()
   // Wake matching looks only at words with letters, but the command is cut from the
@@ -162,6 +209,11 @@ export function parseWake(transcript: string): { wake: boolean; command: string 
     const last = tokens[end - 1]
     const rest = last ? text.slice(last.index! + last[0].length) : text
     return { wake: true, command: rest.replace(/^[\s,.!?;:\-–—]+/, '').trim() }
+  }
+  // A plain "Hey" opening the sentence with a command right after it ("Hey, open YouTube").
+  // Only at the start: a "hey" mid-conversation is someone else's.
+  if (words.length > 1 && ['hey', 'heya', 'hey'].includes(letters(words[0])) && COMMAND_START.has(letters(words[1]))) {
+    return after(1)
   }
   for (let i = 0; i < words.length; i++) {
     const w = letters(words[i])
@@ -174,8 +226,21 @@ export function parseWake(transcript: string): { wake: boolean; command: string 
       const end = matchName(words, i + 1, NAME_SLIPS)
       if (end !== null) return after(end)
     }
+    if (WEAK_GREETINGS.has(w)) {
+      // "A, focal. ..." / "Eh focal, ...": the name starts like it and a pause follows,
+      // so "a vocal performance" or "a focal length" don't wake it.
+      const end = matchSound(words, i + 1)
+      const first = end === null ? '' : letters(words[i + 1])
+      const paused = end !== null && (/[,.!?:;]$/.test(words[i]) || /[,.!?:;]$/.test(words[end - 1]))
+      if (end !== null && paused && soundKey(first)[0] === NAME_KEY[0] && first[0] !== 'v') return after(end)
+    }
     // The name alone only opens a sentence, and must be near exact.
     if (NAME_ALONE && i === 0 && editDistance(w, WAKE_NAME) <= 1) return after(1)
+    // "Focal, open YouTube": a short name opens a sentence only when it sounds like
+    // the name and starts like it (so "vocal" or "local" at the start doesn't wake).
+    if (!NAME_ALONE && i === 0 && w[0] === WAKE_NAME[0] && words.length > 1 && soundsLikeName(w) && !/^[a-z]+s$/.test(w)) {
+      if (/[,.!?:;]$/.test(words[0])) return after(1)
+    }
   }
   return { wake: false, command: text }
 }
