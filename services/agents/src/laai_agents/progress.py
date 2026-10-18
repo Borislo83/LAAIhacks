@@ -60,7 +60,7 @@ def tracked(kind, subject=None):
             token = active.set((getattr(req, "progress_id", None), kind))
             started = time.perf_counter()
             label = getattr(req, "product", None) or getattr(req, "query", None)
-            report("started", f"Working on {label or subject or 'Amazon listing'}")
+            report("started", f"Working on {label or subject or 'your request'}")
             try:
                 result = await fn(req)
                 publish(

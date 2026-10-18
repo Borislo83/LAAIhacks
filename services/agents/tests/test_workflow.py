@@ -672,3 +672,23 @@ async def test_result_conflict_for_still_approved_action_keeps_blocking(tmp_path
     assert workflow.state["cursor"] == "" and "evt-1" not in workflow.state.get(
         "invalidated", {}
     )
+
+
+async def test_unparseable_pages_are_skipped_not_raised(monkeypatch):
+    from laai_agents import merchants
+
+    async def comment_only(url):
+        return "<!-- nothing here -->"
+
+    monkeypatch.setattr(merchants, "fetch_page", comment_only)
+    assert await merchants.fetch_offers("https://example.com/p", "Sony WH-1000XM5") == []
+
+
+def test_journal_lock_is_exclusive(tmp_path):
+    from laai_agents.integration import lock_exclusive
+
+    path = tmp_path / "journal.lock"
+    with path.open("w") as first, path.open("w") as second:
+        lock_exclusive(first)
+        with pytest.raises(OSError):
+            lock_exclusive(second)
