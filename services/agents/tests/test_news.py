@@ -716,3 +716,45 @@ def test_feed_stories_are_balanced_and_not_repeated():
 def test_story_summary_drops_snippet_age_prefix():
     summary = news.story_summary({"lead": "3 hours ago · With midterm elections approaching, organizers urge people to vote early."})
     assert summary == "With midterm elections approaching, organizers urge people to vote early."
+
+
+ARTICLE_A = (
+    "1 day ago · A woman drove a truck through a soccer field during a youth game in Wichita, Kansas, "
+    "killing two people. A 6-year-old boy and a 35-year-old man were killed, Wichita Police Capt. Jane Doe said. "
+    "This image provided by KAKE shows police on the scene where a person drove a vehicle through a soccer field. "
+    "Subscribe to our newsletter for daily updates delivered to your inbox every morning. "
+    "EDMONTON, Alberta (AP) — One of Alberta's leading separatists vowed to continue the independence movement. "
+    "Investigators are still working to determine whether the crash at the youth soccer game was intentional."
+)
+ARTICLE_B = (
+    "Police in Wichita said the driver of the truck was taken into custody after the crash at the sports complex. "
+    "Ten other people, including several children, were taken to hospitals after the truck crossed the field."
+)
+
+
+def test_newsletter_paragraph_comes_from_the_full_text_of_both_outlets():
+    body = news.key_sentences([ARTICLE_A, ARTICLE_B], "Boy and man killed after truck drives through youth soccer game in Wichita")
+    assert "Capt. Jane Doe said." in body  # abbreviation kept inside the sentence
+    assert "taken into custody" in body  # the second outlet adds facts
+    for junk in ("1 day ago", "image provided by", "Subscribe", "Alberta"):
+        assert junk not in body
+    assert len(body) <= news.STORY_BODY_LIMIT
+
+
+async def test_story_body_uses_llm_only_when_numbers_check_out(monkeypatch):
+    article = {"title": "Truck crash at Wichita youth game", "texts": [("AP", ARTICLE_A), ("KSN", ARTICLE_B)]}
+    monkeypatch.setattr(news.llm, "has_key", lambda: True)
+
+    async def invents(system, user):
+        return "A truck hit a youth soccer game in Wichita, killing 7 people and injuring many more at the field."
+
+    monkeypatch.setattr(news.llm, "complete", invents)
+    body, outlets = await news.story_body(article)
+    assert "7 people" not in body and outlets == ["AP", "KSN"]  # unsupported number: extractive instead
+
+    async def faithful(system, user):
+        return "A truck crossed a youth soccer field in Wichita, killing two people. Police took the driver into custody, and ten others were taken to hospitals."
+
+    monkeypatch.setattr(news.llm, "complete", faithful)
+    body, _ = await news.story_body(article)
+    assert body.startswith("A truck crossed a youth soccer field in Wichita")

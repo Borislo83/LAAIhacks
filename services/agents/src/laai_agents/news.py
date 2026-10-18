@@ -15,7 +15,6 @@ import re
 from email.utils import parsedate_to_datetime
 from html import unescape
 from datetime import UTC, datetime, timedelta
-from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import aiohttp
@@ -488,7 +487,7 @@ def source_text(articles: list[dict]) -> str:
 
 ABBREVIATION = re.compile(
     r"(?:\b(?:Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|No|Nos|Mr|Mrs|Ms|Dr|St|"
-    r"Jr|Sr|vs|Gov|Sen|Rep|Gen|Lt|Col|Inc|Corp|Co|Ltd|Ave|Mt|approx|est)"
+    r"Jr|Sr|vs|Gov|Sen|Rep|Reps|Gen|Lt|Col|Capt|Sgt|Det|Cpl|Adm|Cmdr|Supt|Insp|Rev|Prof|Pres|Atty|Inc|Corp|Co|Ltd|Ave|Mt|approx|est)"
     r"|\b(?:[A-Z]\.){1,3}|\b(?:a\.m|p\.m|e\.g|i\.e))\.?$"
 )
 
@@ -636,7 +635,9 @@ async def _section_hits(query: str, timelimit: str) -> list[dict]:
 # Section fronts, listicles, tools and evergreen pages are not stories.
 NOT_A_STORY = re.compile(
     r"^(?:top|best)\s+\d+\b|\bcompare\b|readers.?\s*choice|\bhow\s+to\b|\bguide\s+to\b|"
-    r"\bdeals?\b|\bcoupons?\b|\bthis\s+week\s+on\b|\bwhat\s+to\s+watch\b|"
+    # Shopping deal pages only: "ceasefire deal" and "trade deal" are news.
+    r"\b(?:best|top|early|daily|black\s+friday|cyber\s+monday|prime\s+day|holiday)\s+deals?\b|"
+    r"\bdeals?\s+(?:on|of\s+the\s+(?:day|week))\b|\bcoupons?\b|\bthis\s+week\s+on\b|\bwhat\s+to\s+watch\b|"
     r"\b(?:latest|breaking|top)\s+(?:\w+\s+){0,3}(?:news|headlines)\b.*\|"
     r"|\|\s*(?:\w+\s+){0,3}(?:news|headlines)\s*(?:\||$)|^(?:news|headlines|home)\b",
     re.IGNORECASE,
@@ -778,6 +779,123 @@ def story_summary(article: dict) -> str:
     return lead[: STORY_SUMMARY_LIMIT - 1].rstrip(" .") + "…" if lead else ""
 
 
+STORY_BODY_LIMIT = 900
+STORY_BODY_SENTENCES = 6
+# Page furniture that is not part of the story.
+BOILERPLATE = re.compile(
+    r"\b(?:subscribe|sign\s+up|newsletter|advertisement|click\s+here|read\s+more|"
+    r"all\s+rights\s+reserved|copyright|follow\s+us|contributed\s+to\s+this\s+report|"
+    r"this\s+(?:story|article)\s+(?:has\s+been|was)\s+updated|getty\s+images|cookies?|"
+    r"terms\s+of\s+(?:use|service)|privacy\s+policy|log\s+in|download\s+the\s+app|"
+    r"watch\s+(?:the\s+)?video|listen\s+to\s+this|share\s+this|related\s*:|photo\s*:)\b",
+    re.IGNORECASE,
+)
+STORY_PROMPT = (
+    "You write one paragraph of a daily news newsletter. You are given the text of news "
+    "articles about one story. Write 4 to 6 plain sentences, at most 900 characters, that "
+    "explain what happened, who is involved, and why it matters, using only facts stated in "
+    "the articles. Do not speculate or add background knowledge. Do not write any number, "
+    "date or amount that is not in the articles. If the articles disagree, say so. No "
+    "markdown, lists or headings."
+)
+
+
+AGE_PREFIX = re.compile(r"^\s*(?:\d+\s+\w+\s+ago|[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})\s*[·\-–]\s*")
+# Photo captions and credits: "This image provided by KAKE shows...", "(AP Photo/...)".
+CAPTION = re.compile(
+    r"\b(?:image|photo|picture)\s+(?:provided|taken|shows)\b|\bprovided\s+by\b.*\bshows\b|"
+    r"\(\s*(?:ap\s+photo|credit|photo|getty|reuters)\b|\bvia\s+ap\)|/\s*(?:ap|getty|reuters)\b",
+    re.IGNORECASE,
+)
+
+
+CALENDAR = {
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "today",
+    "yesterday", "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december", "jan", "feb", "mar", "apr", "jun",
+    "jul", "aug", "sep", "sept", "oct", "nov", "dec", "said", "says", "year", "week",
+}  # fmt: skip
+
+
+def on_story(sentence: str, title: str, story_words: set[str]) -> bool:
+    """About this story: shares a headline word, or two words with the story's opening."""
+    mine = words(sentence) - CALENDAR
+    return bool(mine & (words(title) - CALENDAR)) or len(mine & (story_words - CALENDAR)) >= 2
+
+
+def key_sentences(texts: list[str], title: str) -> str:
+    """The most informative sentences across the articles, in reading order."""
+    # Paragraphs that don't end like a sentence are "read also" links and subheads;
+    # left in, they glue onto the next sentence ("...In Ruins Barate called it...").
+    texts = [
+        " ".join(p for p in (AGE_PREFIX.sub("", p).strip() for p in t.split("\n"))
+                 if p and p[-1] in ".!?\"”'’)")
+        for t in texts
+    ]
+    # The story's vocabulary: its headline and each article's first two sentences.
+    story_words = words(title)
+    for text in texts:
+        for s in sentences(text)[:2]:
+            story_words |= words(s)
+    pool: list[tuple[int, int, str]] = []  # (article, position, sentence)
+    for a, text in enumerate(texts):
+        for i, s in enumerate(sentences(text)):
+            if not 8 <= len(s.split()) <= 60 or BOILERPLATE.search(s) or CAPTION.search(s):
+                continue
+            letters = [c for c in s if c.isalpha()]
+            if letters and sum(c.isupper() for c in letters) / len(letters) > 0.6:
+                continue  # an all-caps teaser headline for another story
+            # Pages often append other stories; past the opening, stay on this one.
+            if i >= 2 and not on_story(s, title, story_words):
+                continue
+            if s[-1] not in ".!?\"”'’" or s.endswith(("...", "…")):
+                continue
+            if any(len(words(s) & words(p)) / max(len(words(s) | words(p)), 1) >= 0.5
+                   for _, _, p in pool):  # fmt: skip
+                continue  # the second outlet repeating the first
+            pool.append((a, i, s))
+    if not pool:
+        return ""
+    freq: dict[str, int] = {}
+    for _, _, s in pool:
+        for w in words(s):
+            freq[w] = freq.get(w, 0) + 1
+    title_words = words(title)
+
+    def score(entry):
+        a, i, s = entry
+        ws = words(s)
+        topical = sum(freq[w] for w in ws) / (len(ws) ** 0.5 + 1)
+        return topical + 2 * len(ws & title_words) + max(0, 3 - i) * 0.6 - a * 0.3
+
+    chosen = sorted(sorted(pool, key=score, reverse=True)[:STORY_BODY_SENTENCES],
+                    key=lambda e: (e[0], e[1]))
+    out = ""
+    for _, _, s in chosen:
+        candidate = f"{out} {s}".strip()
+        if len(candidate) > STORY_BODY_LIMIT:
+            continue
+        out = candidate
+    return out
+
+
+async def story_body(article: dict) -> tuple[str, list[str]]:
+    """(newsletter paragraph, outlets read) from the story's full article text."""
+    texts = [(name, text) for name, text in article.get("texts") or [] if text]
+    if not texts:
+        return "", []
+    outlets = list(dict.fromkeys(name for name, _ in texts))
+    if llm.has_key():
+        source = "\n\n".join(f"[{n}] {name}:\n{text[:LLM_CHARS_PER_ARTICLE]}"
+                             for n, (name, text) in enumerate(texts, 1))  # fmt: skip
+        answer = await llm.complete(STORY_PROMPT, source)
+        if answer:
+            answer = " ".join(re.sub(r"[*_#`>]+", "", answer).split())[:STORY_BODY_LIMIT]
+            if len(answer) > 80 and numbers_supported(answer, source):
+                return answer, outlets
+    return key_sentences([text for _, text in texts], article["title"]), outlets
+
+
 def brief_title(scope: str, text: str, now: datetime) -> str:
     day = now - timedelta(days=1) if re.search(r"\byesterday\b", text, re.I) else now
     where = {"us": "U.S. news brief", "world": "World news brief"}.get(scope, "News brief")
@@ -901,11 +1019,22 @@ async def find_article(item: dict) -> dict:
             break
     if match is None:
         return {**item, "text": "", "image": None, "image_alt": None,
-                "image_width": None, "image_height": None}  # fmt: skip
-    article = await read_article(match)
+                "image_width": None, "image_height": None, "texts": []}  # fmt: skip
+    # A second outlet's article on the same story widens the facts the summary draws on.
+    first_outlet = match["publisher"] or publisher_of(match["url"])
+    second = next(
+        (h for h in hits if h is not match and related(h, item)
+         and (h["publisher"] or publisher_of(h["url"])) != first_outlet),
+        None,
+    )
+    article, *more = await asyncio.gather(read_article(match), *([read_article(second)] if second else []))
+    texts = [
+        (a["publisher"] or publisher_of(a["url"]), a.get("text") or a.get("lead") or "")
+        for a in [article, *more]
+    ]
     # Keep the feed's headline, outlet and time; article pages sometimes carry other dates.
     return {**article, "title": item["title"], "publisher": item["publisher"] or article["publisher"],
-            "published_at": item["published_at"] or article["published_at"]}
+            "published_at": item["published_at"] or article["published_at"], "texts": texts}
 
 
 async def feed_brief(scope: str, now: datetime, max_hours: float) -> list[dict]:
@@ -928,7 +1057,7 @@ async def news_brief(req: NewsRequest, scope: str) -> NewsResponse:
     report("searching", "Collecting today's top stories by section")
     from_feeds = await feed_brief(scope, now, max_hours)
     if from_feeds:
-        return brief_response(req, scope, now, [
+        return await brief_response(req, scope, now, [
             (p["section"], p["article"], p["item"]["coverage"]) for p in from_feeds
         ])
     sections = brief_sections(scope)
@@ -949,15 +1078,21 @@ async def news_brief(req: NewsRequest, scope: str) -> NewsResponse:
         *(read_article(max(p["cluster"], key=lambda a: len(a.get("lead") or ""))) for p in picked)
     )
     coverage = [len({a["publisher"] or publisher_of(a["url"]) for a in p["cluster"]}) for p in picked]
-    return brief_response(
+    for article in leads:
+        article["texts"] = [(article["publisher"] or publisher_of(article["url"]),
+                             article.get("text") or article.get("lead") or "")]
+    return await brief_response(
         req, scope, now, [(p["section"], a, c) for p, a, c in zip(picked, leads, coverage)]
     )
 
 
-def brief_response(req: NewsRequest, scope: str, now: datetime, items: list[tuple[str, dict, int]]) -> NewsResponse:
-    report("summarizing", f"Summarizing {len(items)} stories")
+async def brief_response(
+    req: NewsRequest, scope: str, now: datetime, items: list[tuple[str, dict, int]]
+) -> NewsResponse:
+    report("summarizing", f"Writing summaries of {len(items)} stories from their full articles")
+    bodies = await asyncio.gather(*(story_body(article) for _, article, _ in items))
     stories = []
-    for section, article, coverage in items:
+    for (section, article, coverage), (body, read_from) in zip(items, bodies):
         if not article["title"]:
             continue
         image = article.get("image") if valid_image(
@@ -973,6 +1108,8 @@ def brief_response(req: NewsRequest, scope: str, now: datetime, items: list[tupl
                 published_at=article["published_at"],
                 image_url=image,
                 coverage=coverage,
+                body=body,
+                read_from=read_from[:3],
             )
         )
     if not stories:
@@ -1000,7 +1137,7 @@ def chat_reply(result: NewsResponse) -> str:
     if result.brief and result.stories:
         lines = [result.headline or "News brief"]
         for story in result.stories:
-            lines.append(f"{story.section}: {story.headline}. {story.summary} ({story.publisher})")
+            lines.append(f"{story.section}: {story.headline}. {story.body or story.summary} ({story.publisher})")
         return "\n".join(lines)
     lines = []
     if result.headline:

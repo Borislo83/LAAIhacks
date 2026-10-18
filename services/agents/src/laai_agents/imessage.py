@@ -189,9 +189,16 @@ def tidy(text: str) -> str:
         if len(text) > 1 and text[0] == left and text[-1] == right and right not in text[1:-1]:
             text = text[1:-1].strip()
             break
-    if text and text[0].islower():
+    words = text.split()
+    if not words:
+        return text
+    first, last = words[0], words[-1]
+    link = re.compile(r"^(?:https?://|www\.)", re.IGNORECASE)
+    # Capitalize a plain lowercase first word only: never a link or "iPhone"/"eBay".
+    if first.isalpha() and first.islower() and not link.match(first):
         text = text[0].upper() + text[1:]
-    if text and text[-1].isalnum():
+    # End punctuation for sentences, not for a link or a casual one- or two-word text.
+    if text[-1].isalnum() and len(words) >= 3 and not link.match(last):
         text += "."
     return text
 

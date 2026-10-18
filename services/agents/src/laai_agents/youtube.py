@@ -295,11 +295,20 @@ def norm(text: str | None) -> str:
     return re.sub(r"[^a-z0-9]", "", (text or "").lower())
 
 
+NOT_AN_ARTIST = re.compile(
+    r"(?:me|you|us|him|her|them|it|my\s+side|your\s+side|night|day|now|myself|"
+    r"yourself|design|default|nature|chance|proxy|accident|heart)",
+    re.IGNORECASE,
+)
+
+
 def same_creator(channel: str | None, creator: str | None) -> bool:
     """'Markiplier' matches 'markipiliers'; 'BoyWithUke - Topic' and 'BoyWithUkeVEVO' match."""
     if not channel or not creator:
         return False
     chan = norm(re.sub(r"\s*-\s*topic$|vevo$|\bofficial\b", "", channel, flags=re.IGNORECASE))
+    if not chan:
+        return False  # "Official" or "VEVO" alone names no one; empty would match anything
     for wanted in {norm(creator), norm(creator).removesuffix("s")}:
         if len(wanted) >= 3 and (wanted in chan or chan in wanted):
             return True
@@ -313,7 +322,11 @@ def intent(query: str, kind: str) -> dict:
     recent = bool(RECENT.search(query))
     core = " ".join(RECENT.sub(" ", query).split())
     creator, title = None, core
-    by = re.match(r"^(.+?)\s+by\s+(.+)$", core, re.IGNORECASE)
+    # The last " by " separates title and artist ("Stand by Me by Ben E. King"), and a
+    # pronoun or filler word is part of the title, not an artist ("Stand by Me").
+    by = re.match(r"^(.+)\s+by\s+(.+)$", core, re.IGNORECASE)
+    if by and NOT_AN_ARTIST.fullmatch(by[2].strip()):
+        by = None
     dash = re.match(r"^(.+?)\s+[-–]\s+(.+)$", core)
     owner = re.match(r"^(.+?)(?:'s|s'|’s)\s+(.+)$", core, re.IGNORECASE)
     if by:
@@ -536,11 +549,12 @@ async def find_video(req: YouTubeRequest) -> YouTubeResponse:
         query = f"{want['creator'] or ''} {want['title']} official audio".strip()
     report("searching", f"Searching YouTube for {title_query}")
     videos, provider, answered = [], None, False
+    lookup_failed = False  # "latest" needs the channel lookup; a search outage isn't "not found"
     if want["recent"] and want["creator"] and not os.getenv("YOUTUBE_API_KEY"):
         try:
             videos = await latest_from_feed(want["creator"])
         except (SearchUnavailable, aiohttp.ClientError, TimeoutError, ValueError):
-            videos = []
+            videos, lookup_failed = [], True
         if videos:
             provider, answered = "youtube_rss", True
     for name, run in PROVIDERS if not videos else ():
@@ -577,6 +591,15 @@ async def find_video(req: YouTubeRequest) -> YouTubeResponse:
             seen.add(video["url"])
             unique.append(video)
     if not unique:
+        if lookup_failed:
+            return YouTubeResponse(
+                query=title_query,
+                kind=kind,
+                data_source="unavailable",
+                error="YouTube search unavailable",
+                summary=f"Couldn't look up {want['creator']}'s channel right now; search is "
+                "temporarily unavailable. Try again in a moment.",
+            )
         return YouTubeResponse(
             query=title_query,
             kind=kind,

@@ -166,6 +166,7 @@ NEWS_HEADLINE_MAX = 200
 NEWS_SUMMARY_MAX = 800
 NEWS_SOURCES_MAX = 8
 NEWS_STORIES_MAX = 10  # stories in a news brief
+NEWS_BODY_MAX = 1000  # each brief story's newsletter paragraph
 NEWS_TEXT_MAX = 300  # image_alt and each source's title, publisher and date
 
 
@@ -226,6 +227,11 @@ def safe_news(result: dict[str, Any]) -> dict[str, Any]:
                     "published_at": _text(story.get("published_at")),
                     "image_url": public_https(story.get("image_url")),
                     "coverage": story.get("coverage") if isinstance(story.get("coverage"), int) else 1,
+                    # The newsletter paragraph, written from the articles' full text.
+                    "body": _text(story.get("body"), NEWS_BODY_MAX) or "",
+                    "read_from": [
+                        name for name in (_text(n) for n in (story.get("read_from") or [])[:3]) if name
+                    ] if isinstance(story.get("read_from"), list) else [],
                 }
             )
     return {
@@ -233,7 +239,8 @@ def safe_news(result: dict[str, Any]) -> dict[str, Any]:
         "brief": bool(result.get("brief")),
         "stories": stories[:NEWS_STORIES_MAX],
         "headline": _text(result.get("headline"), NEWS_HEADLINE_MAX),
-        "summary": result["summary"][:NEWS_SUMMARY_MAX],
+        # A result without a summary is shown empty rather than failing the whole chat.
+        "summary": (result.get("summary") if isinstance(result.get("summary"), str) else "")[:NEWS_SUMMARY_MAX],
         "image_url": image_url,
         # Alt text and credit describe the image, so they go with it.
         "image_alt": _text(result.get("image_alt")) if image_url else None,
@@ -487,6 +494,28 @@ def rules_reply(calls: list[AgentCall]) -> ChatReply:
     return ChatReply(reply=reply, calls=calls, source="rules")
 
 
+CANCEL = r"(?:never\s*mind|nvm|cancel|stop|forget\s+it|no(?:\s+thanks)?|don'?t\s+send(?:\s+it)?)[.!]*"
+
+
+REQUEST_START = (
+    r"^\s*(?:hey\s+|ok\s+|please\s+|can\s+you\s+|could\s+you\s+)*(?:find|search|show|play|brief|"
+    r"summarize|consider|compare|add|put|get|give\s+me|tell\s+me|what'?s|what\s+is|what\s+are|"
+    r"are\s+there|is\s+there|look\s+up|any)\b"
+)
+
+
+def _other_request(text: str) -> bool:
+    """A request for another agent, not the text of a message being drafted. It must read
+    like a request and match an agent, so "Big news, I got the job!" stays a message."""
+    if not re.search(REQUEST_START, text, re.IGNORECASE):
+        return False
+    return any(
+        re.search(pattern, text, re.IGNORECASE)
+        for pattern in (NEWS_WORDS, CART_REQUEST, REVIEWS_REQUEST, COORDINATE, MEDIA_WORDS,
+                        r"\byoutube\b|\b(?:find|play)\s+(?:the\s+)?(?:song|video)\b")
+    )
+
+
 def _is_message_request(text: str) -> bool:
     # A capitalized name keeps "tell me about..." and "text scale" out of messaging.
     if re.search(r"\bimessage\b", text, re.IGNORECASE):
@@ -664,7 +693,10 @@ async def chat(
     awaiting = asked and re.fullmatch(
         r"What would you like to say to (.{1,80})\?", asked.content.strip()
     )
-    if awaiting and not _is_message_request(text):
+    if awaiting and re.fullmatch(CANCEL, text.strip(), re.IGNORECASE):
+        return ChatReply(reply="OK, nothing will be sent.", calls=[], source="rules")
+    # Only a plain reply is the message; another request ("find the song...") runs normally.
+    if awaiting and not _is_message_request(text) and not _other_request(text):
         call = await prepare_message(f"text {awaiting[1]} {text}", config, http, emit)
         return rules_reply([call])
     normalized = re.sub(r"[^a-z ]", "", text.lower()).replace("kart", "cart").strip()
