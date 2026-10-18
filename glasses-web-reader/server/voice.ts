@@ -37,17 +37,29 @@ export async function transcribe(pcm: Uint8Array, sampleRate: number, keep = tru
   const stt = provider()
   if (!stt) throw new Error('Voice needs STEPFUN_API_KEY or OPENAI_API_KEY on the server')
 
-  const form = new FormData()
-  form.append('file', new Blob([wav], { type: 'audio/wav' }), 'voice.wav')
-  form.append('model', stt.model)
-  form.append('response_format', 'json')
-  form.append('language', LANGUAGE)
-  const res = await fetch(stt.url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${stt.key}` },
-    body: form,
-    signal: AbortSignal.timeout(25_000),
-  })
+  const send = () => {
+    const form = new FormData()
+    form.append('file', new Blob([wav], { type: 'audio/wav' }), 'voice.wav')
+    form.append('model', stt.model)
+    form.append('response_format', 'json')
+    form.append('language', LANGUAGE)
+    return fetch(stt.url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${stt.key}` },
+      body: form,
+      signal: AbortSignal.timeout(25_000),
+    })
+  }
+  // A dropped connection ("fetch failed") or a 5xx gets one quick retry.
+  let res: Response
+  try {
+    res = await send()
+    if (res.status >= 500) res = await send()
+  } catch (err) {
+    if ((err as Error)?.name === 'TimeoutError') throw err
+    await new Promise(r => setTimeout(r, 300))
+    res = await send()
+  }
   const body = res.ok ? '' : await res.text()
   // Silence or breath noise: nothing was said, which isn't a failure.
   if (res.status === 400 && body.includes('no speech found')) return ''
