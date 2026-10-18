@@ -204,12 +204,54 @@ async def confirm(req: BuyConfirmation) -> BuyResponse:
     return result
 
 
+class CartApproval(Model):
+    """Agent-to-agent cart approval; accepted only from the coordinator."""
+
+    confirmation_token: str = Field(min_length=32, max_length=64)
+
+
 def build_buyer_agent(port=None):
+    from uagents import Protocol
+
+    from .agents import coordinator_address
+
     agent = make_agent(
         "focal-amazon-buyer-demo",
         os.getenv("BUYER_AGENT_SEED", "laai buyer demo seed"),
         port,
     )
+    cart = Protocol(name="AmazonCart", version="0.1.0")
+
+    @cart.on_message(BuyRequest, replies=BuyResponse)
+    async def on_buy_request(ctx, sender, req):
+        await ctx.send(sender, await prepare(req))
+
+    # The executor token stays in this process; the coordinator only relays the
+    # shopper's approval from ASI:One.
+    @cart.on_message(CartApproval, replies=BuyResponse)
+    async def on_cart_approval(ctx, sender, req):
+        if sender != coordinator_address():
+            await ctx.send(
+                sender,
+                BuyResponse(
+                    product="Amazon product",
+                    status="refused",
+                    error="Only the coordinator can approve cart additions",
+                    summary="Refused: approvals come only from the coordinator.",
+                ),
+            )
+            return
+        await ctx.send(
+            sender,
+            await confirm(
+                BuyConfirmation(
+                    confirmation_token=req.confirmation_token,
+                    executor_token=os.getenv("AMAZON_CART_EXECUTOR_TOKEN", ""),
+                )
+            ),
+        )
+
+    agent.include(cart, publish_manifest=True)
 
     @agent.on_rest_post("/buy/prepare", BuyRequest, BuyResponse)
     async def on_prepare(ctx, req):

@@ -11,7 +11,7 @@ Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are six
 | `laai-news` | `NewsRequest` → `NewsResponse` | `POST /news` | A headline, a 2-4 sentence summary, an image and sources for recent news on a topic |
 | `laai-messenger` | `MessageDraftRequest` → `MessageDraftResponse` | `POST /imessage/prepare`, `POST /imessage/send` | Drafts an iMessage to an allowlisted friend; sends only after approval |
 
-Every agent also speaks the **Agent Chat Protocol**, so ASI:One and Agentverse chat can talk to it in plain language.
+Every agent also speaks the **Agent Chat Protocol**, so ASI:One and Agentverse chat can talk to it in plain language. Two more agents support the coordinator: `focal-price-verifier` checks price offers, and `focal-memory` keeps the shopper's profile and past decisions. See [ASI:One flow](#asione-flow-coordinator).
 
 Product data defaults to online search. Set `SEARCH_PROVIDER=ddgs` for keyless online
 search, `auto` to try ASI:One search with DDGS fallback, or `asi` to require ASI search.
@@ -296,6 +296,43 @@ To expose an individual specialist instead:
 3. Give it a good name and description on Agentverse so ASI:One can find it.
 
 Before deploying anywhere public, set your own seeds in `.env`. The seeds fix each agent's address, and the defaults are dev values that are in this repo.
+
+To register the whole team (each agent gets its own Agentverse profile), run the Bureau with
+`AGENTVERSE_MAILBOX=1` and connect every inspector link it prints.
+
+## ASI:One flow (coordinator)
+
+In ASI:One, **focal-shopping-assistant** runs the whole job in one conversation. Every
+agent hop is posted to the chat as it happens, and decisions are made on
+[Interactive Cards](https://innovationlab.fetch.ai/resources/docs/interactive-cards/asi-interactive-cards):
+
+| Step | Agent | What the chat shows |
+|---|---|---|
+| 1 | 🧠 `focal-memory` | The request it made (`GET /rest/v1/laai_user_preferences…`) and the JSON it got back |
+| 2 | coordinator | A **form card** for budget, priority and use case, if the message didn't give a budget |
+| 3 | coordinator | The plan, with each agent's address |
+| 4 | 💲 price, ⭐ reviews, 🔀 alternatives → ⭐ reviews | Each result as it arrives, with timing; search fallbacks ("ASI search unavailable; used free search") and retries as they happen |
+| 5 | 🛡️ `focal-price-verifier` | Kept and dropped offers with reasons, plus flags. If nothing trustworthy is left, it sends the price agent back for a deeper store search |
+| 6 | coordinator | A **comparison card** (main pick vs top rival) with buy buttons |
+| 7 | 🛒 `focal-amazon-buyer-demo` | A **listing card**, then a **review card** to approve adding to cart (checkout stays disabled) |
+| 8 | 💬 `laai-messenger` | A **review card** with the iMessage draft for `FOCAL_SHARE_CONTACT` |
+| 9 | 👀 coordinator | Last: a paid price watch through the **Payment Protocol** (Stripe embedded Checkout). Afterwards the price and verifier agents re-check the price every `FOCAL_WATCH_SECONDS` |
+| 10 | coordinator | A team recap card, then end of session |
+
+Safety: the real cart and iMessage steps run only for senders listed in
+`FOCAL_OWNER_ADDRESSES`, and only after a card approval. The buyer and messenger agents
+accept approvals only from the coordinator's address, and their executor tokens never
+leave the process. Everyone else sees the same flow with those steps marked
+**Simulated**. iMessage is still a dry run unless `IMESSAGE_DRY_RUN=0`.
+
+**Payment without buying anything.** Set Stripe **test-mode** keys (`sk_test_…`, `pk_test_…`
+from a [Stripe sandbox](https://docs.stripe.com/sandboxes)). The watch then costs $0.99 in
+test mode. Pay with card `4242 4242 4242 4242`, any future date and any CVC, and no money
+moves. The coordinator checks with Stripe that the Checkout Session is `paid` before it
+sends `CompletePayment` and starts the watch. Live keys are refused unless
+`FOCAL_ALLOW_LIVE_PAYMENTS=1`. Without Stripe keys the watch is free.
+
+To try card payloads before a demo, use the [card playground](https://asi1.ai/developer/card-playground).
 
 ## Test
 

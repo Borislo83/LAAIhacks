@@ -31,6 +31,14 @@ ALTERNATIVES_SEED = os.getenv("ALTERNATIVES_AGENT_SEED", "laai alternatives agen
 REVIEWS_SEED = os.getenv("REVIEWS_AGENT_SEED", "laai reviews agent dev seed")
 YOUTUBE_SEED = os.getenv("YOUTUBE_AGENT_SEED", "laai youtube agent dev seed")
 MESSENGER_SEED = os.getenv("MESSENGER_AGENT_SEED", "laai messenger agent dev seed")
+COORDINATOR_SEED = os.getenv("COORDINATOR_AGENT_SEED", "laai coordinator dev seed")
+
+
+def coordinator_address() -> str:
+    """Action agents accept approvals only from this address."""
+    from uagents.crypto import Identity
+
+    return Identity.from_seed(COORDINATOR_SEED, 0).address
 NEWS_SEED = os.getenv("NEWS_AGENT_SEED", "laai news agent dev seed")
 
 
@@ -180,6 +188,31 @@ def build_messenger_agent(port: int | None = None) -> Agent:
     @agent.on_rest_post("/imessage/send", imessage.MessageSendRequest, imessage.MessageSendResponse)
     async def on_send(ctx: Context, req):
         return await imessage.send(req)
+
+    # The coordinator relays a draft the shopper approved in ASI:One. Only the
+    # coordinator's address is trusted; the executor token never leaves this process.
+    approvals = Protocol(name="MessageApproval", version="0.1.0")
+
+    @approvals.on_message(imessage.MessageApproval, replies=imessage.MessageSendResponse)
+    async def on_approval(ctx: Context, sender: str, req):
+        if sender != coordinator_address():
+            await ctx.send(
+                sender,
+                imessage.MessageSendResponse(status="failed", summary="Only the coordinator can approve sends."),
+            )
+            return
+        await ctx.send(
+            sender,
+            await imessage.send(
+                imessage.MessageSendRequest(
+                    draft_id=req.draft_id,
+                    text=req.text,
+                    executor_token=os.getenv("IMESSAGE_EXECUTOR_TOKEN", ""),
+                )
+            ),
+        )
+
+    agent.include(approvals, publish_manifest=True)
 
     # Dry-run debugging: REST handlers cannot see the caller's address, so this is
     # gated by the executor token instead of loopback, and is off when sending for real.

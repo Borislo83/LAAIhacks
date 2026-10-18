@@ -36,6 +36,8 @@ class PriceCompareRequest(Model):
     progress_id: str | None = Field(default=None, min_length=32, max_length=64)
     current_store: str | None = None
     current_price: float | None = None
+    # Also run the store-focused search, e.g. when the verifier rejected every lead.
+    deep: bool = False
 
 
 class PriceCompareResponse(EvidenceResponse):
@@ -104,6 +106,8 @@ class ConsiderResponse(Model):
     alternatives: AlternativesResponse | None = None
     # Reviews for the top alternative, so the two products can be compared.
     alternative_reviews: ReviewsResponse | None = None
+    # The verifier agent's audit of the price offers, when a verifier is available.
+    verification: dict | None = None
     errors: dict[str, str] = Field(default_factory=dict)
     timings_ms: dict[str, int] = Field(default_factory=dict)
     summary: str
