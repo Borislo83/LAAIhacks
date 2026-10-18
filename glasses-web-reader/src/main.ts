@@ -1908,7 +1908,9 @@ function openActions(group: ActionGroup, focus?: string) {
 /** Only the page is on screen: no voice, answer card, menu, list, loading or other popup. */
 function popupFree() {
   // Claude's recommendation strip goes first; the popup follows when it closes.
-  const shown = glassRecommendations && recommendationsOpen ? 'recommendations' : view === 'action-popup' ? 'reader' : view
+  // A strip that just closed still has view === 'recommendations' while the page redraws.
+  const shown = glassRecommendations && recommendationsOpen ? 'recommendations'
+    : view === 'action-popup' || view === 'recommendations' ? 'reader' : view
   return popupAllowed({ view: shown, loading: !!loading, status: !!status,
     recording: !!recorder, card: !!agentCard, page: !!doc && backend.state.connected })
 }
