@@ -1,5 +1,5 @@
 {
-  "rewrites": [
-    { "source": "/", "destination": "/blueprint.html" }
+  "redirects": [
+    { "source": "/blueprint.html", "destination": "/", "permanent": false }
   ]
 }
