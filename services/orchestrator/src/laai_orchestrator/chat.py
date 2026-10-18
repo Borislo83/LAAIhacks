@@ -648,7 +648,21 @@ def laptop_honest(reply: str, calls: list[AgentCall]) -> str:
         laptop = (call.result or {}).get("laptop") if call.kind == AgentKind.YOUTUBE else None
         if laptop and "on your laptop" not in reply.lower():
             return _line(call) + (" " + reply if reply else "")
+    # A message is drafted or sent only through the messenger: never take the model's word.
+    if not any(c.kind == "message" for c in calls) and MESSAGE_CLAIM.search(reply):
+        return NO_DRAFT
     return reply
+
+
+MESSAGE_CLAIM = re.compile(
+    r"\b(?:draft(?:ed)?|sent|texted|messaged)\b.{0,40}\b(?:message|text|imessage|to\s+[A-Z])"
+    r"|\b(?:message|text)\b.{0,40}\b(?:drafted|sent|ready)\b",
+    re.IGNORECASE,
+)
+NO_DRAFT = (
+    "I didn't draft a message. Say \"text <name> <message>\" and I'll show you the draft "
+    "before anything is sent."
+)
 
 
 async def chat_with_llm(
@@ -1002,7 +1016,8 @@ def _is_message_request(text: str) -> bool:
         return True
     # A lowercase name is fine when the message itself follows: text jonathan "lol",
     # tell jonathan that I'm late, message alex saying hi, text legend i'm late.
-    if not verb or not (name := verb[2].rstrip(",:")).isalpha():
+    # Speech-to-text often ends the name with a full stop: "Text legend. I'm late."
+    if not verb or not (name := verb[2].rstrip(",:.;!")).isalpha():
         return False
     rest = text[verb.end():]
     return bool(

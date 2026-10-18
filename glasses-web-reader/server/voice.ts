@@ -138,11 +138,16 @@ function matchName(words: string[], from: number, slips: number): number | null 
 }
 
 export function parseWake(transcript: string): { wake: boolean; command: string } {
-  const words = transcript.trim().split(/[\s\-–—]+/).filter(w => letters(w))
-  const after = (end: number) => ({
-    wake: true,
-    command: words.slice(end).join(' ').replace(/^[\s,.!?;:]+/, ''),
-  })
+  const text = transcript.trim()
+  // Wake matching looks only at words with letters, but the command is cut from the
+  // original text so numbers and hyphens survive ("AirPods Pro 3", "WH-1000XM5").
+  const tokens = [...text.matchAll(/[^\s\-–—]+/g)].filter(m => letters(m[0]))
+  const words = tokens.map(m => m[0])
+  const after = (end: number) => {
+    const last = tokens[end - 1]
+    const rest = last ? text.slice(last.index! + last[0].length) : text
+    return { wake: true, command: rest.replace(/^[\s,.!?;:\-–—]+/, '').trim() }
+  }
   for (let i = 0; i < words.length; i++) {
     const w = letters(words[i])
     // "Heysearch" written as one word.
@@ -156,7 +161,7 @@ export function parseWake(transcript: string): { wake: boolean; command: string 
     // The name alone only opens a sentence, and must be near exact.
     if (NAME_ALONE && i === 0 && editDistance(w, WAKE_NAME) <= 1) return after(1)
   }
-  return { wake: false, command: transcript.trim() }
+  return { wake: false, command: text }
 }
 
 function editDistance(a: string, b: string) {
