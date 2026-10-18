@@ -80,9 +80,12 @@ opens its review → confirm → approve cards; the result still pops up as **Fo
 finished** / **Focal couldn't finish** and the action card shows Done or Failed. Signed
 out, chat options fall back to a web search.
 
-On the glasses, swipe to choose, tap to select, and select **Close recommendations** or
+On the glasses the strip pops up no sooner than 10 seconds after the page finishes
+loading (`RECOMMENDATION_DELAY_MS` in `src/main.ts`), and waits while voice, a card or a
+menu is on screen. Swipe to choose, tap to select, and select **Close recommendations** or
 double-tap to resume reading. The phone's X or Escape also closes it. Reopen it from the
-reader menu (**Focal can help (n)**) without another request. Navigating clears it, and
+reader menu (**Focal can help (n)**) without another request, or say **"Hey Focal, show
+recommendations"** (also "what can you do here", "show suggestions", "Focal can help"). Navigating clears it, and
 closing while it loads cancels the request. **Recommendation layout** in Settings switches
 between Corner popup, Bottom strip (default) and Full-screen list. The phone toggle and
 the account's proactive-recommendations preference are respected. `npm run test:preview`
@@ -90,7 +93,7 @@ uses sample responses without model, account or agent calls.
 
 ## Voice search and scrolling
 
-Say **"Hey Search"**, then a question, or choose **Voice search** in the menu or on
+Say **"Hey Focal"**, then a question, or choose **Voice search** in the menu or on
 the phone. The server transcribes the clip (`STEPFUN_API_KEY` or `OPENAI_API_KEY`),
 Claude picks one page from a web search, and that page opens. Hands-free listening is
 on by default and can be switched off in the menu or on the phone. Pages opened by

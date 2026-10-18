@@ -92,15 +92,18 @@ async function save(wav: Uint8Array) {
 }
 
 // ── Wake phrase ─────────────────────────────────────────────────────────────
-// "Hey Search" → wake (the question comes next). Speech-to-text writes the phrase
-// loosely ("Hey, search." / "Hey-search" / "Hey searches" / "Hey, serch"). The
+// "Hey Focal" → wake (the question comes next). Speech-to-text writes the phrase
+// loosely ("Hey, Focal." / "Hey-focal" / "Hey vocal" / "Hey, for cal"). The
 // greeting must be a real word; the name after it may be split over a few words
-// and a letter or two off, or be a known mishearing. It can come anywhere
-// ("doing great, hey search"). A long, unusual name may also open a sentence on
-// its own; a short one like "search" is an ordinary word, so it never does.
+// and a letter off, or be a known mishearing. It can come anywhere
+// ("doing great, hey focal"). A long, unusual name may also open a sentence on
+// its own; a short one like "focal" sounds like "local" and "vocal", so it never
+// does: "a local store" or "focus on the task" don't wake it.
 
-const WAKE_NAME = (process.env.WAKE_NAME ?? 'search').toLowerCase().replace(/[^a-z]/g, '')
+const WAKE_NAME = (process.env.WAKE_NAME ?? 'focal').toLowerCase().replace(/[^a-z]/g, '')
 const DEFAULT_ALIASES: Record<string, string> = {
+  // Mishearings of "focal", each only after a greeting ("hey vocal", "hey for cal").
+  focal: 'vocal,focus,fokal,phocal,focall,focul,focle,fockle,forcal,forcall,folkal,folkall,fogal,vocals,focals',
   search: 'searches,searched,searching,searcher,serch,sirch,surch,searcha,research',
   searcher: 'search,searchher,researcher,searching,sercher,surcher,searcha,sirsure',
   reader: 'rita,reda,rider,raider,ritter,riter,reeta',
@@ -110,7 +113,7 @@ const WAKE_ALIASES = new Set(
     .split(',').map(a => a.trim().toLowerCase().replace(/[^a-z]/g, '')).filter(Boolean),
 )
 const GREETINGS = new Set(['hey', 'hi', 'hello', 'ok', 'okay', 'yo', 'hay'])
-/** The name can be split over this many words ("search her"). */
+/** The name can be split over this many words ("for cal", "folk all"). */
 const MAX_NAME_WORDS = 3
 const NAME_SLIPS = WAKE_NAME.length >= 7 ? 2 : 1
 const NAME_ALONE = WAKE_NAME.length >= 7
@@ -131,7 +134,7 @@ function matchName(words: string[], from: number, slips: number): number | null 
   for (let end = from + 1; end <= Math.min(words.length, from + MAX_NAME_WORDS); end++) {
     joined += letters(words[end - 1])
     const distance = nameDistance(joined, slips)
-    // On a tie the longer match wins, so "hey search her" doesn't leave "her" behind.
+    // On a tie the longer match wins, so "hey for cal" doesn't leave "cal" behind.
     if (distance !== null && (!best || distance <= best.distance)) best = { end, distance }
   }
   return best?.end ?? null
@@ -150,9 +153,10 @@ export function parseWake(transcript: string): { wake: boolean; command: string 
   }
   for (let i = 0; i < words.length; i++) {
     const w = letters(words[i])
-    // "Heysearch" written as one word.
+    // "Heyfocal" written as one word.
     for (const g of GREETINGS) {
-      if (w.startsWith(g) && w.length > g.length + 3 && editDistance(w.slice(g.length), WAKE_NAME) <= 1) return after(i + 1)
+      const rest = w.slice(g.length)
+      if (w.startsWith(g) && rest.length > 3 && (WAKE_ALIASES.has(rest) || editDistance(rest, WAKE_NAME) <= 1)) return after(i + 1)
     }
     if (GREETINGS.has(w)) {
       const end = matchName(words, i + 1, NAME_SLIPS)

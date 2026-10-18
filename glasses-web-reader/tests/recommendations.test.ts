@@ -8,6 +8,7 @@ import {
   CAPABILITIES, capabilityCommand, makeAction, mergeSessionActions, pickCapabilities, RECOMMENDATION_SELECTED,
   shoppingActions, STRIP_HEADING, TITLE_MAX, validBatch, type RecommendationBatch, type RecommendationContext,
   type SessionActionLike,
+  isRecommendationsCommand,
 } from '../shared/recommendations'
 
 const article: RecommendationContext = { url: 'https://example.com/hearing', title: 'AirPods Pro 2 get a hearing aid mode',
@@ -342,4 +343,13 @@ test('the panel escapes text, rejects invalid batches and offers retry after fai
   assert.equal(root.querySelectorAll('[data-action]').length, 2)
   assert.equal(root.querySelector('img'), null)
   dom.window.close()
+})
+
+test('voice commands that reopen the recommendation strip', () => {
+  for (const said of ['show recommendations', 'Recommendations.', 'what can you do here?', 'Show suggestions',
+    'Focal can help', 'show me the recommendations again', 'What can you do on this page', 'open recommendations please',
+    'what are the suggestions', 'What can Focal do here']) assert.equal(isRecommendationsCommand(said), true, said)
+  for (const said of ['recommendations for running shoes', 'compare prices for AirPods Pro 3', 'what can you do about the weather',
+    'show me suggestions for dinner', '', 'text Legend recommendations', 'search for recommendations on laptops'])
+    assert.equal(isRecommendationsCommand(said), false, said)
 })

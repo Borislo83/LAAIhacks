@@ -31,6 +31,24 @@ export const SHOPPING_CAPABILITIES: CapabilityId[] = ['compare_prices', 'add_to_
 export const STRIP_HEADING = 'Focal can help'
 export const MAX_ACTIONS = 3
 
+/**
+ * A spoken command that asks for this page's options again ("show recommendations",
+ * "what can you do here", "Focal can help"). Matches the whole command only, so
+ * "recommendations for running shoes" still goes to the agents or a web search.
+ */
+export function isRecommendationsCommand(command: string): boolean {
+  const said = command.toLowerCase().replace(/[’']/g, '').replace(/[^a-z]+/g, ' ').trim()
+    .replace(/^(please|hey|ok|okay|so|um|uh)\s+/, '').replace(/\s+please$/, '')
+  if (!said) return false
+  const page = '(?:\\s+(?:for|on|about)\\s+(?:this|the)\\s+(?:page|site|website|product|article))?(?:\\s+(?:here|again|now))*'
+  return [
+    new RegExp(`^(?:(?:show|open|reopen|bring\\s+up|bring\\s+back|see|view|list|get|give)(?:\\s+me)?\\s+)?(?:the\\s+|my\\s+|your\\s+)?(?:focal\\s+)?(?:recommendations?|suggestions?|recs)${page}$`),
+    new RegExp(`^(?:what|which)\\s+(?:are\\s+)?(?:the\\s+|your\\s+)?(?:recommendations?|suggestions?)${page}$`),
+    new RegExp(`^what\\s+(?:can|could)\\s+(?:you|focal)\\s+do(?:\\s+for\\s+me)?${page}$`),
+    /^(?:focal|vocal)\s+can\s+help(?:\s+me)?$/,
+  ].some(pattern => pattern.test(said))
+}
+
 export interface RecommendationContext {
   url: string; title: string; text: string
   /** The reader's layout for the page (shared/types SiteKind). */
