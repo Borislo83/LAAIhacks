@@ -1,4 +1,4 @@
-import type { CondensedPage, SiteKind } from '../shared/types'
+import type { CondensedPage, CondenseEvent, SiteKind } from '../shared/types'
 import type { PageSpec } from './screens'
 import { mountBackendPanel } from './lensos/panel'
 import type { ActionGroup, BackendState } from './lensos/session'
@@ -7,10 +7,13 @@ import { mountRecommendations, type RecommendationEvents } from './recommendatio
 import { recommendActions } from './api'
 import { shoppingActions, type RecommendationBatch, type RecommendationContext } from '../shared/recommendations'
 import { toContext } from './lensos/page'
+import { RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
 import './recommendations.css'
+import './companion.css'
 
-// Phone-side UI inside the Even app WebView: URL entry, recent
-// pages, and a live mirror of what the glasses are showing.
+// Phone-side UI inside the Even app WebView. The front (Home, Library,
+// Settings) is for the wearer; the developer console behind Settings holds
+// the live mirror, remote input, voice feed, typed commands, account and condense log.
 
 interface CompanionState {
   doc: CondensedPage | null
@@ -23,10 +26,13 @@ interface CompanionState {
   spec: PageSpec
   position: string
   kind?: SiteKind
+  /** What the glasses are showing (deck, menu, voice...), for the console. */
+  view: string
   voice: VoiceUi
   handsFree: boolean
   /** Focal suggests next steps (its real capabilities) after each page loads. */
   recommendations: boolean
+  recommendationLayout: RecommendationLayout
   /** Item labels when the glasses show a list (menu, contents, links...). */
   list: string[] | null
   /** Hands-free is waiting for the wake phrase right now. */
@@ -74,6 +80,9 @@ interface CompanionOptions {
   onVoice: () => void
   onHandsFree: (on: boolean) => void
   onRecommendations: (on: boolean) => void
+  onRecommendationLayout: (layout: RecommendationLayout) => void
+  /** Send typed text to Focal as if the wearer had said it. */
+  onInject: (text: string) => void
   recommendations?: RecommendationEvents
   backend: {
     state(): BackendState
@@ -108,190 +117,323 @@ export interface Companion {
   reopenRecommendations(): boolean
   /** Live mic loudness (0..1), plus elapsed time while capturing a command. */
   voiceLevel(level: number, ms?: number): void
+  /** A page load starts: begin a fresh condense log in the console. */
+  condenseStart(url: string): void
+  condenseEvent(event: CondenseEvent): void
 }
 
-const STYLE = `
-  /* Focal blueprint palette and type (apps/dashboard/prototype/blueprint-tokens.css):
-     graphite sheet, off-white ink, near-square corners, no decoration-only marks. Lens green marks only live things:
-     the mirror, the mic meter and active states. */
-  :root {
-    color-scheme: dark;
-    --sheet: #23272b; --grid: #2c3136; --grid-major: #353b41; --panel: #272b30; --well: #1d2024;
-    --hair: #41484f; --ink: #e8ebe4; --muted: #8d949a; --lens: #8ee6a2; --lens-soft: rgba(142,230,162,.12);
-    --lens-bg: #121417; --warn: #f2a477; --r: 3px;
-    --serif: "Instrument Serif", Georgia, serif; --sans: "Instrument Sans", system-ui, sans-serif;
-    --mono: "JetBrains Mono", ui-monospace, monospace;
-    /* names the recommendation sheet and backend panel already use */
-    --text: var(--ink); --text-dim: var(--muted); --bg: var(--sheet); --surface: var(--panel);
-    --input: var(--well); --accent: var(--ink); --on-accent: var(--sheet); --danger: var(--warn);
+type Tab = 'home' | 'library' | 'settings' | 'console'
+type ConsoleTab = 'glasses' | 'voice' | 'backend'
+const TAB_KEY = 'webreader.companion.tab'
+const PRIORITIES = [['balanced', 'Balanced'], ['price', 'Price'], ['quality', 'Quality']] as const
+
+const icon = (paths: string, size = 20) =>
+  `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`
+const ICON_HOME = '<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>'
+const ICON_BOOKMARK = '<path d="M6 3h12v18l-6-4-6 4z"/>'
+const ICON_SLIDERS = '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>'
+const ICON_MIC = '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>'
+const ICON_CHEVRON = '<path d="M9 6l6 6-6 6"/>'
+const ICON_BACK = '<path d="M15 6l-6 6 6 6"/>'
+
+/** Focal's mark: a four-corner viewfinder around the lens-green focus point. */
+const focalMark = (size: number) =>
+  `<svg class="focal-mark" width="${size}" height="${size}" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" aria-hidden="true"><path d="M8 20 V8 H20 M44 8 H56 V20 M56 44 V56 H44 M20 56 H8 V44"/><circle cx="32" cy="32" r="8" fill="var(--lens)" stroke="none"/></svg>`
+const focalLockup = (size: number) => `<span class="focal" role="img" aria-label="Focal">${focalMark(size)}<span aria-hidden="true">focal</span></span>`
+
+/** A scaled copy of the 576x288 glasses display inside `glass`. */
+function mountMirror(glass: HTMLElement) {
+  const inner = document.createElement('div')
+  inner.className = 'glass-inner'
+  glass.append(inner)
+  const fit = () => { inner.style.transform = `scale(${glass.clientWidth / 576})` }
+  new ResizeObserver(fit).observe(glass)
+  const BORDER: Record<number, string> = { 13: '#8ee6a2', 5: '#3c6b4a' }
+  return {
+    draw(spec: PageSpec) {
+      inner.replaceChildren()
+      for (const t of spec.texts) {
+        const el = document.createElement('div')
+        Object.assign(el.style, {
+          left: `${t.x}px`, top: `${t.y}px`, width: `${t.w}px`, height: `${t.h}px`,
+          padding: `${t.pad ?? 4}px`, borderWidth: `${t.border ?? 0}px`,
+          borderColor: BORDER[t.color ?? 13] ?? '#5fae75', borderRadius: `${t.radius ?? 0}px`,
+          ...(t.scroll ? { overflowY: 'auto' } : {}),
+        })
+        el.textContent = t.text
+        inner.append(el)
+      }
+      for (const im of spec.images) {
+        const img = document.createElement('img')
+        img.src = `data:image/png;base64,${im.image.png}`
+        img.alt = ''
+        Object.assign(img.style, { left: `${im.x}px`, top: `${im.y}px`, width: `${im.image.w}px`, height: `${im.image.h}px` })
+        inner.append(img)
+      }
+      glass.setAttribute('aria-label', spec.texts.map(t => t.text.trim()).filter(Boolean).join(' / ') || 'Glasses display preview')
+      fit()
+    },
   }
-  html, body { background: var(--sheet) !important; color: var(--ink) !important; -webkit-font-smoothing: antialiased; }
-  ::selection { background: var(--lens); color: var(--sheet); }
-  .wr :focus-visible { outline: 2px solid var(--lens); outline-offset: 2px; }
-  .wr { box-sizing: border-box; width: 100%; max-width: 640px; margin: 0 auto; padding: 24px 16px 40px;
-    font: 16px/1.55 var(--sans); display: flex; flex-direction: column; gap: 28px; }
-  .wr h1 { font: 400 40px/1 var(--serif); letter-spacing: -.015em; margin: 0; }
-  .wr .sub { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
-  .wr label.lbl, .wr .feed-head { display: block; font: 12px/1.4 var(--mono); letter-spacing: .02em;
-    text-transform: none; color: var(--muted); margin: 0 0 8px; }
-  .wr form { display: flex; flex-direction: column; gap: 12px; }
-  .wr input[type=url] { width: 100%; box-sizing: border-box; border: 1px solid var(--hair); border-radius: var(--r);
-    background: var(--well); color: var(--ink); font: 15px/1.4 var(--mono); padding: 13px 14px; min-height: 48px; }
-  .wr input[type=url]:focus { outline: none; border-color: var(--lens); }
-  .wr .url-field { position: relative; }
-  .wr .url-field input[type=url] { padding-right: 48px; }
-  .wr .clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px;
-    border: 0; border-radius: var(--r); background: transparent; color: var(--muted); font: inherit; font-size: 20px;
-    line-height: 1; cursor: pointer; }
-  /* primary: solid ink, like the blueprint's Open Studio */
-  .wr .go { border: 1px solid var(--ink); border-radius: var(--r); background: var(--ink); color: var(--sheet);
-    font: 500 15px/1 var(--sans); min-height: 48px; cursor: pointer; }
-  .wr .go:hover { background: transparent; color: var(--ink); }
-  .wr .go:disabled { opacity: .45; cursor: progress; }
-  .wr .msg { font: 12px/1.5 var(--mono); color: var(--muted); min-height: 18px; margin: 0; }
-  .wr .msg.err { color: var(--warn); }
-  .wr .card { background: var(--panel); border: 1px solid var(--hair); border-radius: var(--r); padding: 16px; }
-  .wr .mirror-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
-  .wr .mirror-head strong { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .wr .mirror-head span { font: 12px var(--mono); color: var(--muted); flex: none; }
-  /* what lands on the lens: dark glass, green type */
-  .wr .glass { position: relative; width: 100%; aspect-ratio: 2 / 1; background: var(--lens-bg);
-    border: 1px solid var(--hair); border-radius: var(--r); overflow: hidden; }
-  .wr .glass-inner { position: absolute; left: 0; top: 0; width: 576px; height: 288px; transform-origin: 0 0;
-    font: 20px/27px 'FK Grotesk Neue', -apple-system, system-ui, sans-serif; color: var(--lens); letter-spacing: 0; }
-  .wr .glass-inner > div { position: absolute; box-sizing: border-box; white-space: pre-wrap; overflow: hidden; border-style: solid; }
-  .wr .glass-inner > img { position: absolute; image-rendering: pixelated; mix-blend-mode: screen;
-    filter: sepia(1) saturate(6) hue-rotate(62deg) brightness(1.05); }
-  .wr .pager { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 8px; margin-top: 12px; }
-  .wr .pager button, .wr .recent button { border: 1px solid var(--hair); border-radius: var(--r); background: transparent;
-    color: var(--ink); font: 14px/1.2 var(--sans); min-height: 44px; cursor: pointer; }
-  .wr .pager .sel { background: var(--ink); color: var(--sheet); border-color: var(--ink); font-weight: 500; }
-  @media (hover: hover) { .wr .pager button:hover, .wr .recent button:hover, .wr .back-button:hover,
-    .wr .backend-panel button:hover { border-color: var(--ink); } }
-  .wr .recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-  .wr .recent button { width: 100%; text-align: left; padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; background: var(--panel); }
-  .wr .voice-row { display: flex; align-items: center; gap: 12px; }
-  .wr .voice-row .go { flex: none; padding: 0 18px; }
-  .wr .voice-row .go.on { background: var(--lens); border-color: var(--lens); color: var(--sheet); }
-  .wr .meter { flex: 1; height: 6px; border-radius: 1px; background: var(--well); border: 1px solid var(--hair); overflow: hidden; }
-  .wr .meter > div { height: 100%; width: 0; background: var(--lens); transition: width 80ms linear; }
-  .wr .heard { margin: 12px 0 0; font: 400 24px/1.2 var(--serif); }
-  .wr .heard:empty { display: none; }
-  .wr .hf { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px;
-    font-size: 15px; font-weight: 500; margin-bottom: 8px; }
-  .wr input[type=checkbox] { flex: none; width: 22px; height: 22px; margin: 0; accent-color: var(--lens); cursor: pointer; }
-  .wr .feed { list-style: none; margin: 12px 0 0; padding: 12px 0 0; border-top: 1px solid var(--hair);
-    display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
-  .wr .feed:empty { display: none; }
-  .wr .feed li { font-size: 14px; color: var(--muted); line-height: 1.45; }
-  .wr .feed li.cmd { color: var(--ink); font-weight: 500; }
-  .wr .feed li.cmd::before { content: 'sent · '; font: 12px var(--mono); color: var(--lens); }
-  .wr .feed li.open { color: var(--ink); word-break: break-all; }
-  .wr .feed li.open::before { content: 'opened · '; font: 12px var(--mono); color: var(--muted); }
-  .wr .feed li.pending { font-style: italic; }
-  .wr .feed li.pending::after { content: ' …'; }
-  .wr .feed-head { margin: 12px 0 0; }
-  .wr .bm-toggle { margin-top: 8px; width: 100%; }
-  .wr .bm-toggle[aria-pressed=true] { border-color: var(--lens); color: var(--lens); background: var(--lens-soft); }
-  .wr .bookmarks li { display: flex; gap: 8px; align-items: stretch; }
-  .wr .bookmarks li > button:first-child { flex: 1; min-width: 0; }
-  .wr .bookmarks .remove { flex: none; width: 44px; padding: 0; align-items: center; justify-content: center;
-    font-size: 20px; color: var(--muted); }
-  .wr .recent small { color: var(--muted); font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-  .wr .recent span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-  .wr [hidden] { display: none !important; }
-  .wr .backend-panel { display: grid; gap: 12px; }
-  .wr .backend-panel label { display: grid; gap: 6px; font-size: 13px; }
-  .wr .backend-panel .check { display: flex; align-items: center; gap: 10px; }
-  .wr .backend-panel input[type=password], .wr .backend-panel select { width: 100%; box-sizing: border-box;
-    border: 1px solid var(--hair); border-radius: var(--r); min-height: 44px; padding: 8px 12px; background: var(--well);
-    color: var(--ink); font: 14px var(--mono); }
-  .wr .backend-panel input[type=password]:focus, .wr .backend-panel select:focus { outline: none; border-color: var(--lens); }
-  .wr .backend-panel button, .wr .back-button { min-height: 44px; border: 1px solid var(--hair); border-radius: var(--r);
-    padding: 10px 12px; background: transparent; color: var(--ink); cursor: pointer; font: 14px/1.2 var(--sans); }
-  .wr .backend-panel button.go { background: var(--ink); color: var(--sheet); border-color: var(--ink); font-weight: 500; }
-  .wr .backend-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
-  .wr .backend-panel summary { cursor: pointer; font-size: 13px; }
-  .wr .compact .backend-panel { gap: 6px; padding: 12px; }
-  .wr .back-button { width: 100%; margin-top: 8px; }
-  .wr .picks { margin-top: 12px; max-height: 360px; overflow-y: auto; }
-  @media (prefers-reduced-motion: reduce) { .wr *, .wr *::before, .wr *::after { animation: none !important; transition: none !important; } }
-`
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}, ...children: (Node | string)[]) {
+  const node = Object.assign(document.createElement(tag), props)
+  node.append(...children)
+  return node
+}
 
 export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Companion {
-  const style = document.createElement('style')
-  style.textContent = STYLE
-  document.head.appendChild(style)
-
   root.style.display = 'block'
   root.innerHTML = `
-    <main class="wr">
-      <header>
-        <h1>Web Reader</h1>
-        <p class="sub">Condense any web page into text pages for your G2.</p>
-      </header>
-      <form id="f">
-        <div>
-          <label class="lbl" for="url">Page URL</label>
+    <div class="debug-strip" id="strip" hidden><span>DEBUG MODE</span><span class="strip-brand">${focalMark(13)}focal · web reader</span></div>
+    <main class="wr" id="wr">
+      <div class="page" data-tab="home">
+        <header>
+          <div class="brand-bar">${focalLockup(26)}</div>
+          <h1>Web Reader</h1>
+        </header>
+        <form id="f">
+          <label class="label" for="url">01 · Open a page</label>
           <div class="url-field">
-            <input id="url" type="text" inputmode="url" autocapitalize="off" spellcheck="false" autocomplete="url" placeholder="https://example.com/article" required />
-            <button class="clear" id="clear" type="button" aria-label="Clear URL" hidden>×</button>
+            <input id="url" type="text" inputmode="url" autocapitalize="off" spellcheck="false" autocomplete="url" placeholder="Paste a link or type a site" required />
+            <button class="clear" id="clear" type="button" aria-label="Clear link" hidden>×</button>
           </div>
+          <div class="pair">
+            <button class="btn dark" id="go" type="submit">Send to glasses</button>
+            <button class="btn" id="askVoice" type="button">${icon(ICON_MIC, 17)}<span>Ask by voice</span></button>
+          </div>
+          <p class="msg" id="msg" role="status"></p>
+        </form>
+        <section>
+          <h2 class="label">02 · On the lens</h2>
+          <div class="card">
+            <div class="glass" id="glassHome" role="img" aria-label="Glasses display preview"></div>
+            <div class="now">
+              <div><strong id="title">Nothing on the lens</strong><small id="where">Send a page to start</small></div>
+              <button class="btn icon-btn" id="bm" type="button" aria-pressed="false" aria-label="Bookmark this page" hidden>${icon(ICON_BOOKMARK, 18)}</button>
+            </div>
+          </div>
+        </section>
+        <aside id="recommendations" hidden></aside>
+      </div>
+
+      <div class="page" data-tab="library" hidden>
+        <header>
+          <h1>Library</h1>
+        </header>
+        <div>
+          <label class="label" for="find">Find a saved page</label>
+          <input id="find" type="search" placeholder="Search bookmarks and history" />
         </div>
-        <button class="go" id="go" type="submit">Send to glasses</button>
-        <p class="msg" id="msg" role="status"></p>
-      </form>
-      <section>
-        <label class="lbl">On your glasses</label>
-        <div class="card">
-          <div class="mirror-head"><strong id="title">Nothing loaded</strong><span id="count"></span></div>
-          <div class="glass" id="glass" role="img" aria-label="Glasses display preview"><div class="glass-inner" id="mirror"></div></div>
-          <div class="pager">
-            <button type="button" id="prev">Previous</button>
-            <button type="button" id="sel" class="sel">Select</button>
-            <button type="button" id="next">Next</button>
+        <section>
+          <div class="row-head"><h2 class="label">Bookmarks</h2><span class="label" id="bmCount"></span></div>
+          <ul class="links" id="bookmarks"></ul>
+          <p class="empty" id="bmEmpty">No bookmarks yet. Bookmark a page from Home or the glasses menu.</p>
+        </section>
+        <section>
+          <h2 class="label">Recent</h2>
+          <ul class="links" id="recent"></ul>
+          <p class="empty" id="recentEmpty">Pages you open show up here.</p>
+        </section>
+      </div>
+
+      <div class="page" data-tab="settings" hidden>
+        <header><h1>Settings</h1></header>
+        <section>
+          <h2 class="label">On the lens</h2>
+          <div class="card rows">
+            <label class="switch">Suggest next steps after each page<input type="checkbox" id="recs" /></label>
+            <div class="setting">
+              <span>Suggestion style</span>
+              <div class="seg" id="layouts" role="group" aria-label="Suggestion style"></div>
+            </div>
           </div>
-          <ul class="recent picks" id="picks" aria-label="Glasses list" hidden></ul>
-          <div class="pager">
-            <button type="button" id="menu">Menu</button>
-            <button type="button" id="back-control" style="grid-column: span 2">Back / cancel</button>
+        </section>
+        <section>
+          <h2 class="label">Voice</h2>
+          <div class="card rows">
+            <label class="switch">Hands-free listening<input type="checkbox" id="hf" /></label>
+            <div class="switch">Wake phrase<span class="value" id="wake"></span></div>
           </div>
-          <button type="button" id="bm" class="back-button bm-toggle" aria-pressed="false" hidden>☆ Bookmark this page</button>
+        </section>
+        <section id="shopping">
+          <h2 class="label">Shopping</h2>
+          <div class="seg" id="priorities" role="group" aria-label="Shopping priority"></div>
+        </section>
+        <section>
+          <h2 class="label">Account</h2>
+          <div class="card rows">
+            <div class="switch"><span id="acct">Not signed in</span><button class="btn" id="signOut" type="button" style="min-height:36px" hidden>Sign out</button></div>
+          </div>
+        </section>
+        <button class="dev-link" id="openConsole" type="button">
+          <span>Developer console</span>${icon(ICON_CHEVRON, 18)}
+        </button>
+      </div>
+
+      <div class="page" data-tab="console" hidden>
+        <div class="console-top">
+          <button class="exit" id="exitConsole" type="button">${icon(ICON_BACK, 18)}Exit console</button>
+          <span class="label" id="consoleState" style="margin:0"></span>
         </div>
-      </section>
-      <section>
-        <label class="lbl">Voice search</label>
-        <div class="card">
-          <label class="hf"><span id="hfLabel">Hands-free</span><input type="checkbox" id="hf" /></label>
-          <div class="voice-row">
-            <button class="go" id="mic" type="button">Start listening</button>
+        <h1 class="mono-h1">console/<span id="consoleName">glasses</span></h1>
+        <nav class="subnav" aria-label="Console sections">
+          <button type="button" data-sub="glasses">GLASSES</button>
+          <button type="button" data-sub="voice">VOICE</button>
+          <button type="button" data-sub="backend">BACKEND</button>
+        </nav>
+
+        <div class="page" data-sub-panel="glasses">
+          <section>
+            <div class="row-head"><h2 class="label">Live mirror <span id="count"></span></h2><button class="text-btn" id="openFull" type="button">fullscreen ⤢</button></div>
+            <div class="glass" id="glassConsole" role="img" aria-label="Glasses display preview"></div>
+          </section>
+          <section>
+            <h2 class="label">Remote input</h2>
+            <div class="remote">
+              <button class="btn" type="button" id="prev">▲ up</button>
+              <button class="btn dark" type="button" id="sel">● tap</button>
+              <button class="btn" type="button" id="next">▼ down</button>
+              <button class="btn" type="button" id="menu">≡ menu</button>
+              <button class="btn wide" type="button" id="back-control">●● double-tap · back</button>
+            </div>
+          </section>
+          <section id="picksWrap" hidden>
+            <h2 class="label">List on the glasses</h2>
+            <ul class="picks" id="picks" aria-label="Glasses list"></ul>
+          </section>
+          <form id="rawForm">
+            <label class="label" for="raw">Load URL</label>
+            <div class="inline">
+              <input id="raw" type="url" inputmode="url" autocomplete="off" placeholder="https://" required />
+              <button class="btn warn console-btn" type="submit">reload</button>
+            </div>
+          </form>
+          <pre class="log" id="info"></pre>
+        </div>
+
+        <div class="page" data-sub-panel="voice" hidden>
+          <form id="injectForm">
+            <label class="label" for="inject">Inject a message to Focal · handled as if spoken</label>
+            <div class="inline">
+              <input id="inject" type="text" autocomplete="off" autocapitalize="sentences" enterkeyhint="send" placeholder="Text legend. I'm running late" required />
+              <button class="btn dark console-btn" id="injectGo" type="submit">send</button>
+            </div>
+          </form>
+          <section class="card voice-card">
+            <div class="phase" id="phase"><span id="phaseText">phase=idle</span><span id="phaseTime"></span></div>
             <div class="meter" aria-hidden="true"><div id="meter"></div></div>
-          </div>
-          <p class="msg" id="vmsg" role="status" style="margin-top:12px">Uses the glasses microphone.</p>
-          <p class="heard" id="heard"></p>
-          <p class="feed-head" id="feedHead" hidden>Always listening · what it hears</p>
-          <ul class="feed" id="feed" aria-label="Everything heard" aria-live="polite"></ul>
+            <p class="msg" id="vmsg" role="status"></p>
+            <p class="heard" id="heard"></p>
+            <div class="pair">
+              <button class="btn dark console-btn" id="mic" type="button">start listening</button>
+              <button class="btn console-btn" id="voiceCancel" type="button">cancel</button>
+            </div>
+          </section>
+          <label class="switch card" style="padding:0 12px;min-height:46px">hands-free · <span id="hfName"></span><input type="checkbox" id="hf2" /></label>
+          <section>
+            <div class="row-head"><h2 class="label">Heard · newest first</h2></div>
+            <ul class="feed" id="feed" aria-label="Everything heard" aria-live="polite"></ul>
+            <p class="empty" id="feedEmpty">Turn on hands-free to see everything the glasses hear.</p>
+          </section>
         </div>
-      </section>
-      <section>
-        <div class="card">
-          <label class="hf" style="margin-bottom:0"><span>Focal can help: suggest next steps after each page</span><input type="checkbox" id="recs" /></label>
+
+        <div class="page" data-sub-panel="backend" hidden>
+          <section class="card" id="backend"></section>
+          <section>
+            <div class="row-head"><h2 class="label">Last condense stream</h2><button class="text-btn" id="copyLog" type="button">copy</button></div>
+            <pre class="log" id="log">No page loaded yet.</pre>
+          </section>
         </div>
-      </section>
-      <section id="backend"></section>
-      <section id="bookmarksWrap" hidden>
-        <label class="lbl">Bookmarks</label>
-        <ul class="recent bookmarks" id="bookmarks"></ul>
-      </section>
-      <section id="recentWrap" hidden>
-        <label class="lbl">Recent</label>
-        <ul class="recent" id="recent"></ul>
-      </section>
-      <aside id="recommendations" hidden></aside>
+      </div>
+
+      <div class="mirror-full" id="mirrorFull" role="dialog" aria-modal="true" aria-label="Live mirror, fullscreen" hidden>
+        <div class="glass" id="glassFull" role="img" aria-label="Glasses display preview"></div>
+        <div class="full-bar">
+          <button class="btn" type="button" data-remote="prev">▲ up</button>
+          <button class="btn dark" type="button" data-remote="sel">● tap</button>
+          <button class="btn" type="button" data-remote="next">▼ down</button>
+          <button class="btn" type="button" data-remote="menu">≡ menu</button>
+          <button class="btn" type="button" data-remote="back">●● back</button>
+          <button class="btn warn" type="button" id="closeFull">close ✕</button>
+        </div>
+      </div>
     </main>
+    <nav class="tabs" id="tabs" aria-label="Main"><div class="tabs-inner" id="tabsInner">
+      <button type="button" data-go="home">${icon(ICON_HOME)}Home</button>
+      <button type="button" data-go="library">${icon(ICON_BOOKMARK)}Library</button>
+      <button type="button" data-go="settings">${icon(ICON_SLIDERS)}Settings</button>
+      <span class="tab-ind" aria-hidden="true"></span></div>
+    </nav>
   `
 
   const $ = <T extends HTMLElement>(id: string) => root.querySelector<T>(`#${id}`)!
+  const all = <T extends HTMLElement>(selector: string) => [...root.querySelectorAll<T>(selector)]
+
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+  let tab: Tab = 'home'
+  let sub: ConsoleTab = 'glasses'
+  try {
+    const saved = localStorage.getItem(TAB_KEY)
+    if (saved === 'library' || saved === 'settings' || saved === 'console') tab = saved
+  } catch {}
+  /** Replays the short entrance on a page or panel that just came into view. */
+  const enter = (node: HTMLElement) => {
+    node.classList.remove('enter')
+    void node.offsetWidth
+    node.classList.add('enter')
+  }
+  const TAB_ORDER: Tab[] = ['home', 'library', 'settings']
+  function showTab(next: Tab) {
+    const changed = next !== tab
+    tab = next
+    try { localStorage.setItem(TAB_KEY, next) } catch {}
+    const inConsole = next === 'console'
+    for (const page of all('[data-tab]')) {
+      page.hidden = page.dataset.tab !== next
+      if (changed && !page.hidden) enter(page)
+    }
+    if (next !== 'console') $('tabsInner').style.setProperty('--i', String(TAB_ORDER.indexOf(next)))
+    for (const b of all('[data-go]')) {
+      if (b.dataset.go === next) b.setAttribute('aria-current', 'page')
+      else b.removeAttribute('aria-current')
+    }
+    document.documentElement.classList.toggle('console', inConsole)
+    $('wr').classList.toggle('console', inConsole)
+    $('strip').hidden = !inConsole
+    $('tabs').hidden = inConsole
+    window.scrollTo(0, 0)
+  }
+  function showSub(next: ConsoleTab) {
+    const changed = next !== sub
+    sub = next
+    for (const panel of all('[data-sub-panel]')) {
+      panel.hidden = panel.dataset.subPanel !== next
+      if (changed && !panel.hidden) enter(panel)
+    }
+    for (const b of all('[data-sub]')) {
+      if (b.dataset.sub === next) b.setAttribute('aria-current', 'page')
+      else b.removeAttribute('aria-current')
+    }
+    $('consoleName').textContent = next
+  }
+  $('tabs').addEventListener('click', e => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-go]')
+    if (b) showTab(b.dataset.go as Tab)
+  })
+  root.querySelector('.subnav')!.addEventListener('click', e => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-sub]')
+    if (b) showSub(b.dataset.sub as ConsoleTab)
+  })
+  // A short tick on Android for taps on controls (iOS WebViews ignore it).
+  root.addEventListener('click', e => {
+    const target = (e.target as HTMLElement).closest('button:not(:disabled), input[type=checkbox]')
+    if (target) try { navigator.vibrate?.(8) } catch {}
+  })
+  $('openConsole').addEventListener('click', () => showTab('console'))
+  $('exitConsole').addEventListener('click', () => showTab('settings'))
+
+  // ── Home ──────────────────────────────────────────────────────────────────
   const input = $<HTMLInputElement>('url')
   const go = $<HTMLButtonElement>('go')
   const msg = $<HTMLParagraphElement>('msg')
@@ -303,7 +445,6 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
     syncClear()
     input.focus()
   })
-
   $('f').addEventListener('submit', e => {
     e.preventDefault()
     const url = input.value.trim()
@@ -312,25 +453,157 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
     msg.classList.remove('err')
     opts.onLoad(url)
   })
+  $('askVoice').addEventListener('click', () => opts.onVoice())
+  $('bm').addEventListener('click', () => opts.onBookmark())
+  const homeMirror = mountMirror($('glassHome'))
+
+  // ── Library ───────────────────────────────────────────────────────────────
+  const find = $<HTMLInputElement>('find')
+  const bookmarkList = $<HTMLUListElement>('bookmarks')
+  const recentList = $<HTMLUListElement>('recent')
+  find.addEventListener('input', () => renderLibrary(opts.getState()))
+  bookmarkList.addEventListener('click', e => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-url]')
+    if (!btn) return
+    if (btn.dataset.remove) opts.onRemoveBookmark(btn.dataset.url!)
+    else {
+      opts.onOpenBookmark(btn.dataset.url!)
+      showTab('home')
+    }
+  })
+  recentList.addEventListener('click', e => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-url]')
+    if (!btn) return
+    input.value = btn.dataset.url!
+    syncClear()
+    opts.onLoad(btn.dataset.url!)
+    showTab('home')
+  })
+  const matches = (q: string, ...fields: string[]) => !q || fields.some(f => f.toLowerCase().includes(q))
+  const hostOf = (url: string) => { try { return new URL(url).host.replace(/^www\./, '') } catch { return url } }
+  function linkRow(url: string, title: string, meta: string, removable: boolean) {
+    const open = el('button', { type: 'button', className: 'open' }, el('span', {}, title), el('small', {}, meta))
+    open.dataset.url = url
+    const li = el('li', {}, open)
+    if (removable) {
+      const remove = el('button', { type: 'button', className: 'remove', textContent: '×' })
+      remove.dataset.url = url
+      remove.dataset.remove = '1'
+      remove.setAttribute('aria-label', `Remove bookmark: ${title}`)
+      li.append(remove)
+    }
+    return li
+  }
+  function renderLibrary(s: CompanionState) {
+    const q = find.value.trim().toLowerCase()
+    const marks = s.bookmarks.filter(b => matches(q, b.title, b.url))
+    const recent = s.recent.filter(r => matches(q, r.title, r.url))
+    $('bmCount').textContent = s.bookmarks.length ? String(s.bookmarks.length).padStart(2, '0') : ''
+    bookmarkList.replaceChildren(...marks.map(b =>
+      linkRow(b.url, b.title, b.position && b.where ? `${hostOf(b.url)} · ${b.where}` : hostOf(b.url), true)))
+    recentList.replaceChildren(...recent.map(r => linkRow(r.url, r.title, hostOf(r.url), false)))
+    bookmarkList.hidden = !marks.length
+    recentList.hidden = !recent.length
+    $('bmEmpty').hidden = !!marks.length
+    $('recentEmpty').hidden = !!recent.length
+    $('bmEmpty').textContent = q && s.bookmarks.length ? 'No bookmarks match.' : 'No bookmarks yet. Bookmark a page from Home or the glasses menu.'
+    $('recentEmpty').textContent = q && s.recent.length ? 'No recent pages match.' : 'Pages you open show up here.'
+  }
+
+  // ── Settings ──────────────────────────────────────────────────────────────
+  const recs = $<HTMLInputElement>('recs')
+  recs.addEventListener('change', () => opts.onRecommendations(recs.checked))
+  const hf = $<HTMLInputElement>('hf')
+  const hf2 = $<HTMLInputElement>('hf2')
+  hf.addEventListener('change', () => opts.onHandsFree(hf.checked))
+  hf2.addEventListener('change', () => opts.onHandsFree(hf2.checked))
+  const layouts = $('layouts')
+  layouts.append(...RECOMMENDATION_LAYOUTS.map(l => {
+    const b = el('button', { type: 'button', textContent: l.label.replace(/ (popup|strip|list)$/, '') })
+    b.dataset.layout = l.id
+    return b
+  }))
+  layouts.addEventListener('click', e => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-layout]')
+    if (b) opts.onRecommendationLayout(b.dataset.layout as RecommendationLayout)
+  })
+  const priorities = $('priorities')
+  priorities.append(...PRIORITIES.map(([id, label]) => {
+    const b = el('button', { type: 'button', textContent: label })
+    b.dataset.priority = id
+    return b
+  }))
+  priorities.addEventListener('click', e => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-priority]')
+    const p = opts.backend.state().preferences
+    if (!b || !p) return
+    opts.backend.save({ proactive_enabled: p.proactive_enabled, display_density: p.display_density,
+      shopping_priority: b.dataset.priority as Preferences['shopping_priority'] })
+  })
+  $('signOut').addEventListener('click', () => opts.backend.disconnect())
+
+  // ── Console ───────────────────────────────────────────────────────────────
+  const consoleMirror = mountMirror($('glassConsole'))
   $('prev').addEventListener('click', () => opts.onStep(-1))
   $('next').addEventListener('click', () => opts.onStep(1))
   $('sel').addEventListener('click', () => opts.onSelect())
   $('back-control').addEventListener('click', () => opts.onBack())
   $('menu').addEventListener('click', () => opts.onMenu())
+  // Fullscreen mirror: an overlay everywhere, plus real fullscreen where the
+  // WebView allows it (iOS only lets video go fullscreen).
+  const full = $<HTMLDivElement>('mirrorFull')
+  const fullMirror = mountMirror($('glassFull'))
+  const closeFullOnEscape = (e: KeyboardEvent) => { if (e.key === 'Escape') closeFull() }
+  function openFull() {
+    full.hidden = false
+    fullMirror.draw(opts.getState().spec)
+    full.requestFullscreen?.().catch(() => {})
+    document.addEventListener('keydown', closeFullOnEscape)
+    $('closeFull').focus()
+  }
+  function closeFull() {
+    if (full.hidden) return
+    full.hidden = true
+    document.removeEventListener('keydown', closeFullOnEscape)
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+    $('openFull').focus()
+  }
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) closeFull() })
+  $('openFull').addEventListener('click', openFull)
+  $('closeFull').addEventListener('click', closeFull)
+  const remote: Record<string, () => void> = {
+    prev: () => opts.onStep(-1), next: () => opts.onStep(1), sel: () => opts.onSelect(),
+    menu: () => opts.onMenu(), back: () => opts.onBack(),
+  }
+  full.addEventListener('click', e => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-remote]')
+    if (b) remote[b.dataset.remote!]()
+  })
   const picks = $<HTMLUListElement>('picks')
   picks.addEventListener('click', e => {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-pick]')
     if (btn) opts.onPick(Number(btn.dataset.pick))
   })
+  const raw = $<HTMLInputElement>('raw')
+  $('rawForm').addEventListener('submit', e => {
+    e.preventDefault()
+    const url = raw.value.trim()
+    if (url) opts.onLoad(url)
+  })
   $('mic').addEventListener('click', () => opts.onVoice())
-  const hf = $<HTMLInputElement>('hf')
-  hf.addEventListener('change', () => opts.onHandsFree(hf.checked))
-  const recs = $<HTMLInputElement>('recs')
-  recs.addEventListener('change', () => opts.onRecommendations(recs.checked))
+  $('voiceCancel').addEventListener('click', () => opts.onBack())
   const meter = $<HTMLDivElement>('meter')
   const vmsg = $<HTMLParagraphElement>('vmsg')
   let listenNote = ''
   const backendPanel = mountBackendPanel($('backend'), opts.backend)
+  const inject = $<HTMLInputElement>('inject')
+  $('injectForm').addEventListener('submit', e => {
+    e.preventDefault()
+    const text = inject.value.trim()
+    if (!text) return
+    opts.onInject(text)
+    inject.value = ''
+  })
   // Product/purchase pages get the shopping capabilities without a model call.
   const options = (context: RecommendationContext, signal: AbortSignal): Promise<RecommendationBatch> => {
     const shopping = shoppingActions(context)
@@ -343,55 +616,25 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
     return { url, title: title || url, text, ...(page.deck?.kind ? { kind: page.deck.kind } : {}), ...(product ? { product } : {}) }
   }
 
-  const glass = $<HTMLDivElement>('glass')
-  const mirror = $<HTMLDivElement>('mirror')
-  const fitMirror = () => {
-    mirror.style.transform = `scale(${glass.clientWidth / 576})`
+  // The condense stream of the last page load, with time since it started.
+  const logEl = $<HTMLPreElement>('log')
+  let logStart = 0
+  const logLine = (text: string, bad = false) => {
+    const t = el('span', { className: 't', textContent: `${((performance.now() - logStart) / 1000).toFixed(1)}s`.padEnd(6) })
+    logEl.append(t, el('span', { className: bad ? 'bad' : '', textContent: ` ${text}\n` }))
+    logEl.scrollTop = logEl.scrollHeight
   }
-  new ResizeObserver(fitMirror).observe(glass)
-
-  const BORDER: Record<number, string> = { 13: '#5CFF5C', 5: '#2A7A2A' }
-  function drawMirror(spec: PageSpec) {
-    mirror.replaceChildren()
-    for (const t of spec.texts) {
-      const el = document.createElement('div')
-      const bw = t.border ?? 0
-      Object.assign(el.style, {
-        left: `${t.x}px`, top: `${t.y}px`, width: `${t.w}px`, height: `${t.h}px`,
-        padding: `${t.pad ?? 4}px`, borderWidth: `${bw}px`,
-        borderColor: BORDER[t.color ?? 13] ?? '#3f9f3f', borderRadius: `${t.radius ?? 0}px`,
-        ...(t.scroll ? { overflowY: 'auto' } : {}),
-      })
-      el.textContent = t.text
-      mirror.append(el)
-    }
-    for (const im of spec.images) {
-      const img = document.createElement('img')
-      img.src = `data:image/png;base64,${im.image.png}`
-      img.alt = ''
-      Object.assign(img.style, { left: `${im.x}px`, top: `${im.y}px`, width: `${im.image.w}px`, height: `${im.image.h}px` })
-      mirror.append(img)
-    }
-    glass.setAttribute('aria-label', spec.texts.map(t => t.text.trim()).filter(Boolean).join(' / ') || 'Glasses display preview')
-  }
-
-  $('bm').addEventListener('click', () => opts.onBookmark())
-  const bookmarkList = $<HTMLUListElement>('bookmarks')
-  bookmarkList.addEventListener('click', e => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-url]')
-    if (!btn) return
-    if (btn.dataset.remove) opts.onRemoveBookmark(btn.dataset.url!)
-    else opts.onOpenBookmark(btn.dataset.url!)
+  $('copyLog').addEventListener('click', async () => {
+    const btn = $('copyLog')
+    try {
+      await navigator.clipboard.writeText(logEl.textContent ?? '')
+      btn.textContent = 'copied ✓'
+    } catch { btn.textContent = 'copy failed' }
+    setTimeout(() => { btn.textContent = 'copy' }, 1400)
   })
 
-  const recentList = $<HTMLUListElement>('recent')
-  recentList.addEventListener('click', e => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-url]')
-    if (!btn) return
-    input.value = btn.dataset.url!
-    syncClear()
-    opts.onLoad(btn.dataset.url!)
-  })
+  showTab(tab)
+  showSub(sub)
 
   return {
     resetRecommendations() { recommendations.reset() },
@@ -410,41 +653,80 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
     update() {
       backendPanel.update()
       const s = opts.getState()
-      $('title').textContent = s.doc?.title ?? 'Nothing loaded'
-      $('count').textContent = s.doc && !s.status ? s.position : ''
-      drawMirror(s.spec)
-      picks.hidden = !s.list
-      picks.replaceChildren(
-        ...(s.list ?? []).map((label, i) => {
-          const li = document.createElement('li')
-          const btn = document.createElement('button')
-          btn.type = 'button'
-          btn.dataset.pick = String(i)
-          btn.textContent = label
-          li.append(btn)
-          return li
-        }),
-      )
-      fitMirror()
-      if (s.doc && !s.status) {
-        const kind = s.kind ? `${KIND_LABEL[s.kind]} layout` : 'Manga'
-        const note = s.doc.truncated ? ' Long page; only the first part was used.' : ''
-        msg.classList.remove('err')
-        msg.textContent = `${s.doc.site} · ${kind} · ${s.doc.wordCount.toLocaleString()} words.${note}`
+      const showing = !!s.doc && !s.status
+
+      // Home
+      homeMirror.draw(s.spec)
+      $('title').textContent = s.doc?.title ?? 'Nothing on the lens'
+      $('where').textContent = s.doc
+        ? [s.doc.site, s.kind ? KIND_LABEL[s.kind].toLowerCase() : s.doc.manga ? 'manga' : '', showing ? s.position : '']
+          .filter(Boolean).join(' · ')
+        : 'Send a page to start'
+      const bm = $<HTMLButtonElement>('bm')
+      bm.hidden = !showing
+      if (bm.getAttribute('aria-pressed') !== String(s.bookmarked) && s.bookmarked) enter(bm)
+      bm.setAttribute('aria-pressed', String(s.bookmarked))
+      bm.setAttribute('aria-label', s.bookmarked ? 'Remove bookmark' : 'Bookmark this page')
+      if (showing && !msg.classList.contains('err')) {
+        msg.textContent = s.doc!.truncated ? 'Long page; only the first part was used.' : ''
       }
       const v = s.voice
-      const mic = $<HTMLButtonElement>('mic')
-      mic.textContent = v.phase === 'listening' ? 'Stop & send' : 'Start listening'
-      mic.classList.toggle('on', v.phase === 'listening')
-      mic.disabled = v.phase === 'sending' || v.phase === 'searching'
-      hf.checked = s.handsFree
+      const listening = v.phase === 'listening'
+      const busyVoice = v.phase === 'sending' || v.phase === 'searching'
+      const ask = $<HTMLButtonElement>('askVoice')
+      ask.classList.toggle('on', listening)
+      ask.querySelector('span')!.textContent = listening ? 'Stop and send' : busyVoice ? 'Searching…' : 'Ask by voice'
+      ask.disabled = busyVoice
+
+      // Library and settings
+      renderLibrary(s)
       recs.checked = s.recommendations
-      $('hfLabel').textContent = `Hands-free: say "${s.wakePhrase}", then your question`
-      if (v.phase !== 'listening' && !s.listening) meter.style.width = '0'
-      listenNote = (v.phase === 'listening' || v.phase === 'idle') && v.note ? ` · ${v.note}` : ''
+      for (const b of all<HTMLButtonElement>('[data-layout]')) {
+        b.setAttribute('aria-pressed', String(b.dataset.layout === s.recommendationLayout))
+        b.disabled = !s.recommendations
+      }
+      hf.checked = hf2.checked = s.handsFree
+      $('wake').textContent = `"${s.wakePhrase}"`
+      $('hfName').textContent = `"${s.wakePhrase}"`
+      const b = opts.backend.state()
+      $('shopping').hidden = !b.connected || !b.preferences
+      for (const p of all<HTMLButtonElement>('[data-priority]')) {
+        p.setAttribute('aria-pressed', String(p.dataset.priority === b.preferences?.shopping_priority))
+      }
+      $('acct').textContent = b.connected ? 'Signed in' : 'Not signed in · connect in the developer console'
+      $('signOut').hidden = !b.connected
+
+      // Console: glasses
+      consoleMirror.draw(s.spec)
+      if (!full.hidden) fullMirror.draw(s.spec)
+      $('count').textContent = showing && s.position ? `· ${s.position}` : ''
+      $('consoleState').textContent = `view=${s.view}${showing && s.position ? ` · ${s.position}` : ''}`
+      $('picksWrap').hidden = !s.list
+      picks.replaceChildren(...(s.list ?? []).map((label, i) => {
+        const btn = el('button', { type: 'button', textContent: label })
+        btn.dataset.pick = String(i)
+        return el('li', {}, btn)
+      }))
+      if (s.doc && document.activeElement !== raw) raw.value = s.doc.url
+      $('info').textContent = s.doc
+        ? [`site=${s.doc.site}  kind=${s.kind ?? (s.doc.manga ? 'manga' : '-')}`,
+          `words=${s.doc.wordCount.toLocaleString()}${s.doc.truncated ? '  truncated' : ''}  view=${s.view}`,
+          s.status ? `status=${s.status.split('\n')[0]}` : ''].filter(Boolean).join('\n')
+        : 'Nothing loaded.'
+
+      // Console: voice
+      const mic = $<HTMLButtonElement>('mic')
+      mic.textContent = listening ? 'stop + send' : 'start listening'
+      mic.disabled = busyVoice
+      $<HTMLButtonElement>('injectGo').disabled = busyVoice
+      $('phase').classList.toggle('live', listening || s.listening)
+      $('phaseText').textContent = `${listening || s.listening ? '● ' : ''}phase=${v.phase}${s.listening && !listening ? ' · waiting for wake phrase' : ''}`
+      if (!listening) $('phaseTime').textContent = ''
+      if (!listening && !s.listening) meter.style.width = '0'
+      listenNote = (listening || v.phase === 'idle') && v.note ? ` · ${v.note}` : ''
       vmsg.classList.toggle('err', v.phase === 'error' || !!listenNote)
       vmsg.textContent = {
-        idle: s.listening ? `Waiting for "${s.wakePhrase}"...` : 'Uses the glasses microphone.',
+        idle: s.listening ? `Waiting for "${s.wakePhrase}"...${listenNote}` : 'Uses the glasses microphone.',
         listening: `Listening...${listenNote}`,
         sending: 'Sending to the server...',
         searching: 'Searching the web for:',
@@ -452,64 +734,15 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
         error: v.text,
       }[v.phase]
       $('heard').textContent = v.phase !== 'error' && v.phase !== 'idle' && v.phase !== 'sending' && v.text ? `"${v.text}"` : ''
-      $('feedHead').hidden = !s.handsFree
       const feed = $<HTMLUListElement>('feed')
-      feed.replaceChildren(
-        ...s.heard.map(h => {
-          const li = document.createElement('li')
-          li.textContent = h.text
-          if (h.command) li.className = 'cmd'
-          else if (h.opened) li.className = 'open'
-          else if (h.pending) li.className = 'pending'
-          return li
-        }),
-      )
-      const bm = $<HTMLButtonElement>('bm')
-      bm.hidden = !s.doc || !!s.status
-      bm.setAttribute('aria-pressed', String(s.bookmarked))
-      bm.textContent = s.bookmarked ? '★ Bookmarked' : '☆ Bookmark this page'
-      $('bookmarksWrap').hidden = !s.bookmarks.length
-      bookmarkList.replaceChildren(
-        ...s.bookmarks.map(b => {
-          const li = document.createElement('li')
-          const open = document.createElement('button')
-          open.type = 'button'
-          open.dataset.url = b.url
-          const t = document.createElement('span')
-          t.textContent = b.title
-          const u = document.createElement('small')
-          u.textContent = b.position && b.where ? `${b.where} · ${b.url}` : b.url
-          open.append(t, u)
-          const remove = document.createElement('button')
-          remove.type = 'button'
-          remove.className = 'remove'
-          remove.dataset.url = b.url
-          remove.dataset.remove = '1'
-          remove.setAttribute('aria-label', `Remove bookmark: ${b.title}`)
-          remove.textContent = '×'
-          li.append(open, remove)
-          return li
-        }),
-      )
-      $('recentWrap').hidden = !s.recent.length
-      recentList.innerHTML = ''
-      for (const r of s.recent) {
-        const li = document.createElement('li')
-        const btn = document.createElement('button')
-        btn.type = 'button'
-        btn.dataset.url = r.url
-        const t = document.createElement('span')
-        t.textContent = r.title
-        const u = document.createElement('small')
-        u.textContent = r.url
-        btn.append(t, u)
-        li.append(btn)
-        recentList.append(li)
-      }
+      feed.replaceChildren(...s.heard.map(h =>
+        el('li', { textContent: h.text, className: h.command ? 'cmd' : h.opened ? 'open' : h.pending ? 'pending' : '' })))
+      $('feedEmpty').hidden = !!s.heard.length
     },
     setBusy(busy) {
       go.disabled = busy
-      go.textContent = busy ? 'Condensing...' : 'Send to glasses'
+      go.textContent = busy ? 'Condensing…' : 'Send to glasses'
+      go.classList.toggle('busy', busy)
       if (busy) {
         msg.classList.remove('err')
         msg.textContent = ''
@@ -518,10 +751,22 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
     setError(message) {
       msg.classList.add('err')
       msg.textContent = message
+      if (logStart) logLine(`error    ${message}`, true)
     },
     voiceLevel(level, ms) {
       meter.style.width = `${Math.round(level * 100)}%`
-      if (ms !== undefined) vmsg.textContent = `Listening... ${(ms / 1000).toFixed(1)}s${listenNote}`
+      if (ms !== undefined) $('phaseTime').textContent = `${(ms / 1000).toFixed(1)}s`
+    },
+    condenseStart(url) {
+      logStart = performance.now()
+      logEl.replaceChildren(`GET /api/condense?url=${url}\n`)
+    },
+    condenseEvent(e) {
+      if ('page' in e) logLine(`page     ${e.page.title}${e.page.manga ? ' (manga)' : ''}`)
+      else if ('kind' in e) logLine(`kind     ${e.kind}`)
+      else if ('screens' in e) logLine(`screens  [${e.screens.map(s => s.layout).join(', ')}]`)
+      else if ('replace' in e) logLine(`replace  #${e.replace} ${e.screen.layout}`)
+      else if ('done' in e) logLine(`done${e.truncated ? '     truncated' : ''}`)
     },
   }
 }

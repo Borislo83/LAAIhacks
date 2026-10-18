@@ -32,6 +32,7 @@ import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS
 import { matchRoute } from '../shared/routes'
 import { displayCommand } from '../shared/display'
 import { capabilityCommand, isRecommendationsCommand, STRIP_HEADING, type RecommendationBatch, type RecommendationContext, type RecommendedAction } from '../shared/recommendations'
+import { shortcutFor } from './shortcuts'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
 // Status:  body 0..252 (9 lines at 27px)  +  footer 252..288 (1 line)
@@ -1039,12 +1040,17 @@ function openContents() {
   renderList('contents', 'Contents', [back, ...items]).catch(console.error)
 }
 
+function setRecommendationLayout(layout: RecommendationLayout) {
+  recommendationLayout = layout
+  void enqueue(() => bridge.setLocalStorage(RECOMMENDATION_LAYOUT_KEY, layout)).catch(console.error)
+  companion.update()
+}
+
 function openRecommendationLayouts() {
   const items: MenuItem[] = RECOMMENDATION_LAYOUTS.map(layout => ({
     label: `${layout.id === recommendationLayout ? '* ' : ''}${layout.label}`,
     run: () => {
-      recommendationLayout = layout.id
-      void enqueue(() => bridge.setLocalStorage(RECOMMENDATION_LAYOUT_KEY, layout.id)).catch(console.error)
+      setRecommendationLayout(layout.id)
       if (!companion.reopenRecommendations()) openSettings()
     },
   }))
@@ -1397,74 +1403,110 @@ async function stopVoice(send: boolean) {
     if (seq !== voiceSeq) return
     report({ voice: rec.durationMs, chars: command.length })
     if (!command) return void fail("Sorry, I didn't catch that.", "Couldn't make that out.")
-    logHeard({ text: command, command: true })
-    // Hardcoded routes ("open the AirPods page on Apple") go straight to a known page.
-    // "Hide the display" blanks the lens; "show the display" brings it back.
-    const display = displayCommand(command)
-    if (display) {
-      voiceUi = { phase: 'done', text: command }
-      stopLoading()
-      if (display === 'hide') await hideDisplay()
-      else await showContent()
-      return
-    }
-    // YouTube and Spotify open on the laptop; a product page opens there and on the glasses.
-    const route = matchRoute(command)
-    if (route) {
-      voiceUi = { phase: 'done', text: command, url: route.url }
-      logHeard({ text: route.url, opened: true })
-      const laptop = backend.agents?.openOnLaptop(route.url)
-      if (route.on === 'both') {
-        laptop?.catch(console.error)
-        void load(route.url, 0, true, true)
-        return
-      }
-      const hint = quiet ? `Say "${WAKE_PHRASE}" to ask again` : VOICE_HINT
-      if (!laptop) await renderAssistant(`Pair the glasses to open ${route.name} on your laptop.`, hint)
-      else await laptop.then(() => renderAssistant(`Opened ${route.name} on your laptop.`, hint),
-        (err: unknown) => renderAssistant(`Couldn't open ${route.name} on your laptop.`, err instanceof Error ? err.message : hint))
-      fadeLater()
-      return
-    }
-    // "Show recommendations": this page's strip again, not a chat or web search.
-    if (isRecommendationsCommand(command)) {
-      voiceUi = { phase: 'done', text: command }
-      stopLoading()
-      if (companion.reopenRecommendations()) return
-      await renderAssistant('No recommendations for this page yet.', quiet ? `Say "${WAKE_PHRASE}" to ask again` : VOICE_HINT)
-      fadeLater()
-      return
-    }
-    voiceUi = { phase: 'searching', text: command }
-    // Signed in: the Focal agents get the first try. Anything chat can't route,
-    // and any gateway or chat failure, falls through to the web search below.
-    const client = backend.agents
-    if (client) {
-      void renderThinking(command, 'Asking the agents')
-      const asking = loading
-      const answer = await askAgents(client, command, signal)
-      if (seq !== voiceSeq || loading !== asking) return
-      if (answer) {
-        voiceUi = { phase: 'done', text: command }
-        logHeard({ text: answer.title, opened: true })
-        return void showAgentCard(answer, quiet)
-      }
-    }
-    void renderThinking(command, 'Searching the web')
-    const searching = loading
-    const page = await searchPage(command)
-    // Dropped if the user opened something else meanwhile.
-    if (seq !== voiceSeq || loading !== searching) return
-    voiceUi = { phase: 'done', text: command, url: page.url }
-    logHeard({ text: page.url, opened: true })
-    // Opens like a typed URL: the spinner carries on, then the page shows.
-    // Recommendations don't pop up over a page the user just asked for by voice.
-    void load(page.url, 0, true, true)
+    await runCommand(command, seq, signal, quiet, fadeLater)
   } catch (err) {
     if (seq !== voiceSeq) return
     const detail = err instanceof Error ? err.message : String(err)
     void fail("Sorry, I couldn't find that.", detail)
   }
+}
+
+/** A typed command from the developer console, handled exactly as if it was spoken. */
+function injectCommand(text: string) {
+  const command = text.trim()
+  if (!command) return
+  if (recorder) {
+    recorder = null
+    if (!handsFree) void setMic(false)
+  }
+  rerecordFor = null
+  clearTimeout(agentFade)
+  agentCard = null
+  const seq = nextVoice()
+  const { signal } = voiceAbort
+  const fail = async (message: string, detail = message) => {
+    voiceUi = { phase: 'error', text: detail }
+    if (loading?.host === ASSISTANT) stopLoading()
+    await renderAssistant(message, VOICE_HINT)
+  }
+  voiceUi = { phase: 'sending', text: command }
+  void runCommand(command, seq, signal, false, () => {}).catch(err => {
+    if (seq !== voiceSeq) return
+    void fail("Sorry, I couldn't find that.", err instanceof Error ? err.message : String(err))
+  })
+}
+
+/** Sends a heard (or typed) command to the Focal agents, else opens a web search for it. */
+async function runCommand(command: string, seq: number, signal: AbortSignal, quiet: boolean, fadeLater: () => void) {
+  logHeard({ text: command, command: true })
+  // "Hide the display" blanks the lens; "show the display" brings it back.
+  const display = displayCommand(command)
+  if (display) {
+    voiceUi = { phase: 'done', text: command }
+    stopLoading()
+    if (display === 'hide') await hideDisplay()
+    else await showContent()
+    return
+  }
+  const shortcut = shortcutFor(command)
+  if (shortcut) {
+    voiceUi = { phase: 'done', text: command, url: shortcut.url }
+    logHeard({ text: shortcut.url, opened: true })
+    return void load(shortcut.url, 0, true, true)
+  }
+  // Hardcoded routes ("open the AirPods page on Apple") go straight to a known page.
+  // YouTube and Spotify open on the laptop; a product page opens there and on the glasses.
+  const route = matchRoute(command)
+  if (route) {
+    voiceUi = { phase: 'done', text: command, url: route.url }
+    logHeard({ text: route.url, opened: true })
+    const laptop = backend.agents?.openOnLaptop(route.url)
+    if (route.on === 'both') {
+      laptop?.catch(console.error)
+      void load(route.url, 0, true, true)
+      return
+    }
+    const hint = quiet ? `Say "${WAKE_PHRASE}" to ask again` : VOICE_HINT
+    if (!laptop) await renderAssistant(`Pair the glasses to open ${route.name} on your laptop.`, hint)
+    else await laptop.then(() => renderAssistant(`Opened ${route.name} on your laptop.`, hint),
+      (err: unknown) => renderAssistant(`Couldn't open ${route.name} on your laptop.`, err instanceof Error ? err.message : hint))
+    fadeLater()
+    return
+  }
+  // "Show recommendations": this page's strip again, not a chat or web search.
+  if (isRecommendationsCommand(command)) {
+    voiceUi = { phase: 'done', text: command }
+    stopLoading()
+    if (companion.reopenRecommendations()) return
+    await renderAssistant('No recommendations for this page yet.', quiet ? `Say "${WAKE_PHRASE}" to ask again` : VOICE_HINT)
+    fadeLater()
+    return
+  }
+  voiceUi = { phase: 'searching', text: command }
+  // Signed in: the Focal agents get the first try. Anything chat can't route,
+  // and any gateway or chat failure, falls through to the web search below.
+  const client = backend.agents
+  if (client) {
+    void renderThinking(command, 'Asking the agents')
+    const asking = loading
+    const answer = await askAgents(client, command, signal)
+    if (seq !== voiceSeq || loading !== asking) return
+    if (answer) {
+      voiceUi = { phase: 'done', text: command }
+      logHeard({ text: answer.title, opened: true })
+      return void showAgentCard(answer, quiet)
+    }
+  }
+  void renderThinking(command, 'Searching the web')
+  const searching = loading
+  const page = await searchPage(command)
+  // Dropped if the user opened something else meanwhile.
+  if (seq !== voiceSeq || loading !== searching) return
+  voiceUi = { phase: 'done', text: command, url: page.url }
+  logHeard({ text: page.url, opened: true })
+  // Opens like a typed URL: the spinner carries on, then the page shows.
+  // Recommendations don't pop up over a page the user just asked for by voice.
+  void load(page.url, 0, true, true)
 }
 
 // A chosen option runs the capability it names. A watcher session action opens its
@@ -1618,8 +1660,10 @@ async function load(url: string, restore = 0, pushHistory = false, fromVoice = f
 
   let failed: string | null = null
   try {
+    companion.condenseStart(url)
     await condense(url, abort.signal, event => {
       if (seq !== loadSeq) return
+      companion.condenseEvent(event)
       if ('page' in event) {
         doc = event.page
         screens = []
@@ -1860,9 +1904,11 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
       ? `Page ${mangaPage + 1} / ${doc!.manga!.pages}${mangaStrips > 1 ? ` · ${mangaStrip + 1}/${mangaStrips}` : ''}`
       : isDeck() ? `${screenIdx + 1} / ${screens.length}${deckLoading ? '+' : ''}` : '',
     kind: isDeck() ? doc?.deck?.kind : undefined,
+    view,
     voice: voiceUi,
     handsFree,
     recommendations: recommendationsOn,
+    recommendationLayout,
     list: isListView() ? listItems.map(i => i.label) : null,
     listening: !!wake,
     wakePhrase: WAKE_PHRASE,
@@ -1909,6 +1955,8 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
   onVoice: toggleVoice,
   onHandsFree: setHandsFree,
   onRecommendations: setRecommendations,
+  onRecommendationLayout: setRecommendationLayout,
+  onInject: injectCommand,
   recommendations: {
     ready(batch) {
       if (batch.page.url !== doc?.url || cleanedUp) return

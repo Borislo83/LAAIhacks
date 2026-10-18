@@ -20,8 +20,9 @@ test('connection form clears credentials and preferences preserve unchecked valu
   state.connected = true; state.online = true
   state.preferences = { display_density: 'comfortable', shopping_priority: 'balanced', proactive_enabled: true, notes: 'private' }
   panel.update()
-  root.querySelector<HTMLInputElement>('[name=proactive]')!.checked = false
-  root.querySelector('[data-preferences]')!.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
+  const proactive = root.querySelector<HTMLInputElement>('[name=proactive]')!
+  proactive.checked = false
+  proactive.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
   assert.deepEqual(preferences[0], { display_density: 'comfortable', shopping_priority: 'balanced', proactive_enabled: false })
   assert.equal(root.textContent!.includes('private'), false)
   state.message = '<img src=x onerror=alert(1)>'
