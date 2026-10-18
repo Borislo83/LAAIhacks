@@ -4,83 +4,76 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Focal</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%226%22 fill=%22none%22 stroke=%22%23e8ebe4%22 stroke-width=%221.5%22/%3E%3Ccircle cx=%228%22 cy=%228%22 r=%222%22 fill=%22%238ee6a2%22/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@1&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500&family=Instrument+Serif&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="blueprint-tokens.css">
 <style>
-:root{
-  --paper:#F7F7F5; --ink:#0B0B0C; --muted:#6E6E73; --hair:#E4E4E6;
-  --lens:#0E0E10; --signal:#139A4E; --signal-soft:rgba(19,154,78,.14); --white:#FFFFFF;
-  --sans:'Inter',system-ui,sans-serif; --serif:'Instrument Serif',Georgia,serif; --mono:'JetBrains Mono',ui-monospace,monospace;
-}
-*{box-sizing:border-box;margin:0}
-body{background:var(--paper);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
-.wrap{max-width:1296px;margin:0 auto;padding:0 24px}
-em{font-family:var(--serif);font-style:italic;font-weight:400}
+*{margin:0}
+.wrap{max-width:1296px;margin:0 auto;padding:0 clamp(24px,4vw,48px) 56px}
+em{font-style:normal}
 
 /* shared */
-nav.top{display:flex;justify-content:space-between;align-items:center;padding:26px 0 20px;border-bottom:1px solid var(--hair)}
-.logo{display:flex;align-items:center;gap:10px;font-weight:600;font-size:18px;letter-spacing:-.02em}
-nav.top .links{display:flex;gap:32px;font-size:14px;color:var(--muted)}
+nav.top{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:34px 0 18px;border-bottom:1px solid var(--hair)}
+.logo{display:flex;align-items:center;gap:10px;font:400 26px/1 var(--serif);letter-spacing:-.01em}
+nav.top .links{display:flex;gap:28px;font:12px var(--mono);color:var(--muted)}
 
-.btn:focus-visible,.replay:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
-.replay{font:500 13px var(--sans);background:none;border:1px solid var(--hair);border-radius:999px;padding:7px 12px;cursor:pointer;color:var(--ink)}
-nav.top .cta{display:flex;gap:16px;align-items:center;font-size:14px}
-.btn{font:500 14px var(--sans);padding:12px 18px;border-radius:8px;border:1px solid var(--hair);background:var(--white);color:var(--ink);cursor:pointer}
-.btn.dark{background:var(--ink);color:var(--white);border-color:var(--ink)}
-h1{font-weight:500;letter-spacing:-.04em;font-size:clamp(48px,6.4vw,84px);line-height:1.02}
-h1 em{color:var(--signal);font-size:1.12em;letter-spacing:-.01em}
-h2{font-weight:500;letter-spacing:-.03em;font-size:40px;line-height:1.1}
-h2 em{color:var(--muted);font-size:1.12em}
-.lede{font-size:17px;line-height:26px;color:var(--muted);max-width:30em}
-.kicker{display:flex;gap:10px;align-items:center;font-size:13px;color:var(--muted)}
+.replay{font:12px var(--mono);background:none;border:1px solid var(--hair);border-radius:var(--r);padding:9px 12px;cursor:pointer;color:var(--ink)}
+.replay:hover{border-color:var(--ink)}
+nav.top .cta{display:flex;gap:16px;align-items:center;font-size:14px;color:var(--muted)}
+h1{font:400 clamp(46px,5.4vw,80px)/1 var(--serif);letter-spacing:-.015em}
+h2{font:400 clamp(34px,4vw,52px)/1.02 var(--serif);letter-spacing:-.01em}
+h2 em{color:var(--muted)}
+.lede{font-size:17px;line-height:1.55;color:var(--body);max-width:40ch}
+.copy{display:flex;flex-direction:column;gap:0}
+.copy .kicker{margin-bottom:22px}
+.copy h1{margin-bottom:18px}
+.copy .tagline{margin-bottom:14px}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.kicker{display:flex;gap:10px;align-items:center;font:12px var(--mono);color:var(--muted)}
+.note{font:12px var(--mono);color:var(--muted)}
 section{padding:72px 0;border-top:1px solid var(--hair)}
 section:first-of-type{border-top:0}
 
-/* ---------- orbs ---------- */
-.orb{display:block;flex-shrink:0}
-.orb .s1{animation:sweep 2.4s ease-in-out infinite}
-@keyframes sweep{0%,100%{opacity:.14}35%{opacity:1}60%{opacity:.3}}
-.orb .s2{animation:wave 1.6s ease-in-out infinite alternate;transform-box:fill-box}
-@keyframes wave{from{transform:translateY(-34%)}to{transform:translateY(34%)}}
-.orb .s3{animation:scan 2.2s linear infinite;transform-box:view-box}
-@keyframes scan{from{transform:translateX(-60%)}to{transform:translateX(110%)}}
-.orb .s4{animation:flick 1.1s steps(3) infinite;transform-box:fill-box;transform-origin:center}
-@keyframes flick{0%{opacity:1;transform:scaleY(1)}33%{opacity:.35;transform:scaleY(.5)}66%{opacity:1;transform:scaleY(1.6)}100%{opacity:.6;transform:scaleY(1)}}
-
 /* ---------- glance sequence (shared) ---------- */
 .seq{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
-.step{border-top:2px solid var(--hair);padding-top:12px;transition:border-color .3s,color .3s;color:var(--muted)}
+.step{border-top:1px solid var(--hair);padding-top:12px;transition:border-color .3s,color .3s;color:var(--muted)}
 .step .t{font-family:var(--mono);font-size:12px}
 .step p{font-size:14px;margin-top:4px}
-.step.lit{border-color:var(--signal);color:var(--ink)}
-.counter{display:flex;align-items:baseline;gap:6px;border-bottom:3px solid var(--ink);padding-bottom:6px}
-.counter .n{font-family:var(--serif);font-size:112px;line-height:.95;font-style:normal}
-.counter .u{font-family:var(--serif);font-style:italic;font-size:34px;color:var(--signal)}
+.step.lit{border-color:var(--lens);color:var(--ink)}
+.step.lit .t{color:var(--lens)}
 svg .draw{stroke-dasharray:var(--len,400);stroke-dashoffset:var(--len,400);transition:stroke-dashoffset .6s ease}
 svg .draw.on{stroke-dashoffset:0}
 svg .gaze{opacity:0;transition:opacity .3s}
 svg .gaze.on{opacity:1}
 
 /* ---------- anatomy stage ---------- */
-.e2-hero{padding:56px 0 24px;display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:end}
+.e2-hero{padding:72px 0 40px;display:flex;flex-direction:column;align-items:flex-start;gap:28px}
+.caption{margin-top:8px}
 .e2-stage{position:relative;margin-top:24px}
 [data-glasses]>svg{width:100%;height:auto;display:block}
-.pin{position:absolute;display:flex;align-items:center;gap:10px;background:var(--white);border:1px solid var(--hair);border-radius:999px;padding:6px 14px 6px 6px;font-size:13px;transform:translate(-50%,-50%);transition:box-shadow .3s,border-color .3s}
-.pin.lit{border-color:var(--signal);box-shadow:0 0 0 4px var(--signal-soft)}
-.e2-foot{display:grid;grid-template-columns:1fr 320px;gap:48px;align-items:end;margin-top:8px}
+.pin{position:absolute;display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:5px 12px 5px 5px;font:12px var(--mono);transform:translate(-50%,-50%);transition:border-color .3s,color .3s;color:var(--muted)}
+.pin.lit{border-color:var(--lens);color:var(--ink)}
+.e2-foot{display:grid;grid-template-columns:1fr;gap:48px;align-items:end;margin-top:8px}
 
 .strip{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:28px}
-.strip .cell{background:var(--lens);border-radius:16px;padding:24px;color:#fff;display:flex;flex-direction:column;gap:18px}
-.strip .cell p{font-size:13px;color:#9A9AA0;margin-top:4px}
-.strip .cell .m{font-family:var(--mono);font-size:11px;color:#6A6A70}
+.strip .cell{background:var(--lens-bg);border:1px solid var(--hair);border-radius:var(--r);padding:22px;color:var(--ink);display:flex;flex-direction:column;gap:18px}
+.strip .cell p{font-size:13px;color:var(--muted);margin-top:4px}
+.strip .cell .m{font-family:var(--mono);font-size:11px;color:var(--lens)}
+.sec-head{display:flex;flex-direction:column;gap:14px}
 
 @media (max-width:1180px){
   .e2-hero,.e2-foot{grid-template-columns:1fr}
   .strip,.seq{grid-template-columns:1fr 1fr}
   nav.top .links{display:none} .pin{display:none}
 }
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (max-width:560px){
+  .wrap{padding:0 20px 48px}
+  nav.top .cta>span{display:none}
+  .strip,.seq{grid-template-columns:1fr}
+  section{padding:56px 0}
+}
 </style>
 </head>
 <body>
@@ -88,54 +81,50 @@ svg .gaze.on{opacity:1}
 <main id="e2"><div class="wrap">
   <nav class="top"><div class="logo" data-logo></div><div class="links"><span>Agents</span><span>Lens</span><span>How it works</span></div><div class="cta"><span>Sign in</span><button class="btn dark">Open Studio</button></div></nav>
   <div class="e2-hero">
-    <div style="display:flex;flex-direction:column;gap:24px">
+    <div class="copy">
       <div class="kicker"><span data-orb="2" data-size="20"></span>Smart glasses with agents that act on what you see</div>
-      <h1>Look once.<br>See it <em>clearly.</em></h1>
+      <h1>Look once.</h1>
+      <p class="tagline">See it clearly.</p>
+      <p class="lede">Every part of Focal has one job. You pick the page, the orchestrator reads your intent, and the agents answer on the lens.</p>
     </div>
-    <div style="display:flex;flex-direction:column;gap:20px;align-items:flex-start">
-      <p class="lede">Every part of Focal has one job. Your eyes pick the page, the orchestrator reads your intent, and one agent answers on the lens in under a second.</p>
-      <div style="display:flex;gap:10px;align-items:center"><button class="btn dark">Pair your G2</button><button class="replay" data-replay="e2">Replay the glance</button></div>
-    </div>
+    <div class="actions"><button class="btn dark">Pair your G2</button><button class="replay" data-replay="e2">Replay the glance</button></div>
   </div>
+  <p class="caption">Example case: researching a product</p>
   <div class="e2-stage" id="e2-stage"><div data-glasses="e2"></div></div>
   <div class="e2-foot">
     <div class="seq" data-seq="e2"></div>
-    <div style="display:flex;flex-direction:column;gap:12px">
-      <div class="counter"><span class="n" data-count="e2">0.0</span><span class="u">s</span></div>
-      <span style="font-size:13px;color:var(--muted)">From your gaze to an answer on the lens</span>
-    </div>
   </div>
   <section style="margin-top:72px">
-    <div style="display:flex;justify-content:space-between;align-items:end"><h2>Agents, <em>thinking</em></h2><span style="font-size:13px;color:var(--muted)">Each agent has its own iris, so you can tell who's working at a glance</span></div>
+    <div class="sec-head"><h2>Agents, thinking</h2><p class="tagline">Each agent has its own iris, so you can tell who's working at a glance.</p></div>
     <div class="strip" data-strip></div>
   </section>
 </div></main>
 <script src="orb.js"></script>
 <script>
 const AG={
-  price:{v:3,name:"Price agent",what:"Checking 3 sellers for Sony WH-1000XM6",lens:["SONY WH-1000XM6 · amazon.com","$299 at Best Buy","$49 less than Amazon · nod to open"],motion:"Scanlines slide"},
-  alt:{v:2,name:"Alternatives agent",what:"Comparing 6 brands like Allbirds",lens:["ALLBIRDS TREE RUNNER · $98","Try Vessi Weekend","waterproof · $83 · 4.6★ · tilt to open"],motion:"Dots ride the wave"},
-  rev:{v:1,name:"Reviews agent",what:"Reading 1,204 reviews of Blue Bottle",lens:["BLUE BOTTLE · HAYES VALLEY","4.6★ “best pour-over”","1,204 reviews · glance down for more"],motion:"Light sweeps the sphere"},
-  read:{v:4,name:"Reader agent",what:"Loading chapter 4 of Pride and Prejudice",lens:["PRIDE AND PREJUDICE · CH. 4","When Jane and Elizabeth were alone…","blink twice for the next page · 38%"],motion:"Bars flicker"}
+  price:{v:3,name:"Price agent",what:"Checking sellers for a pair of headphones",lens:["SONY WH-1000XM5","Best price: Best Buy","cheaper than this page · tap for sources"],motion:"Scanlines slide"},
+  alt:{v:2,name:"Alternatives agent",what:"Comparing similar shoes",lens:["ALLBIRDS TREE RUNNER","Alternative: Vessi Weekend","waterproof · tap to open"],motion:"Dots ride the wave"},
+  rev:{v:1,name:"Reviews agent",what:"Reading reviews of a coffee shop",lens:["BLUE BOTTLE · HAYES VALLEY","Reviewers praise the pour-over","pros and cons · tap for more"],motion:"Light sweeps the sphere"},
+  news:{v:7,name:"News brief",what:"Summarizing several news sources",lens:["NEWS BRIEF","One sourced summary","tap for sources"],motion:"Lines settle into a page"}
 };
-const ORDER=["price","alt","rev","read"];
+const ORDER=["price","alt","rev","news"];
 document.querySelectorAll("[data-orb]").forEach(e=>e.outerHTML=orb(+e.dataset.orb,+(e.dataset.size||40)));
 document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=logoMark()+"Focal");
 
-document.querySelector("[data-strip]").innerHTML=["rev","alt","price","read"].map(k=>`<div class="cell">${orb(AG[k].v,56)}<div><b style="font-weight:500;font-size:15px">${AG[k].name} is thinking</b><p>${AG[k].motion}</p></div><span class="m">${AG[k].what}</span></div>`).join("");
+document.querySelector("[data-strip]").innerHTML=["rev","alt","price","news"].map(k=>`<div class="cell">${orb(AG[k].v,56)}<div><b style="font-weight:500;font-size:15px;color:var(--ink)">${AG[k].name} is thinking</b><p>${AG[k].motion}</p></div><span class="m">${AG[k].what}</span></div>`).join("");
 
 /* glasses drawing, shared */
 function glasses(){
   const lensAccent = true;
   return `<svg viewBox="0 0 760 270" role="img" aria-label="Line drawing of Focal glasses">
-  <g fill="none" stroke="#9A9AA0" stroke-width="1.5">
+  <g fill="none" stroke="#8d949a" stroke-width="1">
     <rect x="80" y="100" width="250" height="140" rx="60"/><rect x="430" y="100" width="250" height="140" rx="60"/>
     <path d="M330 150 q50 -30 100 0"/><path d="M80 140 L20 125 L0 150"/><path d="M680 140 L740 125 L760 150"/>
   </g>
-  ${lensAccent?`<rect x="130" y="150" width="150" height="40" rx="6" fill="none" style="stroke:var(--signal)" stroke-width="2"/>
-  <path class="draw" data-k="answer" style="--len:120;stroke:var(--signal)" d="M142 170 h36 M188 170 h80" stroke-width="2"/>`:""}
-  <circle class="gaze" data-k="gaze" cx="205" cy="170" r="6" style="fill:var(--signal)" opacity="0"/>
-  <g stroke="#0B0B0C" fill="none">
+  ${lensAccent?`<rect x="130" y="150" width="150" height="40" rx="6" fill="none" style="stroke:var(--lens)" stroke-width="1.5"/>
+  <path class="draw" data-k="answer" style="--len:120;stroke:var(--lens)" d="M142 170 h36 M188 170 h80" stroke-width="2"/>`:""}
+  <circle class="gaze" data-k="gaze" cx="205" cy="170" r="6" style="fill:var(--lens)" opacity="0"/>
+  <g stroke="#e8ebe4" fill="none" stroke-width="1">
     <path class="draw" data-k="gaze" style="--len:140" d="M205 30 V150"/>
     <path class="draw" data-k="intent" style="--len:140" d="M380 30 V135"/>
     <path class="draw" data-k="agent" style="--len:140" d="M620 30 V110"/>
@@ -146,24 +135,21 @@ document.querySelectorAll("[data-glasses]").forEach(e=>e.innerHTML=glasses(e.dat
 /* e2 pins */
 (function(){
   const st=document.getElementById("e2-stage");
-  [["gaze",27,8,"rev","Eyes pick the page"],["intent",50,8,"alt","Orchestrator reads intent"],["agent",81.5,8,"price","Price agent checks sellers"],["answer",27,97,"price","Answer lands on the lens"]].forEach(([k,x,y,a,t])=>{
+  [["gaze",27,8,"rev","You open a page"],["intent",50,8,"alt","Orchestrator reads intent"],["agent",81.5,8,"price","Price agent checks sellers"],["answer",27,97,"price","Answer lands on the lens"]].forEach(([k,x,y,a,t])=>{
     const p=document.createElement("div");p.className="pin";p.dataset.k=k;p.style.left=x+"%";p.style.top=y+"%";p.innerHTML=orb(AG[a].v,26)+t;st.appendChild(p)});
 })();
 /* steps */
-const STEPS=[["gaze","0.0 s","Your gaze rests on a product page"],["intent","0.2 s","The orchestrator reads it as about to buy"],["agent","0.3 s","Price agent checks 3 sellers on Agentverse"],["answer","0.8 s","A cheaper seller appears on the lens"]];
+const STEPS=[["gaze","1","You open a product page"],["intent","2","The orchestrator reads it as about to buy"],["agent","3","The price agent checks sellers on Agentverse"],["answer","4","A cheaper seller appears on the lens"]];
 document.querySelectorAll("[data-seq]").forEach(e=>e.innerHTML=STEPS.map(([k,t,p])=>`<div class="step" data-k="${k}"><span class="t">${t}</span><p>${p}</p></div>`).join(""));
 
 const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
 function playGlance(v){
   const root=document.getElementById(v);
   const all=root.querySelectorAll("[data-k]"); all.forEach(e=>e.classList.remove("on","lit"));
-  const cnt=root.querySelector("[data-count]");
   const times={gaze:0,intent:500,agent:1000,answer:1700};
   Object.entries(times).forEach(([k,t])=>setTimeout(()=>{
     root.querySelectorAll(`[data-k="${k}"]`).forEach(e=>e.classList.add(e.tagName==="DIV"?"lit":"on"));
   }, reduce?0:t));
-  if(cnt){ if(reduce){cnt.textContent="0.8";return}
-    const t0=performance.now(); (function f(now){const s=Math.min(1,(now-t0)/1900);cnt.textContent=(0.8*s).toFixed(1); if(s<1)requestAnimationFrame(f)})(t0);}
 }
 document.querySelectorAll("[data-replay]").forEach(b=>b.onclick=()=>playGlance(b.dataset.replay));
 
