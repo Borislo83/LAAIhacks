@@ -89,14 +89,16 @@ test('YouTube, Spotify and shopping replies fit the lens', () => {
   assert.ok(paginate('Link', 'https://example.com/' + 'a'.repeat(200)).join('\n').split('\n').every(r => r.length <= 60))
 })
 
-test('a message draft waits for a tap on its last page and sends exactly the draft', async () => {
-  const answer = answerFor(reply([draftCall]))!
+test('a message draft shows Send / Re-record / Cancel and sends exactly the draft', async () => {
+  const named = call('message', { ...draftCall.result, recipient_name: 'Legend Yang' })
+  const answer = answerFor(reply([named]))!
   assert.equal(answer.kind, 'draft')
-  assert.match(lens(answer), /Send to J•••\?\n"Running ten minutes late"/)
+  assert.match(lens(answer), /Send to Legend Yang\?\n"Running ten minutes late"\nJ•••/)
   let now = 1000
   const card = new AgentCard(answer, true, () => now)
   assert.equal(card.fades, false)
-  assert.equal(card.footer(), 'Tap: send   Swipe: cancel')
+  assert.equal(card.footer(), 'Swipe: choose   Tap: confirm')
+  assert.match(card.text, /\n> Send\n  Re-record\n  Cancel$/)
   // A tap right as the draft appears was meant for the screen before it.
   assert.equal(card.gesture('tap'), 'none')
   assert.equal(card.sending, false)
@@ -108,7 +110,7 @@ test('a message draft waits for a tap on its last page and sends exactly the dra
   assert.equal(await sendDraft(client, answer.kind === 'draft' ? answer.draft : (null as never)), 'Sent to J•••.')
   assert.ok(requests[0].url.endsWith('/v1/messages/send'))
   assert.deepEqual(await requests[0].json(), { draft_id: 'draft-1', text: 'Running ten minutes late' })
-  // A long draft is read page by page before the send tap.
+  // A long draft is read page by page, then a choices page.
   const long = answerFor(reply([call('message', { ...draftCall.result, text: 'long words '.repeat(80) })]))!
   let later = 0
   const paged = new AgentCard(long, false, () => later)
@@ -116,14 +118,27 @@ test('a message draft waits for a tap on its last page and sends exactly the dra
   assert.ok(long.pages.length > 1)
   assert.equal(paged.gesture('tap'), 'render')
   assert.match(paged.footer(), /^2\/\d+   /)
+  while (!/choose/.test(paged.footer())) paged.gesture('down')
+  assert.match(paged.text, /^Message to J•••\n\n> Send/)
 })
 
-test('swiping a draft cancels without sending', () => {
-  for (const gesture of ['up', 'down', 'back'] as const) {
-    const card = new AgentCard(answerFor(reply([draftCall]))!, false)
-    assert.equal(card.gesture(gesture), 'cancel')
-    assert.equal(card.sending, false)
+test('swipe picks Re-record or Cancel; double-tap cancels; nothing is sent', () => {
+  const pick = (moves: ('up' | 'down')[]) => {
+    let t = 0
+    const card = new AgentCard(answerFor(reply([draftCall]))!, false, () => t)
+    t = DRAFT_TAP_GRACE_MS
+    for (const m of moves) assert.equal(card.gesture(m), 'render')
+    const step = card.gesture('tap')
+    assert.equal(card.sending, step === 'send')
+    return step
   }
+  assert.equal(pick(['down']), 'rerecord')
+  assert.equal(pick(['down', 'down']), 'cancel')
+  assert.equal(pick(['up']), 'cancel')
+  assert.equal(pick(['down', 'down', 'down']), 'send')
+  const card = new AgentCard(answerFor(reply([draftCall]))!, false)
+  assert.equal(card.gesture('back'), 'cancel')
+  assert.equal(card.sending, false)
 })
 
 test('message without a draft is shown, not searched, and says nothing was sent', () => {

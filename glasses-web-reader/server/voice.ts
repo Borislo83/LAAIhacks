@@ -172,3 +172,68 @@ function editDistance(a: string, b: string) {
   }
   return row[b.length]
 }
+
+// ── Spoken product codes ────────────────────────────────────────────────────
+// Speech-to-text spells model numbers out ("sony w h one thousand x m five"). Join runs of
+// single letters and digits, and turn number words into digits only inside such a run, so
+// "WH 1000 XM5" reaches the agents while "text Legend one sec" is left alone.
+const UNITS: Record<string, number> = { zero: 0, oh: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+  seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+  sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19 }
+const TENS: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 }
+const isNumberWord = (w: string) => w in UNITS || w in TENS || w === 'hundred' || w === 'thousand'
+const isCodeToken = (w: string) => /^[a-z0-9]$/i.test(w) || /^\d+$/.test(w)
+
+/** "one thousand" -> 1000, "twenty five" -> 25; null when the words aren't a number. */
+function wordsToNumber(words: string[]): number | null {
+  let total = 0, current = 0
+  for (const w of words) {
+    if (w in UNITS) current += UNITS[w]
+    else if (w in TENS) current += TENS[w]
+    else if (w === 'hundred') current = (current || 1) * 100
+    else if (w === 'thousand') { total += (current || 1) * 1000; current = 0 }
+    else return null
+  }
+  return total + current
+}
+
+export function normalizeSpokenCodes(command: string): string {
+  const raw = command.split(/\s+/).filter(Boolean)
+  const bare = raw.map(w => w.toLowerCase().replace(/[.,!?;:]+$/, ''))
+  const out: string[] = []
+  let i = 0
+  while (i < raw.length) {
+    // A run of code tokens and number words that touches at least one single letter/digit.
+    let j = i
+    while (j < raw.length && (isCodeToken(bare[j]) || isNumberWord(bare[j]))) j++
+    const run = bare.slice(i, j)
+    const hasCode = run.some(isCodeToken)
+    const letters = run.filter(w => /^[a-z]$/.test(w))
+    // Lone "a"/"I" in ordinary speech is not a code.
+    if (j - i >= 2 && hasCode && !(letters.length === run.length && run.every(w => w === 'a' || w === 'i'))) {
+      const parts: string[] = []
+      let k = 0
+      while (k < run.length) {
+        if (isNumberWord(run[k])) {
+          let m = k
+          while (m < run.length && isNumberWord(run[m])) m++
+          const n = wordsToNumber(run.slice(k, m))
+          parts.push(n === null ? run.slice(k, m).join(' ') : String(n)); k = m
+        } else { parts.push(run[k].toUpperCase()); k++ }
+      }
+      // Letters join into one word; a digit glued to letters stays glued ("X M 5" -> "XM5").
+      const joined = parts.reduce((acc, part) => {
+        const prev = acc[acc.length - 1]
+        if (prev !== undefined && /^[A-Z]+\d*$/.test(prev) && !/\d$/.test(prev) && /^([A-Z]|\d)$/.test(part)) acc[acc.length - 1] = prev + part
+        else acc.push(part)
+        return acc
+      }, [] as string[])
+      const trail = raw[j - 1].match(/[.,!?;:]+$/)?.[0] ?? ''
+      out.push(joined.join(' ') + trail)
+      i = j
+    } else {
+      out.push(raw[i]); i++
+    }
+  }
+  return out.join(' ')
+}

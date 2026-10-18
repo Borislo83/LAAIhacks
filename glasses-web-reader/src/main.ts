@@ -155,6 +155,8 @@ let savedSessionUrl = ''
 let recorder: VoiceRecorder | null = null
 /** Set while hands-free is waiting for the wake phrase (and no command is being captured). */
 let wake: WakeListener | null = null
+/** The question said in the same breath as the wake phrase, used if the capture hears nothing new. */
+let wakeCommand = ''
 let handsFree = true
 let micOn = false
 let voiceSeq = 0
@@ -1212,6 +1214,7 @@ async function checkWake(utterance: Uint8Array[]) {
   }
   if (!listener || !res?.wake || wake !== listener || recorder) return
   wake = null
+  wakeCommand = res.command ?? ''
   void capture(wakeSeed(listener, utterance), true)
 }
 
@@ -1281,7 +1284,7 @@ async function capture(seed: Uint8Array[], fromWake: boolean) {
   const rec = (recorder = new VoiceRecorder(reason => void stopVoice(reason !== 'no-speech'), seed))
   wakeCapture = fromWake
   voiceUi = { phase: 'listening', text: '' }
-  await renderAssistant(GREETING, fromWake ? WAKE_LISTEN_HINT : LISTEN_HINT)
+  await renderAssistant(rerecordFor ? `Say your new message to ${rerecordFor}.` : GREETING, fromWake ? WAKE_LISTEN_HINT : LISTEN_HINT)
   if (await setMic(true)) {
     if (seq === voiceSeq) void livePreview(rec, seq)
   } else if (seq === voiceSeq) {
@@ -1322,10 +1325,14 @@ async function stopVoice(send: boolean) {
   if (handsFree) void armWake()
   else void setMic(false)
   if (!send) {
+    rerecordFor = null
     voiceUi = { phase: 'idle', text: '' }
     return void showContent()
   }
   const quiet = wakeCapture
+  // A re-record applies to this capture only, sent or not.
+  const rerecord = rerecordFor
+  rerecordFor = null
   // Hands-free results fade back to the page, like a notification.
   const fadeLater = () =>
     quiet && setTimeout(() => seq === voiceSeq && view === 'voice' && !recorder && void showContent(), WAKE_RESULT_MS)
@@ -1335,7 +1342,9 @@ async function stopVoice(send: boolean) {
     await renderAssistant(message, quiet ? `Say "${WAKE_PHRASE}" to try again` : VOICE_HINT)
     fadeLater()
   }
-  if (!rec.hasSpeech) {
+  // Said in one breath with the wake phrase: the capture may hear nothing new.
+  const spokenWithWake = quiet ? wakeCommand : ''
+  if (!rec.hasSpeech && !spokenWithWake) {
     voiceUi = { phase: 'error', text: "Didn't hear anything. Is the mic on?" }
     if (quiet) return void showContent()
     return void renderAssistant("Sorry, I didn't hear anything.", VOICE_HINT)
@@ -1343,7 +1352,13 @@ async function stopVoice(send: boolean) {
   voiceUi = { phase: 'sending', text: voiceUi.text }
   void renderThinking(voiceUi.text || '...', 'Got it')
   try {
-    const { command } = await sendVoice(rec.pcm())
+    // The recording starts with the wake sentence, so transcribe it whole; the wake check
+    // only heard its start ("Compare prices for.").
+    const heard = rec.hasSpeech || spokenWithWake ? (await sendVoice(rec.pcm())).command : ''
+    const said = heard || spokenWithWake
+    wakeCommand = ''
+    // A re-recorded message goes back to the same contact.
+    const command = rerecord && said ? `text ${rerecord} ${said}` : said
     if (seq !== voiceSeq) return
     report({ voice: rec.durationMs, chars: command.length })
     if (!command) return void fail("Sorry, I didn't catch that.", "Couldn't make that out.")
@@ -1456,7 +1471,17 @@ function agentGesture(gesture: CardGesture) {
   if (next === 'close') return closeAgentCard()
   if (next === 'cancel') return agentNote(card, 'Cancelled. Nothing was sent.')
   if (next === 'send') return void confirmDraft(card)
+  if (next === 'rerecord') return rerecordDraft(card)
   if (next === 'render') { armAgentFade(); void renderAgentCard() }
+}
+
+/** Re-record: listen again and draft the new words to the same contact. Nothing is sent. */
+let rerecordFor: string | null = null
+function rerecordDraft(card: AgentCard) {
+  if (card.answer.kind !== 'draft') return
+  rerecordFor = card.answer.draft.name ?? null
+  if (!rerecordFor) return agentNote(card, "Couldn't re-record: say \"text <name> ...\" again. Nothing was sent.")
+  startVoice()
 }
 
 /** Sends the draft exactly as shown, only after the tap on its last page. */

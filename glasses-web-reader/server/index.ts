@@ -11,7 +11,7 @@ import { isMangaDex, mangaPage, mangaStrip } from './manga'
 import type { Extracted } from './extract'
 import { orchestratorGateway } from './orchestrator'
 import { recommendationRoutes } from './recommendations'
-import { parseWake, transcribe } from './voice'
+import { normalizeSpokenCodes, parseWake, transcribe } from './voice'
 import { findPage } from './search'
 
 // Condense server: GET /api/condense?url=<page>
@@ -208,7 +208,8 @@ app.post('/api/voice', async c => {
   const durationMs = Math.round((pcm.length / 2 / rate) * 1000)
   try {
     const transcript = await transcribe(pcm, rate, mode === 'final')
-    const reply = { transcript, ...parseWake(transcript), durationMs } satisfies VoiceCommand
+    const parsed = parseWake(transcript)
+    const reply = { transcript, ...parsed, command: normalizeSpokenCodes(parsed.command), durationMs } satisfies VoiceCommand
     if (mode === 'check' && reply.wake) console.log(`[voice] wake: ${JSON.stringify(transcript)}`)
     if (mode !== 'final') return c.json(reply)
     console.log(`[voice] command (${durationMs}ms): ${JSON.stringify(reply.command)}`)
