@@ -174,6 +174,28 @@ class YouTubeResponse(Model):
     data_source: str | None = None
 
 
+class SpotifyRequest(Model):
+    action: Literal["play", "pause", "resume", "next", "previous", "volume"] = "play"
+    query: str | None = Field(default=None, max_length=300)
+    kind: Literal["track", "artist", "album", "playlist", "auto"] = "auto"
+    volume: int | None = Field(default=None, ge=0, le=100)
+    volume_change: int | None = Field(default=None, ge=-100, le=100)
+
+
+class SpotifyResponse(Model):
+    action: str
+    query: str | None = None
+    kind: str | None = None
+    title: str | None = None
+    artist: str | None = None
+    uri: str | None = None
+    url: str | None = None
+    device: str | None = None
+    volume: int | None = None
+    summary: str
+    error: str | None = None
+
+
 class NewsRequest(Model):
     query: str = Field(min_length=1, max_length=300)
     max_sources: int = Field(default=8, ge=3, le=12)

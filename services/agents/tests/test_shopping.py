@@ -1,6 +1,7 @@
 """Store listings, cart links, picks, and request parsing for the shopping flow."""
 
 import pytest
+
 from laai_agents import coordinator, live, stores
 from laai_agents.carts import amazon_cart_link, bestbuy_cart_link
 from laai_agents.models import (

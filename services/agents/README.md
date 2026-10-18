@@ -1,6 +1,6 @@
 # Agents
 
-Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are six specialists and a coordinator:
+Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are seven specialists and a coordinator:
 
 | Agent | Agent protocol | REST | What it does |
 |---|---|---|---|
@@ -8,6 +8,7 @@ Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are six
 | `laai-alternatives` | `AlternativesRequest` → `AlternativesResponse` | `POST /alternatives` | Cheaper or better-rated competitors in the same category |
 | `laai-reviews` | `ReviewsRequest` → `ReviewsResponse` | `POST /reviews` | Rating, pros/cons, a review link, and a one-line summary |
 | `laai-youtube` | `YouTubeRequest` → `YouTubeResponse` | `POST /youtube` | A YouTube link for a song or video the user asks for |
+| `laai-spotify` | `SpotifyRequest` → `SpotifyResponse` | `POST /spotify` | Plays a song, artist, album or playlist on the laptop's Spotify app; pause, resume, skip, volume |
 | `laai-news` | `NewsRequest` → `NewsResponse` | `POST /news` | A headline, a 2-4 sentence summary, an image and sources for recent news on a topic |
 | `laai-messenger` | `MessageDraftRequest` → `MessageDraftResponse` | `POST /imessage/prepare`, `POST /imessage/send` | Drafts an iMessage to an allowlisted friend; sends only after approval |
 
@@ -57,6 +58,41 @@ links are returned, always as `https://www.youtube.com/watch?v=<11-character id>
 (`youtu.be` links are rewritten). Shorts, playlists, channels and other sites are dropped,
 and no URL from the query or the results is fetched. No match gives `url: null` with a
 summary that says so. If every provider fails, `error` is set and no link is guessed.
+
+## Spotify agent
+
+`laai-spotify` controls the Spotify app on the laptop through the
+[Spotify Web API](https://developer.spotify.com/documentation/web-api). It plays a song,
+artist, album or playlist, and pauses, resumes, skips, goes back or sets the volume.
+Playback control needs Spotify Premium.
+
+One-time setup on the laptop:
+
+1. Create an app at the [Spotify developer dashboard](https://developer.spotify.com/dashboard),
+   tick **Web API**, and add the redirect URI `http://127.0.0.1:8888/callback`.
+2. Put its client ID in `.env` as `SPOTIFY_CLIENT_ID` (no client secret: login uses PKCE).
+3. Run `uv run laai-spotify-login`. It opens the Spotify consent page and saves a refresh
+   token to `~/.config/laai/spotify_token.json` (mode 600; `SPOTIFY_TOKEN_PATH` moves it).
+
+Keep the Spotify desktop app open. The agent plays on the device named
+`SPOTIFY_DEVICE_NAME`, else the laptop's first "Computer" device, preferring the active one.
+
+```bash
+curl http://127.0.0.1:8000/spotify -H 'Content-Type: application/json' \
+  -d '{"action":"play","query":"Blinding Lights","kind":"track"}'
+curl http://127.0.0.1:8000/spotify -H 'Content-Type: application/json' -d '{"action":"pause"}'
+```
+
+`action` is `play` (the default), `pause`, `resume`, `next`, `previous` or `volume` (with
+`volume` 0-100 or `volume_change` like `15`/`-15`). `kind` is `track`, `artist`, `album`,
+`playlist` or `auto`; `auto` plays an artist whose name matches the query exactly, and
+otherwise the top track. Chat takes plain text: "play the album Thriller", "play Daft
+Punk", "skip", "pause", "volume 40", "turn it up". The response has the `title`, `artist`,
+Spotify `uri` and `url`, the `device` and a one-line `summary`, which is also its chat reply.
+If Spotify isn't linked, isn't open, or needs Premium, `error` and `summary` say so.
+
+Anyone who can message this agent can control the laptop's music, so run it locally rather
+than with `AGENTVERSE_MAILBOX=1` unless that is what you want.
 
 ## News agent
 

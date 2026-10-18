@@ -22,6 +22,8 @@ from .models import (
     PriceCompareResponse,
     ReviewsRequest,
     ReviewsResponse,
+    SpotifyRequest,
+    SpotifyResponse,
     YouTubeRequest,
     YouTubeResponse,
 )
@@ -31,6 +33,7 @@ PRICE_SEED = os.getenv("PRICE_AGENT_SEED", "laai price compare agent dev seed")
 ALTERNATIVES_SEED = os.getenv("ALTERNATIVES_AGENT_SEED", "laai alternatives agent dev seed")
 REVIEWS_SEED = os.getenv("REVIEWS_AGENT_SEED", "laai reviews agent dev seed")
 YOUTUBE_SEED = os.getenv("YOUTUBE_AGENT_SEED", "laai youtube agent dev seed")
+SPOTIFY_SEED = os.getenv("SPOTIFY_AGENT_SEED", "laai spotify agent dev seed")
 MESSENGER_SEED = os.getenv("MESSENGER_AGENT_SEED", "laai messenger agent dev seed")
 COORDINATOR_SEED = os.getenv("COORDINATOR_AGENT_SEED", "laai coordinator dev seed")
 
@@ -56,6 +59,7 @@ DESCRIPTIONS = {
     "focal-amazon-buyer-demo": "Finds the Amazon listing and adds it to your cart only after you approve. Checkout is disabled.",
     "laai-messenger": "Drafts an iMessage to an allowlisted friend and sends it only after you approve.",
     "laai-youtube": "Finds a YouTube link for a song or video you ask for.",
+    "laai-spotify": "Plays a song, artist, album or playlist on the laptop's Spotify app, and pauses, skips or changes the volume.",
     "laai-news": "Short, sourced summary of the latest news on any topic.",
     "laai-amazon-cart": "Turns an Amazon product ID (ASIN) into Amazon's official add-to-cart link. You open it; nothing is bought.",
     "laai-bestbuy-cart": "Turns a Best Buy SKU into Best Buy's official add-to-cart link. You open it; nothing is bought.",
@@ -66,13 +70,13 @@ DESCRIPTIONS = {
 AVATARS = {
     "FOCAL": "https://storage.googleapis.com/agentverse-prod-assets/agent-avatars-pub/1739184632.jpg",
 }
+BANNERS = {
+    "FOCAL": "https://storage.googleapis.com/agentverse-prod-assets/agent-banners-pub/585959653.png",
+}
 
 
 def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
     kwargs = {}
-BANNERS = {
-    "FOCAL": "https://storage.googleapis.com/agentverse-prod-assets/agent-banners-pub/585959653.png",
-}
     if port is not None:
         kwargs = {"port": port, "endpoint": [f"http://127.0.0.1:{port}/submit"]}
     # Set AGENTVERSE_MAILBOX=1 to reach the agent through Agentverse (needed for ASI:One).
@@ -89,13 +93,13 @@ BANNERS = {
         publish_agent_details=True,
         description=DESCRIPTIONS.get(name),
         avatar_url=AVATARS.get(name),
+        banner_url=BANNERS.get(name),
+        # FOCAL talks to many chats at once; one long research run must not queue the rest.
+        handle_messages_concurrently=name == "FOCAL",
         **kwargs,
     )
 
     @agent.on_event("shutdown")
-        banner_url=BANNERS.get(name),
-        # FOCAL talks to many chats at once; one long research run must not queue the rest.
-        handle_messages_concurrently=name == "FOCAL",
     async def close_http(ctx: Context):
         await net.close()
 
@@ -193,6 +197,21 @@ def build_youtube_agent(port: int | None = None) -> Agent:
         find_video,
         port,
         chat_request=lambda text: YouTubeRequest(query=text[:300]),
+    )
+
+
+def build_spotify_agent(port: int | None = None) -> Agent:
+    from . import spotify
+
+    return build_specialist(
+        "laai-spotify",
+        SPOTIFY_SEED,
+        "/spotify",
+        SpotifyRequest,
+        SpotifyResponse,
+        spotify.control,
+        port,
+        chat_request=spotify.parse,
     )
 
 
