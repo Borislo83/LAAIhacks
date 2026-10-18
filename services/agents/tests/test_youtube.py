@@ -204,3 +204,65 @@ async def test_ddgs_rows_keep_only_youtube_videos(monkeypatch):
     assert await _real_ddgs_search("q") == [
         {"url": WATCH, "title": "Real video", "channel": "Channel", "duration": "3:21"}
     ]
+
+
+MERGED_TITLE = (
+    "How to tie a tie - Quick and Easy - YouTubeHow to Tie a Tie in 10 Seconds: "
+    "The Easiest Method for ...HOW TO TIE A TIE - YouTube..."
+)
+
+
+async def test_web_results_with_merged_titles_use_their_own_title(providers, monkeypatch):
+    """Regression: a live web result's title concatenated several YouTube results."""
+
+    async def search(query):
+        return [
+            Source(
+                title=MERGED_TITLE,
+                url="https://www.youtube.com/watch?v=9BMhFmNzw-o",
+                snippet="YouTube · Tie Guy · 12M views · 3 years ago",
+            ),
+            Source(title="Tie in 10 seconds - YouTube", url=f"https://youtu.be/{ID}"),
+        ], {}
+
+    _, results = providers
+    results["ddgs"] = youtube.SearchUnavailable("down")
+    monkeypatch.setattr(youtube, "search", search)
+    monkeypatch.setattr(
+        youtube,
+        "PROVIDERS",
+        (("ddgs_videos", youtube.ddgs_search), ("web_search", _real_web_search)),
+    )
+    result = await youtube.find_video(
+        YouTubeRequest(query="youtube link for how to tie a tie", kind="auto")
+    )
+    assert result.url == "https://www.youtube.com/watch?v=9BMhFmNzw-o"
+    assert result.title == "How to tie a tie - Quick and Easy"
+    assert result.channel == "Tie Guy"
+    assert [(a.title, a.channel) for a in result.alternatives] == [("Tie in 10 seconds", None)]
+
+
+@pytest.mark.parametrize(
+    "raw, title",
+    [
+        ("The Weeknd - Blinding Lights (Official Audio)", "The Weeknd - Blinding Lights (Official Audio)"),
+        ("Lofi Girl | lofi hip hop radio - YouTube", "Lofi Girl | lofi hip hop radio"),
+        ("Top 10 - YouTuber fails - YouTube", "Top 10 - YouTuber fails"),
+        ("x" * 300, "x" * 120),
+    ],
+)
+def test_result_titles_are_single_and_capped(raw, title):
+    assert youtube.result_title(raw) == title
+
+
+@pytest.mark.parametrize(
+    "snippet, channel",
+    [
+        ("YouTube · Tie Guy · 12M views", "Tie Guy"),
+        ("Video uploaded by Real Men Real Style. Learn how", "Real Men Real Style"),
+        ("Learn to tie a tie by the easiest method", None),
+        ("", None),
+    ],
+)
+def test_channel_only_when_stated(snippet, channel):
+    assert youtube.result_channel(snippet) == channel

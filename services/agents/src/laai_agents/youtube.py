@@ -19,6 +19,7 @@ from .progress import report, tracked
 from .search import SearchUnavailable, search
 
 VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+TITLE_LIMIT = 120
 WATCH_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
 SONG_WORDS = re.compile(r"\b(?:song|track|music|audio|lyrics|single)\b", re.IGNORECASE)
 
@@ -99,7 +100,7 @@ def _video(url, title, channel=None, duration=None) -> dict | None:
         return None
     return {
         "url": canonical,
-        "title": " ".join(str(title or "").split())[:200] or "YouTube video",
+        "title": " ".join(str(title or "").split())[:TITLE_LIMIT] or "YouTube video",
         "channel": " ".join(str(channel).split())[:100] if channel else None,
         "duration": str(duration) if duration else None,
     }
@@ -163,12 +164,37 @@ async def ddgs_search(query: str) -> list[dict]:
     ]
 
 
+def result_title(raw: str) -> str:
+    """One video's title from a web result title.
+
+    Search providers sometimes merge several results into one title, e.g.
+    "How to tie a tie - YouTubeHow to Tie a Tie in 10 Seconds ...HOW TO TIE - YouTube".
+    The text before the first "- YouTube" (or "...") is this result's own title.
+    """
+    title = " ".join(raw.split())
+    title = re.split(r"\s*[-–|]\s*YouTube(?!rs?\b)", title, maxsplit=1, flags=re.IGNORECASE)[0]
+    title = re.split(r"\s*(?:\.\.\.|…)", title, maxsplit=1)[0]
+    return title.strip(" -–|")[:TITLE_LIMIT]
+
+
+# Channel names that web results state explicitly; anything less certain stays None.
+CHANNEL = re.compile(
+    r"(?:\bYouTube\s*·\s*|\buploaded by\s+)([^·|\n]{2,80}?)\s*(?:·|\||$|\.\s)",
+    re.IGNORECASE,
+)
+
+
+def result_channel(snippet: str) -> str | None:
+    match = CHANNEL.search(" ".join(snippet.split()))
+    return match[1].strip() if match else None
+
+
 async def web_search(query: str) -> list[dict]:
     sources, _ = await search(f"site:youtube.com {query}")
     return [
         video
         for s in sources
-        if (video := _video(s.url, s.title.removesuffix(" - YouTube")))
+        if (video := _video(s.url, result_title(s.title), result_channel(s.snippet)))
     ]
 
 
