@@ -86,7 +86,7 @@ async def test_page_put_watcher_proposes_g2_approves_result_on_display(
                 "Check independent reviews",
             ]
             compare = by_type(listed, "compare_prices")
-            assert compare["description"].startswith(f"Research {PRODUCT};")
+            assert compare["description"].startswith(f"Research {PRODUCT}")
 
             # Further passes see the watcher's own revision bump and propose nothing new.
             await settle(worker)

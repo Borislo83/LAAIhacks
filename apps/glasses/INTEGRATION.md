@@ -91,11 +91,11 @@ The next display poll returns:
  "actions":[
   {"action_id":"act-1-50860f3d-89ad-491a-8137-5057a386aee8","type":"compare_prices",
    "label":"Compare prices and alternatives",
-   "description":"Research Sony WH-1000XM5; alternative budget: 300.0 USD",
+   "description":"Research Sony WH-1000XM5; alternatives under $300",
    "status":"proposed","requires_approval":true,"expires_at":"2026-10-18T04:25:13.768999Z","result":null},
   {"action_id":"act-2-9a00fe9c-b981-4b8b-8c4e-fb32da9e181d","type":"find_reviews",
    "label":"Check independent reviews",
-   "description":"Research Sony WH-1000XM5; alternative budget: 300.0 USD",
+   "description":"Research Sony WH-1000XM5; alternatives under $300",
    "status":"proposed","requires_approval":true,"expires_at":"2026-10-18T04:25:13.768999Z","result":null}],
  "mode":"actions","notice":null,"preferences":{"display_density":"comfortable"}}
 ```
