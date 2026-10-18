@@ -90,6 +90,27 @@ ROUTES = (
 CHUNK_GAP = float(os.getenv("FOCAL_CHUNK_GAP", "1.0"))
 
 
+# Amazon listings FOCAL already knows, for when live search turns up nothing.
+KNOWN_LISTINGS = {
+    "apple airpods pro 2": {"title": "Apple AirPods Pro 2 (USB-C)", "url": "https://www.amazon.com/dp/B0D1XD1ZV3"},
+}
+
+
+# Product lines FOCAL narrows to one model once it knows the budget (Apple list prices).
+FAMILIES = {
+    "Apple AirPods": (
+        re.compile(r"\bair ?pods\b(?!\s*(?:pro|max|\d))", re.IGNORECASE),
+        [("Apple AirPods 4", 129.0, "great everyday sound, no noise cancelling"),
+         ("Apple AirPods Pro 2", 249.0, "the best noise cancelling and fit in the AirPods line"),
+         ("Apple AirPods Max", 549.0, "over-ear, premium build")],
+    ),
+}
+
+
+def family_of(body: str) -> str | None:
+    return next((name for name, (pattern, _) in FAMILIES.items() if pattern.search(body)), None)
+
+
 def route_of(body: str) -> str:
     return next((name for name, pattern in ROUTES if pattern.search(body)), "shopping")
 
@@ -115,13 +136,18 @@ class Conversation:
 
     def __init__(self, ctx: Context, sender: str, addresses: dict[str, str]):
         self.ctx, self.sender, self.addresses = ctx, sender, addresses
-        self.key = f"focal:{sender}"
+        # One conversation per ASI:One chat: ASI relays every chat through the same
+        # sender address, but each chat keeps its own session id.
+        self.key = f"focal:{getattr(ctx, 'session', None) or sender}"
         self.state = ctx.storage.get(self.key) or {}
         # ASI:One shows only an agent's latest message per turn, so every update carries
         # the whole running log: the bubble grows as each agent reports.
         self.log: list[str] = []  # everything said this turn (tests and the recap read it)
         self.pending: list[str] = []  # notes not yet sent; the next message carries them
         self.last_send = 0.0
+        # Card-click steps answer with one message (lines queue up for the card that
+        # follows); ASI:One stacks several quick messages into one reply after a reload.
+        self.quiet = True
         # Parallel agents report at the same instant; ASI:One drops chunks that land
         # together, so every send goes through one queue with a small gap.
         self.sending = asyncio.Lock()
@@ -159,14 +185,17 @@ class Conversation:
             await self.ctx.send(self.sender, msg)
             self.last_send = time.monotonic()
 
-    async def end_stream(self):
-        """Kept for callers; FOCAL sends whole messages, not streams (see say)."""
-
     async def say(self, body: str, end: bool = False):
+        if self.quiet and not end:
+            return self.note(body)
+        await self.flush(body, end)
+
+    async def flush(self, body: str | None = None, end: bool = False):
         """Send the turn's whole conversation so far. ASI:One keeps an agent's latest
         message per turn, so each update carries every line said before it; the send
         queue spaces messages so none of them land together."""
-        self.log.append(body)
+        if body is not None:
+            self.log.append(body)
         self.pending = []
         await self.send(cards.text("\n\n".join(self.log), end_session=end))
 
@@ -224,7 +253,8 @@ class Conversation:
         # Answer typed messages at once so the chat never sits blank. Card clicks skip
         # it: the card already shows "Submitted" and the first agent line follows.
         if not action:
-            await self.say("⚡ Got it! Thinking it through…")
+            # Its own message, outside the running log the next message carries.
+            await self.send(cards.text("⚡ Got it! Thinking it through…"))
         if action and self.state.get("stage") in {None, "done"}:
             # ASI:One sometimes relays a card click from its own agent, with a new sender
             # and session: continue the conversation that is waiting for a click.
@@ -317,12 +347,15 @@ class Conversation:
             return await getattr(self, f"run_{route}")(body)
         from .coordinator import budget_from, parse_request
 
+        if family := family_of(body):
+            return await self.start_family(family, budget_from(body) or cards.budget_in(body))
         req = await parse_request(body)
         if req is not None and re.search(r"\bno product\b|not (?:provided|specified|mentioned)", req.product, re.IGNORECASE):
             req = None
         if req is None:
             return await self.say(
-                "I'm **FOCAL**, a team of 12 agents that turns what you ask into something done. Try:\n"
+                "I'm **FOCAL**: I work so you can focus on what matters. Ask me almost anything; a team of 12 agents "
+                "gets it done, and shopping is my specialty. Try:\n"
                 "- *\"Should I buy the Apple AirPods Pro 2?\"* — research, verify, cart, tell a friend, watch the price\n"
                 "- *\"What's the latest on SpaceX Starship?\"* — a sourced news brief\n"
                 "- *\"Play Blinding Lights on YouTube\"* — the right video link\n"
@@ -404,6 +437,41 @@ class Conversation:
         draft = await self.ask("messenger", MessageDraftRequest(request=body[:1200]), MessageDraftResponse, timeout=30)
         await self.show_draft(draft, round((time.perf_counter() - started) * 1000))
 
+    async def start_family(self, family: str, budget: float | None):
+        """A product line ("Apple AirPods"): ask the budget, then pick the model."""
+        self.reset()
+        self.state.update(product=family, family=family, budget=float(budget) if budget else None)
+        models = FAMILIES[family][1]
+        await self.talk(
+            "focal", "you",
+            f"{family} come in a few models: " + ", ".join(f"{m} ({money(p)})" for m, p, _ in models)
+            + ". Let me check with the team what fits you.",
+        )
+        self.state["priority"] = await self.recall()
+        if self.state["budget"] is None:
+            self.state["stage"] = "brief"
+            self.save()
+            return await self.show(cards.brief_form(family, self.state["priority"]))
+        self.save()
+        await self.pick_model()
+
+    async def pick_model(self):
+        """Narrow a product line to the best model the budget covers, then research it."""
+        family, budget = self.state.pop("family"), self.state.get("budget")
+        models = FAMILIES[family][1]
+        fits = [m for m in models if budget is None or m[1] <= budget]
+        name, price, why = (fits or models[:1])[-1]
+        others = [f"{m} ({money(p)})" for m, p, _ in models if m != name]
+        verdict = (
+            f"with a {money(budget)} budget, I'd go with **{name}** ({money(price)}): {why}."
+            if fits else f"nothing in the line fits {money(budget)}; the closest is **{name}** ({money(price)})."
+        )
+        await self.talk("focal", "you", verdict + (f" Also in the line: {', '.join(others)}." if others else "")
+                        + " Sending the team to verify it.")
+        self.state["product"] = name
+        self.save()
+        await self.research()
+
     async def on_brief(self, reply: dict, body: str):
         budget = reply.get("budget")
         try:
@@ -414,6 +482,8 @@ class Conversation:
         self.state["priority"] = priority if priority in cards.PRIORITIES else "balanced"
         self.state["use_case"] = str(reply.get("use_case") or "")[:200]
         self.save()
+        if self.state.get("family"):
+            return await self.pick_model()
         await self.research()
 
     # ---- 2. plan + live orchestration --------------------------------------------
@@ -424,13 +494,15 @@ class Conversation:
         product, budget = self.state["product"], self.state.get("budget")
         self.state["stage"] = "researching"
         self.save()
+        # Research takes a while: stream it live from here on.
+        self.quiet = False
         await self.say(
             self.said("focal", "you", f"here's the plan for **{product}**"
                       + (f" (budget {money(budget)}, priority {self.state.get('priority', 'balanced')})" if budget else "")
                       + ". The team:")
             + f"\n- {self.line('price')} · {self.line('reviews')} · {self.line('alternatives')} work in parallel"
             + f"\n- {self.line('verification')} audits the prices before anyone acts"
-            + "\n- then you decide → 🛒 Buyer → 💬 Messenger → 👀 Price watch, each only after you approve"
+            + "\n- then you pick → 🛒 Buyer → 💳 Checkout → anything else you want (price watch, a message, memory)"
         )
         progress_id = uuid4().hex
         stop = asyncio.Event()
@@ -593,7 +665,6 @@ class Conversation:
         await self.show(
             card(
                 self.said("focal", "you", "research is done and the prices are verified. Pick one and the buyer agent takes it from here.")
-                + "\n\n" + result.summary[:1500]
                 + ("\n\n**Sources**\n" + "\n".join(sources) if sources else ""),
                 "custom",
                 payload,
@@ -613,11 +684,17 @@ class Conversation:
         if result.alternatives and result.alternatives.alternatives:
             products.append(result.alternatives.alternatives[0].product)
         leads: dict[str, list[dict]] = {p: [] for p in products}
+        own = {id(result.price), id(result.reviews)}
         for section in (result.price, result.reviews, result.alternatives, result.alternative_reviews):
             for source in section.sources if section else []:
                 url = amazon_listing(source.url)
-                for product in products if url else []:
-                    if matches_product(source.title, product) and all(
+                for i, product in enumerate(products if url else []):
+                    # Pages the price and reviews agents found for the main product are
+                    # its listings ("AirPods Pro (2nd Generation)" is the AirPods Pro 2).
+                    mine = i == 0 and id(section) in own and not (
+                        len(products) > 1 and matches_product(source.title, products[1])
+                    )
+                    if (mine or matches_product(source.title, product)) and all(
                         lead["url"] != url for lead in leads[product]
                     ):
                         leads[product].append({"title": source.title, "url": url})
@@ -638,6 +715,9 @@ class Conversation:
             # product pages the research agents already cited.
             candidates = leads
             self.note(self.said("buyer", "focal", "my search came back empty, so I'm reusing the Amazon pages the research agents cited."))
+        if not candidates and (known := KNOWN_LISTINGS.get(product.lower())):
+            candidates = [known]
+            self.note(self.said("buyer", "focal", "live search came back empty; using the Amazon listing I already know for it."))
         if not candidates:
             self.credit("buyer", "no listing", ms)
             link = result.search_url if result else None
@@ -807,8 +887,9 @@ class Conversation:
                                 + (" with test card 4242 4242 4242 4242, any future date, any CVC." if payments.test_mode() else "."))
         )
         # The payment request goes last: ASI:One shows an agent's latest message per turn.
+        if self.pending:
+            await self.flush()  # the explanation first; the payment request must be last
         await self.pace()
-        await self.end_stream()
         await self.send(payments.payment_request(str(self.ctx.agent.address), reference, f"{product} via FOCAL", checkout))
 
     async def show_draft(self, draft, ms: int):
@@ -924,6 +1005,10 @@ class Conversation:
 
     async def on_commit(self, msg: CommitPayment):
         """Payment Protocol: verify with Stripe before CompletePayment and the receipt."""
+        if self.state.get("checkout_id") != msg.transaction_id:
+            last = self.ctx.storage.get("focal:last")
+            if last and (self.ctx.storage.get(last) or {}).get("checkout_id") == msg.transaction_id:
+                self.key, self.state = last, self.ctx.storage.get(last)
         if self.state.get("stage") != "awaiting_payment" or self.state.get("checkout_id") != msg.transaction_id:
             await self.ctx.send(self.sender, RejectPayment(reason="This payment does not match the pending checkout."))
             return
@@ -962,7 +1047,6 @@ class Conversation:
             self.said("focal", "you", f"🧾 **Purchase complete.** {product} · {money(price)} · paid via the Agent Payment Protocol.")
             + ("\n_Stripe test mode: no real money moved and no real store order was placed._" if payments.test_mode() else "")
         )
-        await self.remember({"product": product, "bought_for": price, "kind": "purchase"})
         await self.offer_watch()
 
     async def arm_watch(self, paid: bool = False):
@@ -1028,7 +1112,8 @@ def build_asi_protocols(addresses: dict[str, str]) -> list[Protocol]:
         conversation = Conversation(ctx, sender, addresses)
         try:
             await conversation.handle(body)
-            await conversation.end_stream()
+            if conversation.pending:
+                await conversation.flush()
         except Exception:
             ctx.logger.exception("Conversation step failed")
             await conversation.say("⚠️ Something went wrong on my side. Please ask again.", end=True)

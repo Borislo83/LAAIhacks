@@ -100,9 +100,9 @@ async def handle(ctx: Context, req: MemoryRequest) -> MemoryResponse:
     return MemoryResponse(
         source=source,
         preferences=preferences,
-        history=history[:3],
+        history=history[:5],
         request=request,
-        response={"preferences": preferences, "recent": history[:3]},
+        response={"preferences": preferences, "recent": history[:5]},
         status=status,
         summary=summary,
     )

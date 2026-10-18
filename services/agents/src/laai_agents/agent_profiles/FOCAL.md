@@ -2,7 +2,9 @@
 
 ![tag:multi-agent](https://img.shields.io/badge/multi--agent-3D8BD3) ![tag:shopping](https://img.shields.io/badge/shopping-3D8BD3) ![tag:news](https://img.shields.io/badge/news-3D8BD3) ![tag:memory](https://img.shields.io/badge/memory-3D8BD3) ![tag:payments](https://img.shields.io/badge/payments-3D8BD3)
 
-**FOCAL turns what you ask into something done.** It's one agent to talk to, backed by a team of 12 specialists. FOCAL works out what you want, plans the work, sends it to the right agents in parallel, checks their results, and asks you before anything happens for real. Every step shows up in the chat as it happens.
+**FOCAL works so you can focus on what matters.** Ask it for almost anything. FOCAL works out what you want, plans the work, sends it to the right specialists in parallel, checks their results, and asks you before anything happens for real. Every hop between agents shows up in the chat as it happens.
+
+**Its specialty is shopping.** Ask "should I buy it?" and a whole team takes over: price, reviews and alternatives agents research in parallel, a verifier audits every price, a buyer finds the listing, checkout goes through the Agent Payment Protocol, and FOCAL can keep watching the price for you. It also handles news briefs, videos and messages to friends, and remembers what you like.
 
 ## Try it
 - **Decide and buy:** "Should I buy the Apple AirPods Pro 2?"

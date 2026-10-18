@@ -271,3 +271,12 @@ async def test_typed_confirmation_passes_in_test_mode(monkeypatch):
     await conversation.handle("stripe:payment_id:1b949186-eb30-465b-a9d6-7091abe4779d:CONFIRM")
     assert any(isinstance(m, CompletePayment) for m in ctx.sent)
     assert "test mode" in ctx.texts()
+
+
+async def test_product_line_asks_budget_then_recommends_a_model():
+    ctx = Context()
+    await step(ctx, SHOPPER, "I'm thinking about buying Apple AirPods")
+    assert ctx.card_kinds() == ["form"]
+    await step(ctx, SHOPPER, "my budget is 250")
+    assert "I'd go with **Apple AirPods Pro 2**" in ctx.texts()
+    assert "Price agent" in ctx.texts() and ctx.card_kinds()[-1] == "custom"
