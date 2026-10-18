@@ -3,6 +3,7 @@ import json
 import httpx
 from pydantic import ValidationError
 
+from .asi_one import complete
 from .config import Config
 from .models import PageContext, Prediction, TaskKind
 from .preferences import preference_context, preferred_tasks
@@ -22,26 +23,20 @@ async def predict(
         return None, "none"
     if config.asi_one_api_key.get_secret_value():
         try:
-            response = await http.post(
-                "https://api.asi1.ai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {config.asi_one_api_key.get_secret_value()}"},
-                json={
-                    "model": config.asi_one_model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": SYSTEM
-                            + (preference_context(preferences) if preferences else ""),
-                        },
-                        {"role": "user", "content": page.model_dump_json()},
-                    ],
-                    "temperature": 0,
-                    "max_tokens": 250,
-                },
+            message = await complete(
+                [
+                    {
+                        "role": "system",
+                        "content": SYSTEM + (preference_context(preferences) if preferences else ""),
+                    },
+                    {"role": "user", "content": page.model_dump_json()},
+                ],
+                config,
+                http,
+                max_tokens=250,
                 timeout=15,
             )
-            response.raise_for_status()
-            content = json.loads(response.json()["choices"][0]["message"]["content"])
+            content = json.loads(message["content"])
             if content == {"product": "", "tasks": []} and not page.product:
                 return None, "asi_one"
             prediction = Prediction.model_validate(content)

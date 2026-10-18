@@ -9,12 +9,12 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
+from .asi_one import complete
 from .config import Config
-from .models import AgentCall, ChatMessage, ChatReply, TaskKind, ToolArgs
+from .models import FIELDS, AgentCall, ChatMessage, ChatReply, TaskKind, ToolArgs
 from .preferences import preference_context, preferred_tasks
 from .progress import agent_request
 
-ASI_ONE_URL = "https://api.asi1.ai/v1/chat/completions"
 MAX_ROUNDS = 3
 
 SYSTEM = """You are Focal, a shopping assistant on smart glasses. You answer by calling agents.
@@ -68,11 +68,6 @@ TOOL_KINDS = {
 # Each agent call is tried up to three times before it counts as failed.
 ATTEMPTS = 3
 RETRY_DELAY = 1.0
-FIELDS = {
-    TaskKind.PRICE: ("product", "current_store", "current_price"),
-    TaskKind.ALTERNATIVES: ("product", "max_price"),
-    TaskKind.REVIEWS: ("product",),
-}
 
 
 async def call_agent(
@@ -136,23 +131,6 @@ def _brief(call: AgentCall) -> str:
     return json.dumps(call.result if call.result is not None else {"error": call.error})
 
 
-async def _complete(messages: list[dict[str, Any]], config: Config, http: httpx.AsyncClient):
-    response = await http.post(
-        ASI_ONE_URL,
-        headers={"Authorization": f"Bearer {config.asi_one_api_key.get_secret_value()}"},
-        json={
-            "model": config.asi_one_model,
-            "messages": messages,
-            "tools": TOOLS,
-            "temperature": 0,
-            "max_tokens": 400,
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]
-
-
 def _numbers(text: str) -> set[float]:
     return {float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", text)}
 
@@ -193,7 +171,7 @@ async def chat_with_llm(
                     "message": "Choosing agents" if not calls else "Combining agent findings",
                 }
             )
-        message = await _complete(messages, config, http)
+        message = await complete(messages, config, http, max_tokens=400, timeout=30, tools=TOOLS)
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
             return ChatReply(
@@ -202,6 +180,8 @@ async def chat_with_llm(
         messages.append(
             {"role": "assistant", "content": message.get("content") or "", "tool_calls": tool_calls}
         )
+        # Validate every call first, then run the agents together; replies keep call order.
+        planned = []
         for tool_call in tool_calls:
             name = tool_call["function"]["name"]
             kind = TOOL_KINDS.get(name)
@@ -209,12 +189,23 @@ async def chat_with_llm(
                 args = ToolArgs.model_validate_json(tool_call["function"]["arguments"] or "{}")
             except ValidationError:
                 kind = None
-            if kind is None:
-                content = json.dumps({"error": f"Unknown tool or bad arguments: {name}"})
-            else:
-                call = await call_agent(kind, grounded(args, user_text), config, http, emit)
+            planned.append((tool_call, name, grounded(args, user_text) if kind else None))
+        results = iter(
+            await asyncio.gather(
+                *(
+                    call_agent(TOOL_KINDS[name], args, config, http, emit)
+                    for _, name, args in planned
+                    if args
+                )
+            )
+        )
+        for tool_call, name, args in planned:
+            if args:
+                call = next(results)
                 calls.append(call)
                 content = _brief(call)
+            else:
+                content = json.dumps({"error": f"Unknown tool or bad arguments: {name}"})
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": content})
     # Out of rounds: answer from what the agents returned.
     return rules_reply(calls)
