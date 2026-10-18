@@ -134,8 +134,10 @@ async def _side_of_screen() -> tuple[int, int, int, int]:
         width, height = (int(float(v)) for v in out.split(","))
     except Exception:  # noqa: BLE001 -- a default size is fine
         pass
-    side = max(560, int(width * 0.42))
-    return width - side, 25, side, height - 25
+    # The demo layout: Spotify, YouTube and this cart window side by side, the cart on the right.
+    top = 34  # below the menu bar
+    side = max(480, width // 3)
+    return width - side, top, side, height
 
 
 async def _show_window():
@@ -144,6 +146,16 @@ async def _show_window():
     try:
         if _page is not None and not _page.is_closed():
             await _page.bring_to_front()
+            # Back in its place on the right, even if it was moved or a full-screen Space hid it.
+            try:
+                cdp = await _page.context.new_cdp_session(_page)
+                window = await cdp.send("Browser.getWindowForTarget")
+                await cdp.send("Browser.setWindowBounds", {"windowId": window["windowId"], "bounds": {"windowState": "normal"}})
+                x, y, width, height = await _side_of_screen()
+                await cdp.send("Browser.setWindowBounds", {"windowId": window["windowId"],
+                               "bounds": {"left": x, "top": y, "width": width, "height": height}})  # fmt: skip
+            except Exception:  # noqa: BLE001 -- placement is a convenience
+                pass
         profile = str(Path(os.getenv("AMAZON_BROWSER_PROFILE", ".runtime/amazon-profile")).resolve())
         find = await asyncio.create_subprocess_exec(
             "ps", "-axo", "pid=,command=", stdout=asyncio.subprocess.PIPE
@@ -153,9 +165,12 @@ async def _show_window():
         pid = next((ln.split()[0] for ln in lines
                     if f"user-data-dir={profile}" in ln and "--type=" not in ln), "")
         if pid.isdigit():
+            # AppKit activation by process id: needs no Accessibility permission (System
+            # Events does), and picks this Chrome rather than the user's own.
             raise_it = await asyncio.create_subprocess_exec(
-                "osascript", "-e",
-                f'tell application "System Events" to set frontmost of (first process whose unix id is {pid}) to true',
+                "osascript", "-l", "JavaScript", "-e",
+                f'ObjC.import("AppKit"); $.NSRunningApplication.runningApplicationWithProcessIdentifier({pid})'
+                ".activateWithOptions($.NSApplicationActivateIgnoringOtherApps)",
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             )
             await asyncio.wait_for(raise_it.wait(), 5)
