@@ -19,12 +19,15 @@ from .models import (
     PriceCompareResponse,
     ReviewsRequest,
     ReviewsResponse,
+    YouTubeRequest,
+    YouTubeResponse,
 )
 
 # Seeds fix each agent's address. Override them in .env before deploying anywhere public.
 PRICE_SEED = os.getenv("PRICE_AGENT_SEED", "laai price compare agent dev seed")
 ALTERNATIVES_SEED = os.getenv("ALTERNATIVES_AGENT_SEED", "laai alternatives agent dev seed")
 REVIEWS_SEED = os.getenv("REVIEWS_AGENT_SEED", "laai reviews agent dev seed")
+YOUTUBE_SEED = os.getenv("YOUTUBE_AGENT_SEED", "laai youtube agent dev seed")
 
 
 def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
@@ -53,25 +56,35 @@ def build_specialist(
     response_type: type[Model],
     handler: Callable[[Model], Awaitable[Model]],
     port: int | None = None,
+    chat_request: Callable[[str], Model] | None = None,
 ) -> Agent:
-    """One specialist: typed protocol, REST endpoint and chat, all served by `handler`."""
+    """One specialist: typed protocol, REST endpoint and chat, all served by `handler`.
+
+    Chat extracts a product name by default; `chat_request` builds the request from the
+    raw message text instead.
+    """
     agent = make_agent(name, seed, port)
     proto = Protocol(name=request_type.__name__.removesuffix("Request"), version="0.1.0")
 
     @proto.on_message(request_type, replies=response_type)
     async def on_request(ctx: Context, sender: str, req):
-        ctx.logger.info(f"{name} request for {req.product!r} from {sender}")
+        subject = getattr(req, "product", None) or getattr(req, "query", None)
+        ctx.logger.info(f"{name} request for {subject!r} from {sender}")
         await ctx.send(sender, await handler(req))
 
     @agent.on_rest_post(route, request_type, response_type)
     async def on_rest(ctx: Context, req):
         return await handler(req)
 
-    async def answer(ctx: Context, product: str) -> str:
-        return (await handler(request_type(product=product))).summary
+    async def answer(ctx: Context, text: str) -> str:
+        request = chat_request(text) if chat_request else request_type(product=text)
+        return (await handler(request)).summary
 
     agent.include(proto, publish_manifest=True)
-    agent.include(build_chat_protocol(answer), publish_manifest=True)
+    agent.include(
+        build_chat_protocol(answer, extract_product=chat_request is None),
+        publish_manifest=True,
+    )
     return agent
 
 
@@ -108,4 +121,19 @@ def build_reviews_agent(port: int | None = None) -> Agent:
         ReviewsResponse,
         handlers.get_reviews,
         port,
+    )
+
+
+def build_youtube_agent(port: int | None = None) -> Agent:
+    from .youtube import find_video
+
+    return build_specialist(
+        "laai-youtube",
+        YOUTUBE_SEED,
+        "/youtube",
+        YouTubeRequest,
+        YouTubeResponse,
+        find_video,
+        port,
+        chat_request=lambda text: YouTubeRequest(query=text[:300]),
     )
