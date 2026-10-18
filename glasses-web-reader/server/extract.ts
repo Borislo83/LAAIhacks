@@ -57,7 +57,8 @@ export function normalizeGlyphs(s: string): string {
     .replace(/[\u2190\u27F5\u21D0]/g, '<-')
     .replace(/\s*[\u00B6\u00A7]$/, '')
     .replace(/[•●◦‣]/g, '-')
-    .replace(/\p{Extended_Pictographic}️?/gu, '')
+    // ★ is Extended_Pictographic but the G2 font has it (ratings pair it with ☆).
+    .replace(/(?!★)\p{Extended_Pictographic}️?/gu, '')
 }
 
 // Wikipedia-style reference markers mean nothing without hyperlinks.
@@ -334,7 +335,15 @@ function pickSrc(img: Element): string | null {
   return img.getAttribute('data-src') || img.getAttribute('src')
 }
 
-function addImage(out: ImageCandidate[], seen: Set<string>, raw: string | null, alt: string, context: string, base: string): number {
+function addImage(
+  out: ImageCandidate[],
+  seen: Set<string>,
+  raw: string | null,
+  alt: string,
+  context: string,
+  base: string,
+  cap = MAX_IMAGES,
+): number {
   if (!raw) return -1
   let src: string
   try {
@@ -346,7 +355,7 @@ function addImage(out: ImageCandidate[], seen: Set<string>, raw: string | null, 
   if (!/^https?:/.test(src) || JUNK_IMAGE.test(src) || JUNK_IMAGE.test(alt)) return -1
   const hit = out.find(i => i.src === src)
   if (hit) return hit.id
-  if (out.length >= MAX_IMAGES || seen.has(src)) return -1
+  if (out.length >= cap || seen.has(src)) return -1
   seen.add(src)
   const id = out.length
   out.push({ id, src, alt: clean(alt).replace(/^image of\s+/i, '').slice(0, 100), context: clean(context).slice(0, 140) })
@@ -395,7 +404,10 @@ function collectProducts(doc: Document, base: string, images: ImageCandidate[], 
   const seenUrl = new Set<string>()
   for (const card of cards) {
     if (out.length >= 60) break
-    const overlay = card.querySelector('a[aria-label], a[title], [data-testid="product-grid-title"]')
+    // Amazon labels its star-rating link too, so the h2 title wins and rating labels never count.
+    const overlay =
+      card.querySelector('h2[aria-label]') ??
+      card.querySelector('a[aria-label]:not([aria-label*="out of 5"]), a[title], [data-testid="product-grid-title"]')
     const brand = clean(card.querySelector('[class*="Byline"]')?.textContent ?? '')
     const name = clean(
       overlay?.getAttribute('aria-label') ||
@@ -404,33 +416,46 @@ function collectProducts(doc: Document, base: string, images: ImageCandidate[], 
         card.querySelector('h2, h3, [class*="Title"]')?.textContent ||
         '',
     ).replace(/^image of\s+/i, '')
+    // Sponsored tiles are ads, often for unrelated items.
+    if (/^sponsored\b/i.test(name) || /\bAdHolder\b/.test(card.getAttribute('class') ?? '')) continue
     const title = name && brand && !name.toLowerCase().startsWith(brand.toLowerCase()) ? `${brand} ${name}` : name
     if (title.length < 4) continue
 
     const buy = card.querySelector('[data-testid="grid-item-buy-price"], [class*="buyPrice"], .a-price:not([data-a-strike])')
     const buyText = buy ? textOf(buy.cloneNode(true) as Element).replace(/strike through.*$/i, '') : textOf(card)
-    const price = PRICE_RE.exec(buyText)?.[0]?.replace(/\s+/g, '') ?? ''
+    let price = PRICE_RE.exec(buyText)?.[0]?.replace(/\s+/g, '') ?? ''
+    // Amazon audiobooks show "$0.00 ... Free with Audible trial".
+    if (/^\$0(?:\.00)?$/.test(price)) price = /free with .*trial/i.test(textOf(card)) ? 'Free trial' : ''
     const ratingLabel = card.querySelector('[data-testid="grid-item-short-review"], [class*="rating"], [aria-label*="out of 5"]')
     const ratingText = clean(
       ratingLabel?.getAttribute('aria-label') || ratingLabel?.textContent || textOf(card.querySelector('[class*="rating"]') ?? card),
     )
     const stars = RATING_RE.exec(ratingText)
     const reviews = /(\d[\d,]*)\s*(?:customer reviews|ratings?|\bco\b)?/i.exec(
-      clean(card.querySelector('[data-testid="grid-item-review-count"]')?.textContent ?? '') || ratingText,
+      clean(card.querySelector('[data-testid="grid-item-review-count"]')?.textContent ?? '') ||
+        (card.querySelector('a[aria-label$=" ratings"], a[aria-label$=" rating"]')?.getAttribute('aria-label') ?? '') ||
+        (stars ? ratingText.slice(stars.index + stars[0].length) : ratingText),
     )
     const rating = stars ? `${stars[1]}/5${reviews ? ` (${reviews[1]})` : ''}` : ''
 
     const url =
       firstAbsUrl(card, base, u => /\/(?:dp|gp\/product)\//.test(u.pathname)) ||
       firstAbsUrl(card, base, u => u.pathname.length > 3 && u.toString() !== base)
-    if (!url || seenUrl.has(url)) continue
-    seenUrl.add(url)
+    // The same item recurs with different ref= tracking, so key on the ASIN when there is one.
+    const key = card.getAttribute('data-asin') || /\/(?:dp|gp\/product)\/([A-Z0-9]{10})/.exec(url)?.[1] || url
+    // Colour variants have their own ASIN and title ("... Matte Black") but share price and review count.
+    const variant = stars && reviews ? `${price}|${rating}` : ''
+    if (!url || seenUrl.has(key) || (variant && seenUrl.has(variant))) continue
+    seenUrl.add(key)
+    if (variant) seenUrl.add(variant)
 
     const img = Array.from(card.querySelectorAll('img')).find(im => {
       const cls = `${im.getAttribute('class') ?? ''} ${im.parentElement?.getAttribute('class') ?? ''}`
       return !HIDDEN_IMAGE.test(cls) && !JUNK_IMAGE.test(im.getAttribute('alt') ?? '')
     })
-    const imageId = img ? addImage(images, seen, pickSrc(img), img.getAttribute('alt') || title, title, base) : -1
+    const imageId = img
+      ? addImage(images, seen, pickSrc(img), img.getAttribute('alt') || title, title, base, MAX_IMAGES + 60)
+      : -1
     out.push({ title: title.slice(0, 80), byline: '', price, rating, url, imageId })
     card.remove()
   }
@@ -488,7 +513,9 @@ function collectCatalog(doc: Document, base: string, images: ImageCandidate[], s
         const cls = `${im.getAttribute('class') ?? ''} ${im.parentElement?.getAttribute('class') ?? ''}`
         return !HIDDEN_IMAGE.test(cls) && !JUNK_IMAGE.test(im.getAttribute('alt') ?? '')
       })
-    const imageId = img ? addImage(images, seen, pickSrc(img), img.getAttribute('alt') || title, title, base) : -1
+    const imageId = img
+      ? addImage(images, seen, pickSrc(img), img.getAttribute('alt') || title, title, base, MAX_IMAGES + 60)
+      : -1
     out.push({ title: title.slice(0, 80), byline: author.slice(0, 40), price: year, rating, url, imageId })
     card.remove()
   }

@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { CondensedPage, CondenseEvent, GlassImage, Link, Screen, SiteKind } from '../shared/types'
 import { normalizeGlyphs, toPlainText, type ImageCandidate, type ProductCandidate } from './extract'
 import { bigText, fetchGlassImage, type Treatment } from './images'
+import { MODEL, refusalFallback } from './model'
 
 // Smart mode: Claude decides what kind of site this is and lays the page out
 // as a short deck of screens built for that kind of site (a headline card
@@ -11,7 +12,6 @@ import { bigText, fetchGlassImage, type Treatment } from './images'
 // The reply is streamed and each screen is sent on as soon as it is complete,
 // so the wearer sees the first screen long before Claude finishes the deck.
 
-const MODEL = process.env.CLAUDE_MODEL ?? 'claude-opus-5-5'
 const MAX_INPUT_CHARS = 120_000
 const MAX_LINKS = 200
 /** Items in one list screen; the glasses scroll it as a sliding 20-row window. */
@@ -444,8 +444,7 @@ export async function buildDeck(
     const stream = client.beta.messages.stream({
       model: MODEL,
       max_tokens: 16000,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
+      ...refusalFallback,
       output_config: { effort: 'low' },
       system: SYSTEM,
       messages: [{ role: 'user', content }],

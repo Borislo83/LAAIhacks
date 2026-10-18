@@ -130,3 +130,29 @@ export type CondenseEvent =
   | { replace: number; screen: Screen }
   | { done: true; truncated?: boolean }
   | CondenseError
+
+// ── Voice ───────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/voice reply. The body sent is raw PCM from the glasses mic
+ * (16 kHz, s16le, mono); the server turns it into the spoken instruction.
+ */
+export interface VoiceCommand {
+  /** What the user said, or '' when nothing intelligible was heard. */
+  transcript: string
+  /** The transcript opened with the wake phrase ("Hey Reader"). */
+  wake: boolean
+  /** The instruction: the transcript with any wake phrase removed. */
+  command: string
+  durationMs: number
+}
+
+/** GET /api/search?q= reply: the one page picked for a voice command. */
+export interface SearchResult {
+  query: string
+  url: string
+  title: string
+}
+
+/** check: is this utterance for us? partial: live preview. final: the instruction. */
+export type VoiceMode = 'check' | 'partial' | 'final'

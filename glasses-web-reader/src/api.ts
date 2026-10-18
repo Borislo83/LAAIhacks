@@ -1,4 +1,4 @@
-import type { CondenseEvent, CondenseError, MangaStrip } from '../shared/types'
+import type { CondenseEvent, CondenseError, MangaStrip, SearchResult, VoiceCommand, VoiceMode } from '../shared/types'
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
 
@@ -46,6 +46,32 @@ export async function fetchStrip(chapter: string, page: number, strip: number, s
   const qs = new URLSearchParams({ chapter, page: String(page), strip: String(strip), style })
   const res = await fetch(`${API_BASE}/api/manga/strip?${qs}`, { signal: AbortSignal.timeout(30_000) })
   const body = (await res.json().catch(() => ({ error: `Server error ${res.status}` }))) as MangaStrip | CondenseError
+  if (!res.ok || 'error' in body) throw new Error('error' in body ? body.error : `Server error ${res.status}`)
+  return body
+}
+
+/**
+ * Sends glasses-mic PCM (16 kHz s16le mono) and gets back what was said.
+ * Only a 'final' send is an instruction; 'check' and 'partial' are transcribed for the app.
+ */
+export async function sendVoice(pcm: Uint8Array<ArrayBuffer>, mode: VoiceMode = 'final'): Promise<VoiceCommand> {
+  const res = await fetch(`${API_BASE}/api/voice?rate=16000&mode=${mode}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/octet-stream' },
+    body: pcm,
+    signal: AbortSignal.timeout(30_000),
+  })
+  const body = (await res.json().catch(() => ({ error: `Server error ${res.status}` }))) as VoiceCommand | CondenseError
+  if (!res.ok || 'error' in body) throw new Error('error' in body ? body.error : `Server error ${res.status}`)
+  return body
+}
+
+/** Asks the server for the one page that best answers a voice command. */
+export async function searchPage(query: string): Promise<SearchResult> {
+  const res = await fetch(`${API_BASE}/api/search?${new URLSearchParams({ q: query })}`, {
+    signal: AbortSignal.timeout(60_000),
+  })
+  const body = (await res.json().catch(() => ({ error: `Server error ${res.status}` }))) as SearchResult | CondenseError
   if (!res.ok || 'error' in body) throw new Error('error' in body ? body.error : `Server error ${res.status}`)
   return body
 }
