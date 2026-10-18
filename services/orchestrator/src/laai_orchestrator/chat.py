@@ -330,6 +330,17 @@ async def chat_with_llm(
 
 
 MEDIA_WORDS = r"\bsongs?\b|\bvideos?\b|\bplay\b|\bmusic\b|\blisten to\b"
+# Requests that need all three agents with a budget go to the coordinator:
+# "consider X", "under $100", "like the X", "similar to X", "instead of X".
+COORDINATE = (
+    r"\b(?:consider|evaluate|assess)\b"
+    r"|\b(?:under|below|up to|at most|budget(?: of)?)\s*\$?\s*\d"
+    # "I'd like a ..." / "would like a ..." are wishes, not comparisons.
+    r"|(?<!'d )(?<!would )\b(?:like|similar to|instead of|alternatives? to)\s+(?:the|my|a|an|this|that)\b"
+)
+# Without an LLM, "Cheaper anywhere?" / "any alternatives?" also get the full
+# comparison; with one, the model routes them and keeps details like the store.
+COORDINATE_WITHOUT_LLM = r"\b(?:cheaper|alternatives?)\b"
 KEYWORDS = {
     TaskKind.PRICE: r"price|cheap|deal|cost|buy|sale|store|\$",
     TaskKind.ALTERNATIVES: r"alternative|instead|similar|other|cheaper|\bvs\b|versus|compare",
@@ -520,7 +531,11 @@ async def chat(
             calls=[],
             source="buyer",
         )
-    if re.search(r"\b(consider|evaluate|assess)\b", text, re.IGNORECASE) or all(
+    coordinate = re.search(COORDINATE, text, re.IGNORECASE) or (
+        not config.asi_one_api_key.get_secret_value()
+        and re.search(COORDINATE_WITHOUT_LLM, text, re.IGNORECASE)
+    )
+    if coordinate or all(
         re.search(pattern, text, re.IGNORECASE) for pattern in (r"price", r"review", r"alternative")
     ):
         try:

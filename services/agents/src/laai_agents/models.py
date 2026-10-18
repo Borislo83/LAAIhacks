@@ -1,5 +1,7 @@
 """Message models the orchestrator uses to talk to the agents."""
 
+from typing import Literal
+
 from pydantic.v1 import Field
 from uagents import Model
 
@@ -70,10 +72,18 @@ class ReviewsRequest(Model):
     progress_id: str | None = Field(default=None, min_length=32, max_length=64)
 
 
+class SourceRating(Model):
+    source: str
+    rating: float  # normalized to a 5-point scale
+    url: str
+
+
 class ReviewsResponse(EvidenceResponse):
     product: str
+    # Live mode: average of expert ratings on a 5-point scale; review_count counts them.
     rating: float | None = None
     review_count: int = 0
+    ratings: list[SourceRating] = Field(default_factory=list)
     pros: list[str] = Field(default_factory=list)
     cons: list[str] = Field(default_factory=list)
     review_url: str | None = None
@@ -97,3 +107,28 @@ class ConsiderResponse(Model):
     errors: dict[str, str] = Field(default_factory=dict)
     timings_ms: dict[str, int] = Field(default_factory=dict)
     summary: str
+
+
+class YouTubeRequest(Model):
+    query: str = Field(min_length=1, max_length=300)
+    kind: Literal["song", "video", "auto"] = "auto"
+    progress_id: str | None = Field(default=None, min_length=32, max_length=64)
+
+
+class YouTubeVideo(Model):
+    title: str
+    url: str
+    channel: str | None = None
+
+
+class YouTubeResponse(Model):
+    query: str
+    kind: Literal["song", "video", "auto"]
+    title: str | None = None
+    url: str | None = None
+    channel: str | None = None
+    duration: str | None = None
+    alternatives: list[YouTubeVideo] = Field(default_factory=list, max_items=3)
+    summary: str
+    error: str | None = None
+    data_source: str | None = None

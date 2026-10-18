@@ -120,8 +120,8 @@ async def prepare(req: BuyRequest) -> BuyResponse:
         _quotes[token] = {"expires": time.monotonic() + 600, "result": result}
         report("review_ready", "Cart addition ready; awaiting your approval")
         return result
-    known = catalog.find_product(name)
-    name = known.name if known else await llm.extract_product(name)
+    if not known:
+        name = await llm.extract_product(name)
     try:
         sources, meta = await search(f"site:amazon.com {name}")
     except SearchUnavailable:
@@ -219,7 +219,7 @@ def build_buyer_agent(port=None):
     async def on_confirm(ctx, req):
         return await confirm(req)
 
-    async def answer(text):
+    async def answer(ctx, text):
         link = re.search(r"https://[^\s]+", text)
         result = await prepare(
             BuyRequest(product=text[:500], url=link[0] if link else None)

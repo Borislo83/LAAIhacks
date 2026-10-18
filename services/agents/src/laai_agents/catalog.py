@@ -5,6 +5,7 @@ in a real price/review API only means changing this file.
 """
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,7 @@ def _norm(text: str) -> str:
     return "".join(ch for ch in text.lower() if ch.isalnum() or ch == " ").strip()
 
 
+@lru_cache(maxsize=1024)
 def find_product(query: str) -> Product | None:
     """Best catalog match for a free-text product name, or None."""
     q = _norm(query)

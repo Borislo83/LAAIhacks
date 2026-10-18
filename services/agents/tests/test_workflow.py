@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
+
 from laai_agents import coordinator, handlers, live
 from laai_agents.integration import GlassesAPIError, GlassesWorkflow
 from laai_agents.models import (
@@ -56,17 +57,21 @@ async def test_coordinator_delegates_all_specialists_and_budget():
     assert await coordinator.parse_request("consider this product") is None
 
 
-async def test_coordinator_retries_failed_specialists_three_times(monkeypatch):
+async def test_coordinator_retries_only_when_no_answer_arrives(monkeypatch):
     monkeypatch.setattr(coordinator, "RETRY_DELAY", 0)
-    tries = {}
+    tries, timeouts = {}, {}
 
     class Context:
         async def send_and_receive(self, destination, message, response_type, timeout):
             tries[destination] = tries.get(destination, 0) + 1
+            timeouts[destination] = timeout
             if destination == "price":
                 raise TimeoutError  # never answers
+            if destination == "reviews" and tries[destination] < 2:
+                raise ConnectionError  # unreachable once, then answers
             extra = {"alternatives": []} if response_type is AlternativesResponse else {}
-            error = "search down" if tries[destination] < 3 else None
+            # A deterministic error is an answer; asking again would repeat heavy work.
+            error = "search unavailable" if destination == "alts" else None
             return response_type(product="x", summary="s", error=error, **extra), None
 
     result = await coordinator.consider(
@@ -74,9 +79,18 @@ async def test_coordinator_retries_failed_specialists_three_times(monkeypatch):
         {"laai-price-compare": "price", "laai-reviews": "reviews", "laai-alternatives": "alts"},
         ConsiderRequest(product="Sony WH-1000XM5"),
     )
-    assert tries == {"price": 3, "reviews": 3, "alts": 3}
-    assert result.reviews.error is None and result.alternatives.error is None
+    assert tries == {"price": 3, "reviews": 2, "alts": 1}
+    assert timeouts["alts"] > timeouts["price"]
+    assert result.reviews.error is None and result.alternatives.error == "search unavailable"
     assert result.price is None and "price" in result.errors
+
+
+async def test_parse_request_skips_llm_for_this_or_that(monkeypatch):
+    async def fail(text):
+        raise AssertionError("LLM must not be called")
+
+    monkeypatch.setattr(coordinator.llm, "extract_product", fail)
+    assert await coordinator.parse_request("Consider this product.") is None
 
 
 async def test_coordinator_compares_reviews_with_top_alternative():
@@ -128,6 +142,8 @@ async def test_alternatives_keep_candidates_when_stores_hide_prices(monkeypatch)
 
 
 async def test_free_search_retries_other_backends_and_caches(monkeypatch):
+    from collections import OrderedDict
+
     import ddgs
 
     from laai_agents import search as search_module
@@ -145,7 +161,7 @@ async def test_free_search_retries_other_backends_and_caches(monkeypatch):
             return [{"title": "t", "href": "https://a.example/p", "body": "b"}]
 
     monkeypatch.setattr(ddgs, "DDGS", FakeDDGS)
-    monkeypatch.setattr(search_module, "_CACHE", {})
+    monkeypatch.setattr(search_module, "_CACHE", OrderedDict())
     first = await search_module.free_search("cache me")
     second = await search_module.free_search("cache me")
     assert first == second and calls == list(search_module.BACKENDS[:2])
@@ -333,16 +349,20 @@ class ContractFixture(GlassesWorkflow):
     async def api(self, role, method, path, body=None, params=None):
         self.requests.append((role, method, path, body, params))
         if path.endswith("/events"):
-            return {"events": self.events}
-        if path.endswith("/display"):
+            # Events carry the action's current status (migration 004).
             return {
-                "page": {"page_id": "page-sony"},
-                "actions": [
-                    {"action_id": action_id, "status": "approved"}
-                    for action_id in self.state["actions"]
-                    if action_id not in self.invalidated
-                ],
+                "events": [
+                    dict(
+                        event,
+                        action_status="invalidated"
+                        if event["action_id"] in self.invalidated
+                        else "approved",
+                    )
+                    for event in self.events
+                ]
             }
+        if path.endswith("/display"):
+            raise AssertionError("The executor must not need the web role")
         if path.endswith("/result") and path.split("/")[-2] in self.invalidated:
             raise GlassesAPIError("POST", 409)
         if (
@@ -404,10 +424,7 @@ async def test_contract_no_execution_before_approval_and_durable_result_retry(tm
     assert result["request_id"] == "evt-1:outcome" and result["status"] == "completed"
 
 
-@pytest.mark.parametrize(
-    "field,value",
-    [("session_id", "other"), ("page_id", "old"), ("action_id", "unknown")],
-)
+@pytest.mark.parametrize("field,value", [("session_id", "other"), ("page_id", "old")])
 async def test_contract_rejects_cross_context_events(tmp_path, field, value):
     workflow = ContractFixture(tmp_path / "journal.json")
     await workflow.propose(PAGE, ConsiderRequest(product="Sony XM5"))
@@ -424,6 +441,114 @@ async def test_contract_rejects_cross_context_events(tmp_path, field, value):
     with pytest.raises(ValueError):
         await workflow.poll_once()
     assert workflow.executions == 0 and workflow.state["cursor"] == ""
+
+
+def _review_page(name, value, best=None, pros=(), cons=()):
+    import json
+
+    rating = {"@type": "Rating", "ratingValue": value}
+    if best is not None:
+        rating["bestRating"] = best
+    review = {
+        "@type": "Review",
+        "itemReviewed": {"@type": "Product", "name": name},
+        "reviewRating": rating,
+        "positiveNotes": {
+            "@type": "ItemList",
+            "itemListElement": [{"@type": "ListItem", "name": p} for p in pros],
+        },
+        "negativeNotes": [{"@type": "ListItem", "name": c} for c in cons],
+    }
+    return f'<title>{name} review</title><script type="application/ld+json">{json.dumps(review)}</script>'
+
+
+def test_expert_review_ratings_are_normalized_and_matched():
+    from laai_agents.expert_reviews import parse_review, to_five
+
+    assert to_five("7.7", "10") == 3.9 and to_five(8.6) == 4.3 and to_five(4) == 4.0
+    assert to_five(90) == 4.5 and to_five(0) is None and to_five("n/a") is None
+    page = _review_page("Sony WH-1000XM5", 4.5, 5, ["Great ANC"], ["Pricey"])
+    rating, pros, cons = parse_review(page, "https://www.pcmag.com/r", "Sony XM5")
+    assert (rating.source, rating.rating, pros, cons) == ("pcmag.com", 4.5, ["Great ANC"], ["Pricey"])
+    # A review of a different model on the same page is not counted.
+    other = _review_page("Sony WH-1000XM4", 5).replace("XM4 review", "XM4 review")
+    assert parse_review(other, "https://x.example/r", "Sony XM5")[0] is None
+
+
+async def test_reviews_average_expert_ratings(monkeypatch):
+    from laai_agents import merchants
+    from laai_agents.models import ReviewsRequest
+
+    pages = {
+        "https://www.pcmag.com/xm5": _review_page("Sony WH-1000XM5", 4.5, 5, ["Great ANC"]),
+        "https://www.soundguys.com/xm5": _review_page("Sony WH-1000XM5", 8.6, 10, [], ["Pricey"]),
+        "https://www.rtings.com/xm5": "<title>Sony WH-1000XM5 review</title>",
+    }
+
+    async def search(query):
+        sources = [Source(title="Sony WH-1000XM5 review", url=u) for u in pages]
+        return sources, {"sources": sources, "data_source": "ddgs", "notice": "n"}
+
+    async def fetch_page(url):
+        return pages[url]
+
+    monkeypatch.setattr(live, "search", search)
+    monkeypatch.setattr(merchants, "fetch_page", fetch_page)
+    result = await live.reviews(ReviewsRequest(product="Sony XM5"))
+    assert result.rating == 4.4 and result.review_count == 2
+    assert [r.source for r in result.ratings] == ["pcmag.com", "soundguys.com"]
+    assert result.pros == ["Great ANC"] and result.cons == ["Pricey"]
+    assert "4.4/5" in result.summary
+
+
+def test_snippet_prices_skip_listing_pages_and_copies():
+    from laai_agents.merchants import listing_page, rank, snippet_offer
+    from laai_agents.models import Offer
+
+    assert listing_page("https://www.walmart.com/brand/nothing/20006807")
+    assert listing_page("https://www.amazon.com/s?k=airpods")
+    assert listing_page("https://www.ebay.com/sch/i.html?_nkw=xm5")
+    assert not listing_page("https://www.walmart.com/ip/Nothing-Ear-a/123")
+    assert not listing_page("https://www.apple.com/shop/buy-airpods/airpods-pro-2")
+    brand = Source(title="Nothing Ear (a)", url="https://www.walmart.com/brand/nothing/1", snippet="Now $79.00")
+    assert snippet_offer(brand, "Nothing Ear (a)") is None
+
+    page = Offer(product="p", store="us.smartprix.com", price=249.31, url="https://a.example", source="structured", trust="medium")
+    copied = Offer(product="p", store="target.com", price=249.31, url="https://b.example", source="search_snippet", trust="medium")
+    own = Offer(product="p", store="bestbuy.com", price=239.0, url="https://c.example", source="search_snippet", trust="medium")
+    assert [o.store for o in rank([page, copied, own])] == ["bestbuy.com", "us.smartprix.com"]
+
+
+def test_review_notes_merge_same_topic_and_sites_count_once():
+    assert live.merge_notes(["Expensive"], ["Price", "Pricey", "No IP rating"]) == ["Expensive", "No IP rating"]
+    assert live.merge_notes(["Great ANC"], ["Excellent noise cancellation for the price"]) == [
+        "Great ANC",
+        "Excellent noise cancellation for the price",
+    ]
+
+
+async def test_reviews_count_each_site_once(monkeypatch):
+    from laai_agents import merchants
+    from laai_agents.models import ReviewsRequest
+
+    pages = {
+        "https://www.soundguys.com/q45-review": _review_page("Anker Soundcore Space Q45", 7.2, 10),
+        "https://www.soundguys.com/product/q45": _review_page("Anker Soundcore Space Q45", 7.2, 10),
+        "https://www.pcmag.com/q45": _review_page("Anker Soundcore Space Q45", 4.0, 5),
+    }
+
+    async def search(query):
+        sources = [Source(title="Anker Soundcore Space Q45 review", url=u) for u in pages]
+        return sources, {"sources": sources, "data_source": "ddgs", "notice": "n"}
+
+    async def fetch_page(url):
+        return pages[url]
+
+    monkeypatch.setattr(live, "search", search)
+    monkeypatch.setattr(merchants, "fetch_page", fetch_page)
+    result = await live.reviews(ReviewsRequest(product="Space Q45"))
+    assert [r.source for r in result.ratings] == ["soundguys.com", "pcmag.com"]
+    assert result.review_count == 2 and result.rating == 3.8  # (3.6 + 4.0) / 2
 
 
 def approved_event(workflow, event_id="evt-1", cursor="000001", index=0):
@@ -454,7 +579,65 @@ async def test_invalidated_action_is_recorded_and_does_not_block_later_events(tm
     restarted.events = [stale, fresh]
     await restarted.poll_once()
     assert restarted.executions == 0
-    assert not [r for r in restarted.requests if r[2].endswith("/display")]
+    assert {r[0] for r in restarted.requests} == {"executor"}
+
+
+async def test_poll_needs_only_the_executor_role(tmp_path):
+    workflow = ContractFixture(tmp_path / "journal.json")
+    await workflow.propose(PAGE, ConsiderRequest(product="Sony XM5"))
+    workflow.requests.clear()
+    workflow.events = [approved_event(workflow)]
+    await workflow.poll_once()
+    assert workflow.executions == 1 and workflow.state["cursor"] == "000001"
+    assert {r[0] for r in workflow.requests} == {"executor"}
+
+
+async def test_foreign_approved_action_is_recorded_and_skipped(tmp_path):
+    workflow = ContractFixture(tmp_path / "journal.json")
+    await workflow.propose(PAGE, ConsiderRequest(product="Sony XM5"))
+    foreign = dict(approved_event(workflow), action_id="act-someone-else")
+    mine = approved_event(workflow, "evt-2", "000002")
+    workflow.requests.clear()
+    workflow.events = [foreign, mine]
+    assert await workflow.poll_once() == 2
+    assert workflow.executions == 1 and workflow.state["cursor"] == "000002"
+    assert workflow.state["not_mine"]["evt-1"]["action_id"] == "act-someone-else"
+    # Nothing is posted (result or ack) for another proposer's action.
+    assert not [r for r in workflow.requests if "act-someone-else" in r[2]]
+
+
+async def test_shared_http_session_is_reused_and_closed(tmp_path, monkeypatch):
+    from laai_agents import integration
+
+    opened = []
+
+    class Response:
+        status = 204
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class Session:
+        closed = False
+
+        def __init__(self, **kwargs):
+            opened.append(self)
+
+        def request(self, *args, **kwargs):
+            return Response()
+
+        async def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(integration.aiohttp, "ClientSession", Session)
+    workflow = GlassesWorkflow("http://localhost:8002", {"executor": "t"}, tmp_path / "j")
+    await workflow.api("executor", "GET", "/a")
+    await workflow.api("executor", "GET", "/b")
+    await workflow.close()
+    assert len(opened) == 1 and opened[0].closed
 
 
 async def test_action_invalidated_during_execution_advances_cursor(tmp_path):

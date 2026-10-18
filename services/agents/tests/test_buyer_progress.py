@@ -2,6 +2,7 @@ import asyncio
 from uuid import uuid4
 
 import pytest
+
 from laai_agents import buyer, handlers, progress
 from laai_agents.models import PriceCompareRequest, ReviewsRequest, Source
 
