@@ -1,9 +1,11 @@
 """Client for the Glasses Team's v1.0 API; never implements a competing API/DB.
 
-Only registered, read-only research handlers are supported. This client cannot approve,
-open a URL, purchase, or execute arbitrary custom actions. A local journal preserves
-request IDs/results across restarts. Production workers should use the DB team's
-durable execution journal and the glasses team's outbox/ack agreement.
+Only registered handlers are supported: two read-only research actions and, from `watch`,
+`add_to_amazon_cart` (one named Amazon listing, added only after its approval on the
+glasses, verified in the cart, never checked out; AMAZON_CART_DRY_RUN is on unless "0").
+This client cannot approve, open a URL, purchase, or execute arbitrary custom actions.
+A local journal preserves request IDs/results across restarts. Production workers should
+use the DB team's durable execution journal and the glasses team's outbox/ack agreement.
 
 `watch` proposes actions for every page the glasses open, in every session of the
 tokens' user, and runs the approved ones (propose + poll in one loop).
@@ -23,7 +25,7 @@ from uuid import uuid4
 import aiohttp
 from dotenv import load_dotenv
 
-from . import catalog, handlers
+from . import cart_action, catalog, handlers
 from .models import (
     AlternativesRequest,
     ConsiderRequest,
@@ -54,25 +56,35 @@ class GlassesAPIError(RuntimeError):
 # Action states that still accept a result. Events carry the action's current status.
 ACTIVE = {"approved", "running"}
 
+CART = "add_to_amazon_cart"
 LABELS = {
     "compare_prices": "Compare prices and alternatives",
     "find_reviews": "Check independent reviews",
+    CART: "Add to Amazon cart",
 }
 # What `watch` proposes for each page kind the glasses send (product, article, generic).
 # Only registered API handlers can appear here; article summaries need a new action type.
-PROPOSALS = {"product": ("compare_prices", "find_reviews")}
+# The cart action is proposed only with a named Amazon listing, first on an Amazon page.
+PROPOSALS = {"product": ("compare_prices", "find_reviews", CART)}
+RUNNING = {CART: "Adding the approved item to your Amazon cart"}
 PROPOSAL_TTL = timedelta(minutes=30)
 
 log = logging.getLogger("laai_agents.integration")
 
 
 def action_payload(action_id, plan, product, max_price):
+    if plan["handler"] == CART:
+        # The exact item is named before approval: title, ASIN, price, condition, seller.
+        description = cart_action.describe(plan["listing"])
+    else:
+        description = f"Research {product}" + (
+            f"; alternatives under ${max_price:g}" if max_price is not None else ""
+        )
     return {
         "action_id": action_id,
         "type": plan["handler"],
         "label": LABELS[plan["handler"]],
-        "description": f"Research {product}"
-        + (f"; alternatives under ${max_price:g}" if max_price is not None else ""),
+        "description": description,
         "expires_at": plan["expires_at"],
         "requires_approval": True,
     }
@@ -234,6 +246,9 @@ class GlassesWorkflow:
             if "product" in plan
             else ConsiderRequest(**self.state["request"])
         )
+        if plan["handler"] == CART:
+            # Only the listing journaled at proposal time, never the event or the page.
+            return await cart_action.add_listing(plan["listing"])
         if plan["handler"] == "find_reviews":
             return result_message(
                 [await handlers.get_reviews(ReviewsRequest(product=request.product))]
@@ -250,6 +265,34 @@ class GlassesWorkflow:
             )
             return result_message([price, alternatives])
         raise ValueError("No approved registered handler")
+
+    async def run_plan(self, plan):
+        if plan["handler"] != CART:
+            try:
+                return {"status": "completed", "message": await self.execute(plan)}
+            except Exception:  # noqa: BLE001 -- persist a safe failure result for the API
+                return {"status": "failed", "message": "Live research unavailable"}
+        if plan.get("cart_started"):
+            # A crash after the add began and before its outcome was journaled: never add
+            # again for this approval (the executor would also refuse a duplicate).
+            return {
+                "status": "failed",
+                "message": "This approval's cart add was already attempted. "
+                "Check your Amazon cart; nothing more was added. Checkout not started.",
+            }
+        plan["cart_started"] = datetime.now(UTC).isoformat()
+        self.save()
+        try:
+            return {"status": "completed", "message": await self.execute(plan)}
+        except cart_action.CartError as exc:
+            return {"status": "failed", "message": str(exc)}
+        except Exception:  # noqa: BLE001
+            log.exception("cart add failed")
+            return {
+                "status": "failed",
+                "message": "The Amazon cart add could not finish. Check your Amazon cart "
+                "before retrying. Checkout not started.",
+            }
 
     async def fetch_events(self):
         payload = await self.api(
@@ -315,20 +358,11 @@ class GlassesWorkflow:
                 running = {
                     "request_id": event_id + ":running",
                     "status": "running",
-                    "message": "Researching approved product",
+                    "message": RUNNING.get(plan["handler"], "Researching approved product"),
                 }
                 if not await self.post_result(event, path, running):
                     return
-                try:
-                    outcome = {
-                        "status": "completed",
-                        "message": await self.execute(plan),
-                    }
-                except Exception:  # noqa: BLE001 -- persist a safe failure result for the API
-                    outcome = {
-                        "status": "failed",
-                        "message": "Live research unavailable",
-                    }
+                outcome = await self.run_plan(plan)
             self.state["outcomes"][event_id] = {
                 "request_id": event_id + ":outcome",
                 **outcome,
@@ -377,6 +411,9 @@ class PageWatcher(GlassesWorkflow):
         self.state.setdefault("sessions", {})
         self.stale_after = stale_after
         self.workflows: dict[str, GlassesWorkflow] = {}
+        # Off with AMAZON_CART_ACTION=0, or once the API refused the cart action type
+        # (migration 007 not applied).
+        self.cart_supported = os.getenv("AMAZON_CART_ACTION", "1").strip() != "0"
 
     def workflow(self, session_id):
         state = self.state["sessions"].setdefault(
@@ -425,6 +462,13 @@ class PageWatcher(GlassesWorkflow):
             # A page with no actions after our accepted proposal was PUT again, which
             # invalidated them; it needs new action IDs (the API never revives old ones).
             product = page_product(page["title"])
+            listing = None
+            if CART in kinds and self.cart_supported:
+                listing = await cart_action.pick_listing(page, product)
+            if listing is None:
+                kinds = tuple(k for k in kinds if k != CART)
+            elif listing["on_amazon_page"]:
+                kinds = (CART, *(k for k in kinds if k != CART))
             expires = (datetime.now(UTC) + PROPOSAL_TTL).isoformat()
             pending = state["proposal"] = {
                 "page_id": page["page_id"],
@@ -440,6 +484,7 @@ class PageWatcher(GlassesWorkflow):
                     "page_id": page["page_id"],
                     "expires_at": expires,
                     "product": product,
+                    **({"listing": listing} if handler == CART else {}),
                 }
             self.save()
         body = {
@@ -454,6 +499,18 @@ class PageWatcher(GlassesWorkflow):
         try:
             response = await self.api("agent", "PUT", workflow.path() + "/actions", body)
         except GlassesAPIError as exc:
+            cart_ids = [i for i in pending["action_ids"] if state["actions"][i]["handler"] == CART]
+            if exc.status == 422 and cart_ids:
+                # An API without migration 007 refuses the cart type and the whole proposal
+                # with it: propose the research actions alone (new request, same IDs).
+                log.warning("API refused add_to_amazon_cart; apply migration 007")
+                self.cart_supported = False
+                for i in cart_ids:
+                    pending["action_ids"].remove(i)
+                    del state["actions"][i]
+                pending["request_id"] = str(uuid4())
+                self.save()
+                return await self.propose_for_page(workflow, listed)
             if exc.status != 409:
                 raise
             # The page changed under us, or the proposal expired: never retry it.
@@ -463,7 +520,11 @@ class PageWatcher(GlassesWorkflow):
             return None
         pending["accepted_revision"] = response["revision"]
         self.save()
-        log.info("proposed %s for %s", ", ".join(kinds), page["page_id"])
+        log.info(
+            "proposed %s for %s",
+            ", ".join(state["actions"][i]["handler"] for i in pending["action_ids"]),
+            page["page_id"],
+        )
         return pending["page_id"]
 
     async def watch_once(self):

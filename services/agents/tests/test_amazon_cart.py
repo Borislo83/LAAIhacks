@@ -127,6 +127,13 @@ async def test_amazon_duplicate_asin_fields_and_ubb_add_button(monkeypatch):
     assert (await amazon_cart.add_to_cart(URL, 1))["status"] == "cart_added"
     assert page.clicks == ["#add-to-cart-button-ubb:visible"]
 
+    # An item approved as new is never swapped for Amazon's used offer.
+    page = CurrentPage()
+    browser_fixture(monkeypatch, page)
+    result = await amazon_cart.add_to_cart(URL, 1, require_new=True)
+    assert result["status"] == "blocked" and "only used" in result["message"]
+    assert page.clicks == []
+
 
 async def test_repeated_approvals_reuse_one_tab(monkeypatch):
     page = Page(added=True)

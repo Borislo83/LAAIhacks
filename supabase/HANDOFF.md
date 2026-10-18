@@ -14,12 +14,16 @@ This page explains what each team gets and how to plug in. Contract terms follow
 | `202610170004_workflow_v1_1.sql` | Event ack, invalidation outbox, devices, rate-limit fix | Applied 2026-10-17 |
 | `202610170005_workflow_perf.sql` | Lock/index/retention fixes (no API change) | Applied 2026-10-17 (pg_cron not installed: daily purge not scheduled) |
 | `202610170006_session_list.sql` | `sessions` read operation for `GET /v1/sessions` (page watcher) | Applied 2026-10-18 (SQL editor) |
+| `202610170007_cart_action.sql` | Registers the `add_to_amazon_cart` action type; display's page carries `url` | Applied 2026-10-18 (SQL editor) |
 
 004, 005 and 006 only use `create or replace` / `if [not] exists`, so applying any of them
 twice is harmless. 006 replaces only the `laai_workflow` entry point (rate limit unchanged)
 and adds `laai_workflow_sessions`; deploy it before an orchestrator that serves
 `GET /v1/sessions`, or that route returns `SESSION_NOT_FOUND`. Apply in the Supabase SQL editor, then run `python check_supabase.py` in
 `services/orchestrator` (read-only; it reports whether 004 is live).
+007 is rerunnable too: it swaps the `laai_actions.type` check and replaces
+`laai_workflow_apply` (005's body plus the new type and display's `page.url`). Until it is
+live, the watcher proposes without the cart action.
 
 005 keeps `laai_workflow`'s signature and every response shape. It changes:
 - Reads (`status`, `display`, `events`, `ack`) no longer lock the session row; only writes do.
@@ -115,8 +119,8 @@ Error codes beyond the contract list: `DEVICE_NOT_FOUND` and `EVENT_NOT_FOUND` (
 
 ## Agent / executor team
 
-- Propose with `PUT .../actions`. This release registers only `compare_prices` and
-  `find_reviews`. `open_url`, `read_article` and `custom` are rejected with `INVALID_PAYLOAD`
+- Propose with `PUT .../actions`. This release registers `compare_prices`,
+  `find_reviews` and (from 007) the approval-gated `add_to_amazon_cart`. `open_url`, `read_article` and `custom` are rejected with `INVALID_PAYLOAD`
   until a reviewed handler (and, for `open_url`, a destination allowlist) is registered.
 - Poll `GET .../events?after=<cursor>`. From 004 each event carries `action_status`. Skip events
   whose status is `invalidated`: they will never accept a result, and the DB has already closed
