@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from difflib import SequenceMatcher
 from functools import lru_cache
 from urllib.parse import quote_plus
 
@@ -71,7 +72,27 @@ def names_product(title: str, product: str) -> bool:
         return True
     wanted = set(re.findall(r"[a-z0-9]+", product.lower())) - GENERIC_WORDS
     found = set(re.findall(r"[a-z0-9]+", title.lower()))
-    return bool(wanted) and len(wanted & found) / len(wanted) >= 0.67
+    said = sum(has_word(w, found) for w in wanted)
+    return bool(wanted) and said / len(wanted) >= 0.67
+
+
+@lru_cache(maxsize=4096)
+def _close_spelling(word: str, token: str) -> bool:
+    # Same start and mostly the same letters: "forerunning" and "forerunner" (0.76).
+    return word[:4] == token[:4] and SequenceMatcher(None, word, token).ratio() >= 0.75
+
+
+def has_word(word: str, tokens: set[str]) -> bool:
+    """The word, or a close spelling of a long one ("forerunning" for "forerunner").
+    Words with digits are model numbers and must match exactly: XM5 is not XM6."""
+    if word in tokens:
+        return True
+    if len(word) < 6 or any(c.isdigit() for c in word):
+        return False
+    return any(
+        len(t) >= 6 and not any(c.isdigit() for c in t) and _close_spelling(word, t)
+        for t in tokens
+    )
 
 
 @lru_cache(maxsize=512)
@@ -88,7 +109,9 @@ def _name_words(product: str) -> tuple[frozenset[str], ...]:
 
 def matches_product(title: str, product: str) -> bool:
     tokens = set(re.findall(r"[a-z0-9]+", title.lower()))
-    return any(words <= tokens for words in _name_words(product))
+    return any(
+        words <= tokens or all(has_word(w, tokens) for w in words) for words in _name_words(product)
+    )
 
 
 async def _candidates(sources, name):
@@ -310,6 +333,7 @@ async def store_alternatives(name, known, max_price):
             url=o.url,
             store=o.store,
             cart_url=o.cart_url,
+            image=o.image,
             reason=(f"{o.rating}★ on {o.store}" if o.rating else f"Listed on {o.store}")
             + (f", under ${max_price:.2f}" if max_price is not None else ""),
         )

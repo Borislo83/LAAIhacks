@@ -170,6 +170,21 @@ NEWS_BODY_MAX = 1000  # each brief story's newsletter paragraph
 NEWS_TEXT_MAX = 300  # image_alt and each source's title, publisher and date
 
 
+IMAGE_HOSTS = (".media-amazon.com", ".ssl-images-amazon.com", ".bbystatic.com")
+
+
+def store_image(url: Any) -> str | None:
+    """A product photo, only from the stores' own image CDNs; the dashboard loads it."""
+    url = public_https(url)
+    if url is None or len(url) > 500:
+        return None
+    return url if (urlsplit(url).hostname or "").endswith(IMAGE_HOSTS) else None
+
+
+def safe_pick(pick: dict[str, Any]) -> dict[str, Any]:
+    return {**pick, "image": store_image(pick.get("image"))}
+
+
 def public_https(url: Any) -> str | None:
     """Keep only an https URL on a public hostname; the dashboard loads these directly."""
     if not isinstance(url, str) or len(url) > 2048 or any(c.isspace() for c in url):
@@ -825,7 +840,9 @@ async def chat(
                 reply=data["summary"],
                 calls=calls,
                 source="coordinator",
-                picks=[p for p in data.get("picks") or [] if isinstance(p, dict)],
+                picks=[safe_pick(p) for p in data.get("picks") or [] if isinstance(p, dict)],
+                product=str(data.get("product") or "")[:200] or None,
+                image=store_image(data.get("image")),
             )
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             return ChatReply(

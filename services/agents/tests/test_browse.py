@@ -11,6 +11,7 @@ def card(asin, title, price, stars=None, ratings=None, sponsored=False):
     return f"""
     <div data-component-type="s-search-result" data-asin="{asin}">
       {'<span>Sponsored</span>' if sponsored else ''}
+      <img class="s-image" src="https://m.media-amazon.com/images/I/{asin}.jpg">
       <a href="/dp/{asin}"><h2><span>{title}</span></h2></a>
       <span class="a-price"><span class="a-offscreen">${price}</span></span>
       <span class="a-price a-text-price"><span class="a-offscreen">$99.99</span></span>
@@ -39,6 +40,35 @@ def test_amazon_results_skip_sponsored_and_over_budget_cards():
     assert redmi.url == "https://www.amazon.com/dp/B0DFZPR9Z4"
     assert "ASIN.1=B0DFZPR9Z4" in redmi.cart_url
     assert redmi.source == "amazon_search_page"
+    assert redmi.image == "https://m.media-amazon.com/images/I/B0DFZPR9Z4.jpg"
+
+
+def test_photos_only_come_from_store_image_hosts():
+    assert stores.store_image("https://m.media-amazon.com/images/I/a.jpg")
+    assert stores.store_image("https://pisces.bbystatic.com/image2/a.jpg")
+    assert stores.store_image("http://m.media-amazon.com/images/I/a.jpg") is None
+    assert stores.store_image("https://evil.example.com/media-amazon.com.jpg") is None
+
+
+async def test_the_product_and_its_picks_get_photos(monkeypatch):
+    from laai_agents.coordinator import with_images
+    from laai_agents.models import Pick
+
+    asked = []
+
+    async def photo(name):
+        asked.append(name)
+        return f"https://m.media-amazon.com/images/I/{name[:4]}.jpg"
+
+    monkeypatch.setattr(stores, "product_image", photo)
+    picks = [
+        Pick(label="Alternative", product="Anker Space Q45", url="https://x.com/a", reason="r"),
+        Pick(label="Best price", product="Kept", url="https://x.com/b", reason="r",
+             image="https://m.media-amazon.com/images/I/own.jpg"),
+    ]
+    image, picks = await with_images("Sony WH-1000XM5", picks)
+    assert image.endswith("/Sony.jpg") and picks[0].image.endswith("/Anke.jpg")
+    assert picks[1].image.endswith("/own.jpg") and asked == ["Sony WH-1000XM5", "Anker Space Q45"]
 
 
 def test_amazon_search_url_filters_price_in_cents():
@@ -159,3 +189,11 @@ def test_listing_picks_are_popular_best_rated_and_cheapest():
         ("Most popular", "A"), ("Best rated", "D"), ("Cheapest", "B"),
     ]  # fmt: skip
     assert picks[0].reason == "4.5★ from 17,169 ratings, $43.49 on amazon.com"
+
+
+def test_photo_match_reads_amazon_model_spellings():
+    name = "Sony WH-1000XM5"
+    assert stores.photo_of("Sony WH-1000XM5B Noise Canceling Wireless Headphones", name)
+    assert stores.photo_of("Amazon Renewed WH1000XM5 Wireless Headphones", name)
+    assert not stores.photo_of("Sony WH-1000XM6 The Best Noise Cancelling Headphones", name)
+    assert not stores.photo_of("Bose QuietComfort Headphones", name)

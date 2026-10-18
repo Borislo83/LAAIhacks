@@ -114,3 +114,12 @@ async def test_alternatives_for_products_outside_the_catalog(monkeypatch):
     result = await live.alternatives(AlternativesRequest(product="Garmin Forerunner 55"))
     assert [a.product for a in result.alternatives][:2] == ["Coros Pace 3", "Forerunner 165"]
     assert "compared with" in result.alternatives[0].reason
+
+
+def test_close_spellings_match_but_model_numbers_do_not():
+    from laai_agents.live import matches_product, names_product
+
+    assert matches_product("Garmin Forerunner 55 GPS Running Watch", "Garmin Forerunning")
+    assert names_product("Garmin Forerunner 265 review", "Garmin Forerunning")
+    assert not matches_product("Sony WH-1000XM6 Headphones", "Sony WH-1000XM5")
+    assert not matches_product("Garmin Fenix 8", "Garmin Forerunning")

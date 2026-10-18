@@ -135,6 +135,9 @@ class ChatReply(BaseModel):
     # when the product comes from one of those stores.
     picks: list[dict[str, Any]] = Field(default_factory=list)
     source: Literal["asi_one", "rules", "coordinator", "buyer"]
+    # The product the coordinator researched and its photo, shown above the picks.
+    product: str | None = None
+    image: str | None = None
 
 
 class MessageRequest(BaseModel):

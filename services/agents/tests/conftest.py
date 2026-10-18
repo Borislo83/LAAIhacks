@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from laai_agents import stores
@@ -13,3 +15,6 @@ def offline_amazon_page(monkeypatch):
         return []
 
     monkeypatch.setattr(stores, "amazon_page_search", nothing)
+    # Each test reads its own pages: no cached answers, a fresh one-at-a-time slot.
+    monkeypatch.setattr(stores, "_PAGES", {})
+    monkeypatch.setattr(stores, "_AMAZON_SLOT", asyncio.Semaphore(1))
