@@ -293,7 +293,14 @@ Focal actions reach the lens. To connect them:
    `agent` or `executor` role, added with migration `202610170006_session_list.sql`) and
    re-reads the display of each session whose revision changed. When the active page is a
    `product` page with no actions yet, it proposes `compare_prices` and `find_reviews` for
-   the product named in the title. When the user approves one, it runs it and posts the
+   the product named in the title, plus `add_to_amazon_cart` ("Add to Amazon cart",
+   migration `202610170007_cart_action.sql`) when it finds an Amazon listing for it. That
+   action's description names the exact item (title, ASIN, price, new or used, seller), so
+   the review screen shows what approval adds; on an amazon.com `/dp/` page it is that
+   ASIN and the action is listed first. Approving it adds only that item to the Amazon cart
+   (in dry run, the default, it reports what it would add), verifies it there and never
+   starts checkout; `result.message` says what happened. Display pages now also carry
+   `url`. When the user approves one, it runs it and posts the
    result, like `poll`. It never proposes for a page that has been replaced: the API refuses
    that with 409, and the watcher does not retry. A new page PUT invalidates the old
    page's actions, and the watcher then proposes for the new page. It also skips sessions

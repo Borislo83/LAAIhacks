@@ -2047,6 +2047,7 @@
             "enum": [
               "compare_prices",
               "find_reviews",
+              "add_to_amazon_cart",
               "open_url",
               "read_article",
               "custom"
@@ -2246,7 +2247,8 @@
           "reviews",
           "youtube",
           "news",
-          "spotify"
+          "spotify",
+          "search"
         ],
         "title": "AgentKind",
         "description": "Every routable specialist. Only the shopping TaskKinds are persisted as tasks."
@@ -2682,6 +2684,17 @@
               }
             ],
             "title": "Source Label"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
           }
         },
         "additionalProperties": true,

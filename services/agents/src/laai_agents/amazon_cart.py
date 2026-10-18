@@ -47,7 +47,8 @@ def _cart_item(page, asin: str):
     ).first
 
 
-async def add_to_cart(url: str, quantity: int):
+async def add_to_cart(url: str, quantity: int, require_new: bool = False):
+    """`require_new`: refuse when only Amazon's used buy box ("Buy Used") can add it."""
     from playwright.async_api import Error, TimeoutError, async_playwright
 
     from .buyer import amazon_listing
@@ -160,6 +161,12 @@ async def add_to_cart(url: str, quantity: int):
                 }
             button = page.locator("#add-to-cart-button:visible").first
             if not await button.count():
+                if require_new:
+                    return {
+                        "status": "blocked",
+                        "message": "Amazon now offers this listing only used. "
+                        "The approved item was new, so nothing was added.",
+                    }
                 button = page.locator("#add-to-cart-button-ubb:visible").first
             if (
                 await button.count() != 1

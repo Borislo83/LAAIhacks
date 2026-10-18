@@ -53,7 +53,9 @@ class PageSubmission(Submission):
 
 class Action(InputModel):
     action_id: Identifier
-    type: Literal["compare_prices", "find_reviews", "open_url", "read_article", "custom"]
+    type: Literal[
+        "compare_prices", "find_reviews", "add_to_amazon_cart", "open_url", "read_article", "custom"
+    ]
     label: str = Field(min_length=1, max_length=160)
     description: str = Field(max_length=2000)
     expires_at: AwareDatetime
@@ -155,6 +157,8 @@ class DisplayPage(Output):
     summary: list[str] = []
     facts: list[DisplayFact] = []
     source_label: str | None = None
+    # The page's URL (migration 007); absent before it.
+    url: str | None = None
 
 
 class DisplayAction(Output):

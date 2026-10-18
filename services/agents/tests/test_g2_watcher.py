@@ -283,6 +283,9 @@ async def test_cli_watch_once_proposes_and_refuses_a_propose_journal(api_url, tm
     env = os.environ | {
         "GLASSES_API_URL": api_url,
         **{f"GLASSES_{role.upper()}_TOKEN": token for role, token in TOKENS.items()},
+        # A separate process: no Amazon listing lookups (and no cart action) from tests.
+        "AMAZON_CART_ACTION": "0",
+        "AMAZON_CART_DRY_RUN": "1",
     }
     journal = str(tmp_path / "cli.json")
     code, out, err = await cli(env, "--journal", journal, "watch", "--once")
