@@ -1,4 +1,4 @@
-"""The specialist uAgents: shopping research, YouTube, news and messaging.
+"""The specialist uAgents: shopping research, YouTube, news, web search and messaging.
 
 Each agent speaks a typed request/response protocol (agent-to-agent), a REST
 endpoint (for the orchestrator over plain HTTP) and the Agent Chat Protocol
@@ -22,6 +22,8 @@ from .models import (
     PriceCompareResponse,
     ReviewsRequest,
     ReviewsResponse,
+    SearchRequest,
+    SearchResponse,
     SpotifyResponse,
     YouTubeRequest,
     YouTubeResponse,
@@ -42,6 +44,7 @@ def coordinator_address() -> str:
 
     return Identity.from_seed(COORDINATOR_SEED, 0).address
 NEWS_SEED = os.getenv("NEWS_AGENT_SEED", "laai news agent dev seed")
+SEARCH_SEED = os.getenv("SEARCH_AGENT_SEED", "laai search agent dev seed")
 
 
 # Agentverse profile: a one-line description plus agent_profiles/<name>.md as the README.
@@ -59,6 +62,7 @@ DESCRIPTIONS = {
     "laai-youtube": "Finds a YouTube link for a song or video you ask for.",
     "laai-spotify": "Plays a song, artist, album or playlist on its owner's laptop Spotify app, and pauses, skips or changes the volume. Owner-only: it takes requests from the owner's Focal orchestrator, not from chat.",
     "laai-news": "Short, sourced summary of the latest news on any topic.",
+    "laai-search": "Answers general questions from the web in a few sentences, with sources: what is X, how do I Y, opening hours, places nearby, weather.",
     "laai-amazon-cart": "Turns an Amazon product ID (ASIN) into Amazon's official add-to-cart link. You open it; nothing is bought.",
     "laai-bestbuy-cart": "Turns a Best Buy SKU into Best Buy's official add-to-cart link. You open it; nothing is bought.",
 }
@@ -261,6 +265,22 @@ def build_news_agent(port: int | None = None) -> Agent:
         port,
         chat_request=lambda text: NewsRequest(query=text[:300]),
         chat_reply=news.chat_reply,
+    )
+
+
+def build_search_agent(port: int | None = None) -> Agent:
+    from . import websearch
+
+    return build_specialist(
+        "laai-search",
+        SEARCH_SEED,
+        "/search",
+        SearchRequest,
+        SearchResponse,
+        websearch.answer,
+        port,
+        chat_request=lambda text: SearchRequest(query=text[:300]),
+        chat_reply=websearch.chat_reply,
     )
 
 

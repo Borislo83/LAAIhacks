@@ -59,7 +59,7 @@ async def run(dry_run: bool) -> int:
     weak = [
         name
         for name in ("COORDINATOR", "PRICE", "ALTERNATIVES", "REVIEWS", "VERIFIER", "MEMORY",
-                     "BUYER", "MESSENGER", "YOUTUBE", "NEWS", "AMAZON_CART", "BESTBUY_CART")
+                     "BUYER", "MESSENGER", "YOUTUBE", "NEWS", "SEARCH", "AMAZON_CART", "BESTBUY_CART")
         if not os.getenv(f"{name}_AGENT_SEED")
     ]
     if weak and not dry_run:

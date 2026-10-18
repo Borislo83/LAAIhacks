@@ -25,6 +25,7 @@ class AgentKind(StrEnum):
     YOUTUBE = "youtube"
     NEWS = "news"
     SPOTIFY = "spotify"
+    SEARCH = "search"
 
 
 class UserSettings(InputModel):
@@ -81,6 +82,7 @@ FIELDS = {
     AgentKind.YOUTUBE: ("query", "kind"),
     AgentKind.NEWS: ("query", "max_sources"),
     AgentKind.SPOTIFY: ("action", "query", "kind", "volume", "volume_change"),
+    AgentKind.SEARCH: ("query", "max_sources"),
 }
 
 
@@ -114,7 +116,7 @@ class ToolArgs(BaseModel):
     # YouTube agent arguments.
     query: str | None = Field(default=None, min_length=1, max_length=300)
     kind: Literal["song", "video", "auto"] = "auto"
-    # News agent arguments (query is shared with YouTube).
+    # News and web search arguments (query is shared with YouTube).
     max_sources: int = Field(default=6, ge=3, le=12)
 
     def suits(self, agent: "AgentKind") -> bool:
