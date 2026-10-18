@@ -88,6 +88,16 @@ is `needs_permission`: allow it under System Settings > Privacy & Security > Aut
 Results are `sent`, `failed` or `needs_permission`. Message text and phone numbers are not
 written to info-level logs.
 
+**Dry run is the default.** Unless `IMESSAGE_DRY_RUN=0` is set explicitly, `/imessage/send`
+runs every real step (token, draft lookup, expiry, single use, text match, rate limit and
+the exact osascript argv) and then records that argv in memory instead of running it. It
+returns `{"status":"sent","dry_run":true,"summary":"Dry run: would have sent to Alex. …"}`.
+The macOS check is skipped, so dry runs work on any machine. To check a dry run end to end,
+`POST /imessage/dry-run-log` with `{"executor_token":"…"}` returns the last five recorded
+calls (masked handle, text, time). It works only in dry-run mode. The Bureau's REST
+handlers cannot see the caller's address, so it is protected by the executor token rather
+than by a loopback check.
+
 ## Live dashboard progress
 
 Research requests may include an opaque `progress_id`. The coordinator forwards it to
