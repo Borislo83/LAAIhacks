@@ -16,10 +16,10 @@ phone (Even app WebView)            condense server                      the web
 The server exists because the Even app WebView enforces CORS, so the app
 can't fetch arbitrary sites itself.
 
-## Two modes
+## Smart view
 
-- **Smart view** (default, needs `ANTHROPIC_API_KEY`): Claude decides what kind of site the page is
-  and builds a short deck of screens for it:
+Needs `ANTHROPIC_API_KEY`. Claude decides what kind of site the page is and builds a short deck of
+screens for it:
 
   | Site kind | Screens |
   |---|---|
@@ -33,20 +33,19 @@ can't fetch arbitrary sites itself.
   Images are converted on the server to 4-bit greyscale at the exact box size. On G2, lit pixels
   glow and black is see-through, so bright photos become line art, white product backgrounds are
   knocked out, and dark images stay dithered photos.
-- **Full text** (no API key needed): Readability-based text reader, paginated for the 576x288 display.
 
 ## Run it
 
 ```bash
 npm install
-cp .env.example .env          # add ANTHROPIC_API_KEY for AI summary mode
+cp .env.example .env          # add ANTHROPIC_API_KEY (required)
 npm run dev                   # condense server :8787 + Vite :5173 (proxied /api)
 npm run simulate              # desktop simulator
 npx evenhub qr --url http://<your-lan-ip>:5173   # real glasses
 npm run qr                    # real glasses on isolated Wi-Fi (tunnel), see QR_TESTING.md
 ```
 
-Deep link: `http://localhost:5173/?open=<url-encoded page>` (add `&mode=full` for the text reader)
+Deep link: `http://localhost:5173/?open=<url-encoded page>`
 (it's `open`, not `url`, because Vite reserves `?url`).
 
 ## On the glasses
@@ -57,8 +56,8 @@ Deep link: `http://localhost:5173/?open=<url-encoded page>` (add `&mode=full` fo
 | Tap | open the selected list item, otherwise the menu | select |
 | Double-tap | exit (system confirm) | exit |
 
-Menu: Resume · ◀ back to the previous page · Contents · Links on page · Smart view / Full text ·
-Back to start · Recent pages · Exit.
+Menu: Resume · ◀ back to the previous page · Contents · Links on page · Back to start ·
+Recent pages · Exit (manga adds chapter, page and style items).
 
 The last page you read and your recent pages are saved with `bridge.setLocalStorage`
 and restored on the next launch.

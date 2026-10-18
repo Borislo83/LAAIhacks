@@ -20,11 +20,11 @@ and rescan.
 | Project packages | `npm install` (in this folder) | `ls node_modules` |
 | Chromium for Playwright (server page rendering) | `npx playwright install chromium` | `ls ~/Library/Caches/ms-playwright` |
 | cloudflared (the tunnel) | `brew install cloudflared` | `cloudflared --version` |
-| `.env` with Claude key (Smart view only) | `cp .env.example .env`, then set `ANTHROPIC_API_KEY=...` | `grep -c ANTHROPIC_API_KEY .env` |
+| `.env` with Claude key (required) | `cp .env.example .env`, then set `ANTHROPIC_API_KEY=...` | `grep -c ANTHROPIC_API_KEY .env` |
 | Phone with the **Even app** (version 2.2.10+), G2 glasses paired | App Store / Play Store | glasses show up in the app |
 
 No Cloudflare account is needed. Quick tunnels are free and anonymous. Without an API
-key, the app still works in **Full text** mode.
+key, pages won't load: the glasses show "Smart view is not set up".
 
 Last known working versions (2026-10-17): Node 24.11.0, npm 11.6.3, cloudflared 2026.10.1,
 evenhub-cli 0.1.12, Even Hub SDK 0.0.16.
@@ -64,7 +64,7 @@ phone (Even app) → https://xxx.trycloudflare.com → Cloudflare → cloudflare
 | Error `1033` when scanning | That tunnel is dead (cloudflared stopped or restarted), so the QR points to a URL that no longer exists. Run `npm run qr` and scan the **new** QR. |
 | `502` from Cloudflare | The tunnel is up but nothing is on `:5173`. Restart `npm run dev`. |
 | Vite "Blocked request. This host is not allowed" | `server.allowedHosts` in `vite.config.ts` needs `.trycloudflare.com` (already set). |
-| Page loads but articles fail | Check terminal 1 for server errors. Smart view needs `ANTHROPIC_API_KEY` in `.env`. Switch to Full text to rule it out. |
+| Page loads but articles fail | Check terminal 1 for server errors. Smart view needs `ANTHROPIC_API_KEY` in `.env`. |
 | Port already in use | An old dev server is still running: `lsof -nP -iTCP:5173 -sTCP:LISTEN`, then `kill <pid>`. |
 | Tunnel URL from an old log doesn't work | **Never trust `/tmp/cf-tunnel.log` or `/tmp/cf-url.txt` alone.** They can be left over from a dead tunnel. Ask the running process: `curl http://127.0.0.1:20241/quicktunnel`. If cloudflared was started without `--metrics`, find its port with `lsof -nP -iTCP -sTCP:LISTEN \| grep cloudflar`. |
 
