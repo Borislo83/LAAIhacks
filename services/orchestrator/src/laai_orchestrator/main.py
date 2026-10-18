@@ -1,5 +1,5 @@
 import hashlib
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from time import monotonic
 from typing import Annotated
@@ -21,6 +21,8 @@ from .models import (
     ChatRequest,
     ContextResponse,
     DispatchRequest,
+    MessageSend,
+    MessageSent,
     PageContext,
     Task,
     ToolArgs,
@@ -37,6 +39,28 @@ from .workflow import install_workflow
 bearer = HTTPBearer(auto_error=False)
 AUTH_CACHE_SECONDS = 30
 ALL_ROLES = {"web", "agent", "g2", "executor"}
+
+MESSAGE_SENDS_PER_MINUTE = 5
+
+
+class RateLimit:
+    """Sliding-window limit per user, in process. Enough for one orchestrator instance."""
+
+    def __init__(self, limit: int, window: float):
+        self.limit, self.window = limit, window
+        self.hits: dict[UUID, deque[float]] = {}
+
+    def allow(self, user: UUID) -> bool:
+        now = monotonic()
+        if len(self.hits) > 4096:  # Forget idle users so memory stays bounded.
+            self.hits = {u: h for u, h in self.hits.items() if h and h[-1] > now - self.window}
+        hits = self.hits.setdefault(user, deque())
+        while hits and hits[0] <= now - self.window:
+            hits.popleft()
+        if len(hits) >= self.limit:
+            return False
+        hits.append(now)
+        return True
 
 
 class AuthCache:
@@ -155,6 +179,7 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
     app = FastAPI(title="LAAI Orchestrator", version="0.1.0", lifespan=lifespan)
     app.state.config = config
     app.state.auth_cache = AuthCache()
+    app.state.message_sends = RateLimit(MESSAGE_SENDS_PER_MINUTE, 60)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.cors_origins,
@@ -281,6 +306,30 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
         return sse(
             event_stream(lambda emit: call_agent(kind, body, config, request.app.state.http, emit))
         )
+
+    @app.post("/v1/messages/send", response_model=MessageSent)
+    async def send_message(body: MessageSend, request: Request, user: User):
+        # Always a verified sign-in (never chat_user), so CHAT_AUTH_REQUIRED=false can't open it.
+        if "web" not in request.state.actor_roles:
+            raise HTTPException(403, "Only the signed-in owner can send messages")
+        token = config.imessage_executor_token.get_secret_value()
+        if not token:
+            raise HTTPException(503, "Messaging executor not configured")
+        if not request.app.state.message_sends.allow(user):
+            raise HTTPException(429, "Too many messages; wait a minute and try again")
+        try:
+            response = await request.app.state.http.post(
+                str(config.agents_url).rstrip("/") + "/imessage/send",
+                json={"draft_id": body.draft_id, "text": body.text, "executor_token": token},
+                timeout=60,
+            )
+            response.raise_for_status()
+            # Re-validate so nothing but status and summary (never the token) reaches clients.
+            return MessageSent.model_validate(response.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(
+                502, "Messaging agent unavailable; check Messages before trying again"
+            ) from exc
 
     @app.post("/v1/buyer/prepare/stream", response_class=StreamingResponse)
     async def stream_buyer(body: BuyerPreparation, request: Request, _: User):

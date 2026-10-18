@@ -482,6 +482,49 @@
         }
       }
     },
+    "/v1/messages/send": {
+      "post": {
+        "summary": "Send Message",
+        "operationId": "send_message_v1_messages_send_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageSend"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageSent"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/v1/buyer/prepare/stream": {
       "post": {
         "summary": "Stream Buyer",
@@ -2054,7 +2097,10 @@
               },
               {
                 "type": "string",
-                "const": "buyer"
+                "enum": [
+                  "buyer",
+                  "message"
+                ]
               }
             ],
             "title": "Kind"
@@ -2815,6 +2861,55 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "MessageSend": {
+        "properties": {
+          "draft_id": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Draft Id"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "draft_id",
+          "text"
+        ],
+        "title": "MessageSend",
+        "description": "A draft the signed-in user reviewed and confirmed; text may be edited first."
+      },
+      "MessageSent": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "failed",
+              "needs_permission"
+            ],
+            "title": "Status"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "summary"
+        ],
+        "title": "MessageSent"
       },
       "PageContext": {
         "properties": {
