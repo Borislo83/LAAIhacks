@@ -176,7 +176,8 @@ body[data-density="compact"] .agent{padding:10px}
 .news-img.noimg img{display:none}
 .news-img.noimg .ph{display:flex}
 .news-text{display:flex;flex-direction:column;gap:8px;min-width:0}
-.news-text h3{margin:0;font:500 19px/26px var(--sans);letter-spacing:-.01em;color:var(--ink);overflow-wrap:anywhere}
+.news-text h3{margin:0;font:500 19px/26px var(--sans);letter-spacing:-.01em;color:var(--ink);overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden}
+.out-news .lensbox .l2{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
 .news-text p{margin:0;font-size:14px;line-height:22px;overflow-wrap:anywhere}
 .news-meta{font-size:12px;color:var(--muted)}
 .news-meta time{font-family:var(--mono);font-size:11px}
@@ -496,7 +497,7 @@ const VIEW={
     const meta=[top&&esc(top.s.publisher||top.u.hostname.replace(/^www\./,"")),ago&&`<time datetime="${esc(top.s.published_at)}">${esc(ago)}</time>`].filter(Boolean).join(" · ");
     const chips=srcs.slice(0,8).map(({s,u})=>`<a class="src" href="${esc(u.href)}" target="_blank" rel="noopener noreferrer" title="${esc(s.title||u.hostname)}">${esc(s.publisher||u.hostname.replace(/^www\./,""))}</a>`).join("");
     return {lens:lens("NEWS",d.headline,""),
-      body:`<div class="news">${frame}<div class="news-text"><h3>${esc(d.headline)}</h3>${d.summary?`<p>${esc(d.summary)}</p>`:""}${meta?`<span class="news-meta">${meta}</span>`:""}</div>${chips?`<div class="news-srcs">Sources${chips}</div>`:""}</div>`};
+      body:`<div class="news">${frame}<div class="news-text"><h3 title="${esc(d.headline)}">${esc(d.headline)}</h3>${d.summary?`<p>${esc(d.summary)}</p>`:""}${meta?`<span class="news-meta">${meta}</span>`:""}</div>${chips?`<div class="news-srcs">Sources${chips}</div>`:""}</div>`};
   },
   reviews(d){
     const pc=(d.pros.length||d.cons.length)?`<div class="pc"><div><h4>Pros</h4><ul>${d.pros.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div><div><h4>Cons</h4><ul>${d.cons.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div></div>`:"";
