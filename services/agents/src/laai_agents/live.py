@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from functools import lru_cache
 from urllib.parse import quote_plus
 
 from . import catalog
@@ -21,15 +22,21 @@ def product_name(query: str) -> str:
     return known.name if known else query
 
 
-def matches_product(title: str, product: str) -> bool:
-    tokens = set(re.findall(r"[a-z0-9]+", title.lower()))
+@lru_cache(maxsize=512)
+def _name_words(product: str) -> tuple[frozenset[str], ...]:
+    """Word sets for the product and its catalog names, ignoring one-word names."""
     known = catalog.find_product(product)
     names = [product, *([known.name, *known.aliases] if known else [])]
-    return any(
-        len(words := re.findall(r"[a-z0-9]+", name.lower())) >= 2
-        and set(words) <= tokens
+    return tuple(
+        frozenset(words)
         for name in names
+        if len(words := re.findall(r"[a-z0-9]+", name.lower())) >= 2
     )
+
+
+def matches_product(title: str, product: str) -> bool:
+    tokens = set(re.findall(r"[a-z0-9]+", title.lower()))
+    return any(words <= tokens for words in _name_words(product))
 
 
 async def _candidates(sources, name):
@@ -105,17 +112,21 @@ async def alternatives(req):
     budget = (
         f"under ${req.max_price:.2f}" if req.max_price is not None else "lower priced"
     )
-    sources, meta = await search(f"{name} alternatives {category} {budget} USD")
     candidates = [
         p
         for p in catalog.PRODUCTS
         if known and p.category == known.category and p.name != known.name
-    ]
-    # Known names/category are seeds only. Each candidate needs its own live price evidence.
-    results = await asyncio.gather(
-        *(compare(PriceCompareRequest(product=p.name)) for p in candidates[:3]),
+    ][:3]
+    # Known names/category are seeds only. Each candidate needs its own live price
+    # evidence; the category search runs alongside those comparisons.
+    found, *results = await asyncio.gather(
+        search(f"{name} alternatives {category} {budget} USD"),
+        *(compare(PriceCompareRequest(product=p.name)) for p in candidates),
         return_exceptions=True,
     )
+    if isinstance(found, BaseException):
+        raise found
+    sources, meta = found
     report("comparing", f"Comparing {len(results)} candidates against the budget")
     priced, unpriced = [], []
     for product, result in zip(candidates, results):
