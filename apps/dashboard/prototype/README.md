@@ -7,7 +7,7 @@ The Paper file "Focal — Design" holds the static E2 frame (still in the older 
 ## Design rules
 
 - **Name:** Focal. Logo is an aperture: ink ring with a lens-green dot in the centre.
-- **Sheet:** every page follows `blueprint.html`, graphite drafting film `#23272b` with a 24px/120px grid and a thin inset frame line. Shared tokens live in `blueprint-tokens.css` (public-info keeps its own copy).
+- **Sheet:** every page follows `index.html` (the blueprint), graphite drafting film `#23272b` with a 24px/120px grid and a thin inset frame line. Shared tokens live in `blueprint-tokens.css` (public-info keeps its own copy).
 - **Ink `#e8ebe4`** for line work and text, muted `#8d949a`, 1px hairlines, corners of 3px or less, no shadows or gradients.
 - **Lens green `#8ee6a2`:** the G2's display colour, used only for live things: what lands on the lens, active states, data in motion. Lens previews are dark glass with green type.
 - **Type:** Instrument Serif (upright, no italics) for headings, Instrument Sans for body, JetBrains Mono for small technical labels, numbers and times. Buttons are solid ink with sheet-coloured text, or a hairline outline.
