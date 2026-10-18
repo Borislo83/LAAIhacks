@@ -4,35 +4,35 @@ Reads ASI_ONE_API_KEY from the environment. Without a key every call returns
 None and callers fall back to plain-code behaviour.
 """
 
-import os
-
 import aiohttp
 
-ASI_ONE_URL = "https://api.asi1.ai/v1/chat/completions"
-ASI_ONE_MODEL = os.getenv("ASI_ONE_MODEL", "asi1-mini")
+from . import asi, net
 
 
 def has_key() -> bool:
-    return bool(os.getenv("ASI_ONE_API_KEY"))
+    return bool(asi.api_key())
 
 
 async def complete(system: str, user: str, timeout: float = 30.0) -> str | None:
-    key = os.getenv("ASI_ONE_API_KEY")
+    key = asi.api_key()
     if not key:
         return None
     payload = {
-        "model": ASI_ONE_MODEL,
+        "model": asi.model(),
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
     }
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
-            async with session.post(ASI_ONE_URL, json=payload, headers=headers) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+        async with net.session().post(
+            asi.BASE_URL + "/chat/completions",
+            json=payload,
+            headers=asi.headers(key),
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
         return data["choices"][0]["message"]["content"].strip()
     except (aiohttp.ClientError, TimeoutError, KeyError, IndexError):
         return None

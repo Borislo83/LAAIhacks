@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
+
 from laai_agents import coordinator, handlers, live
 from laai_agents.integration import GlassesAPIError, GlassesWorkflow
 from laai_agents.models import (
@@ -56,17 +57,21 @@ async def test_coordinator_delegates_all_specialists_and_budget():
     assert await coordinator.parse_request("consider this product") is None
 
 
-async def test_coordinator_retries_failed_specialists_three_times(monkeypatch):
+async def test_coordinator_retries_only_when_no_answer_arrives(monkeypatch):
     monkeypatch.setattr(coordinator, "RETRY_DELAY", 0)
-    tries = {}
+    tries, timeouts = {}, {}
 
     class Context:
         async def send_and_receive(self, destination, message, response_type, timeout):
             tries[destination] = tries.get(destination, 0) + 1
+            timeouts[destination] = timeout
             if destination == "price":
                 raise TimeoutError  # never answers
+            if destination == "reviews" and tries[destination] < 2:
+                raise ConnectionError  # unreachable once, then answers
             extra = {"alternatives": []} if response_type is AlternativesResponse else {}
-            error = "search down" if tries[destination] < 3 else None
+            # A deterministic error is an answer; asking again would repeat heavy work.
+            error = "search unavailable" if destination == "alts" else None
             return response_type(product="x", summary="s", error=error, **extra), None
 
     result = await coordinator.consider(
@@ -74,9 +79,18 @@ async def test_coordinator_retries_failed_specialists_three_times(monkeypatch):
         {"laai-price-compare": "price", "laai-reviews": "reviews", "laai-alternatives": "alts"},
         ConsiderRequest(product="Sony WH-1000XM5"),
     )
-    assert tries == {"price": 3, "reviews": 3, "alts": 3}
-    assert result.reviews.error is None and result.alternatives.error is None
+    assert tries == {"price": 3, "reviews": 2, "alts": 1}
+    assert timeouts["alts"] > timeouts["price"]
+    assert result.reviews.error is None and result.alternatives.error == "search unavailable"
     assert result.price is None and "price" in result.errors
+
+
+async def test_parse_request_skips_llm_for_this_or_that(monkeypatch):
+    async def fail(text):
+        raise AssertionError("LLM must not be called")
+
+    monkeypatch.setattr(coordinator.llm, "extract_product", fail)
+    assert await coordinator.parse_request("Consider this product.") is None
 
 
 async def test_coordinator_compares_reviews_with_top_alternative():
@@ -128,6 +142,8 @@ async def test_alternatives_keep_candidates_when_stores_hide_prices(monkeypatch)
 
 
 async def test_free_search_retries_other_backends_and_caches(monkeypatch):
+    from collections import OrderedDict
+
     import ddgs
 
     from laai_agents import search as search_module
@@ -145,7 +161,7 @@ async def test_free_search_retries_other_backends_and_caches(monkeypatch):
             return [{"title": "t", "href": "https://a.example/p", "body": "b"}]
 
     monkeypatch.setattr(ddgs, "DDGS", FakeDDGS)
-    monkeypatch.setattr(search_module, "_CACHE", {})
+    monkeypatch.setattr(search_module, "_CACHE", OrderedDict())
     first = await search_module.free_search("cache me")
     second = await search_module.free_search("cache me")
     assert first == second and calls == list(search_module.BACKENDS[:2])

@@ -20,6 +20,7 @@ from urllib.parse import urljoin, urlsplit
 import aiohttp
 from lxml import html
 
+from . import net
 from .models import Offer, Source
 
 # Major retailers and brand stores. Listing here raises trust; it never gates a fetch.
@@ -43,6 +44,7 @@ TRUSTED_STORES = {
 TRUST_ORDER = {"high": 0, "medium": 1, "low": 2}
 LIMIT = 2_000_000
 MAX_REDIRECTS = 3
+TIMEOUT = aiohttp.ClientTimeout(total=7)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36",
@@ -279,29 +281,28 @@ def best_offer(offers: list[Offer]) -> Offer | None:
 async def fetch_page(url: str) -> str | None:
     """Read one public HTML page, re-checking every redirect; None if not readable."""
     try:
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=7), headers=HEADERS
-        ) as session:
-            for _ in range(MAX_REDIRECTS + 1):
-                if not fetchable(url) or not await public_host(urlsplit(url).hostname):
+        for _ in range(MAX_REDIRECTS + 1):
+            if not fetchable(url) or not await public_host(urlsplit(url).hostname):
+                return None
+            async with net.session().get(
+                url, allow_redirects=False, headers=HEADERS, timeout=TIMEOUT
+            ) as response:
+                if response.status in {301, 302, 303, 307, 308}:
+                    url = urljoin(url, response.headers.get("Location", ""))
+                    continue
+                if response.status != 200 or "text/html" not in response.headers.get(
+                    "Content-Type", ""
+                ):
                     return None
-                async with session.get(url, allow_redirects=False) as response:
-                    if response.status in {301, 302, 303, 307, 308}:
-                        url = urljoin(url, response.headers.get("Location", ""))
-                        continue
-                    if response.status != 200 or "text/html" not in response.headers.get(
-                        "Content-Type", ""
-                    ):
+                chunks, size = [], 0
+                async for chunk in response.content.iter_chunked(65536):
+                    size += len(chunk)
+                    if size > LIMIT:
                         return None
-                    chunks, size = [], 0
-                    async for chunk in response.content.iter_chunked(65536):
-                        size += len(chunk)
-                        if size > LIMIT:
-                            return None
-                        chunks.append(chunk)
-                    page = b"".join(chunks).decode("utf-8", errors="replace")
-                    return page if page.strip() else None
-            return None
+                    chunks.append(chunk)
+                page = b"".join(chunks).decode("utf-8", errors="replace")
+                return page if page.strip() else None
+        return None
     except (TimeoutError, aiohttp.ClientError, ValueError):
         return None
 

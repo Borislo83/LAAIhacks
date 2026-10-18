@@ -1,8 +1,9 @@
 """A client agent that sends one request to each agent and logs the replies."""
 
 from uagents import Agent, Context
+from uagents_core.contrib.protocols.chat import ChatAcknowledgement, ChatMessage
 
-from .chat import text_message
+from .chat import message_text, text_message
 from .models import (
     AlternativesRequest,
     AlternativesResponse,
@@ -11,7 +12,6 @@ from .models import (
     ReviewsRequest,
     ReviewsResponse,
 )
-from uagents_core.contrib.protocols.chat import ChatAcknowledgement, ChatMessage, TextContent
 
 
 def build_demo_client(addresses: dict[str, str]) -> Agent:
@@ -44,8 +44,7 @@ def build_demo_client(addresses: dict[str, str]) -> Agent:
 
     @client.on_message(ChatMessage)
     async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
-        text = " ".join(c.text for c in msg.content if isinstance(c, TextContent))
-        ctx.logger.info(f"[chat] {text}")
+        ctx.logger.info(f"[chat] {message_text(msg)}")
 
     @client.on_message(ChatAcknowledgement)
     async def on_ack(ctx: Context, sender: str, msg: ChatAcknowledgement):

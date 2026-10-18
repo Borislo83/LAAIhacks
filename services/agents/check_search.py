@@ -3,6 +3,7 @@
 import asyncio
 
 from dotenv import load_dotenv
+
 from laai_agents.search import asi_search, free_search
 
 

@@ -14,6 +14,21 @@ from .progress import report
 _lock = asyncio.Lock()
 _playwright = None
 _browser = None
+# One reused tab: new tabs per approval would leak, and closing it would hide the
+# sign-in or verification the user is asked to finish there.
+_page = None
+
+CART_URL = "https://www.amazon.com/gp/cart/view.html"
+NEEDS_SIGN_IN = {
+    "status": "needs_sign_in",
+    "message": "Sign in in the opened Amazon browser, then prepare and approve again.",
+}
+
+
+def _cart_item(page, asin: str):
+    return page.locator(
+        f'#sc-active-cart [data-asin="{asin}"], #activeCartViewForm [data-asin="{asin}"]'
+    ).first
 
 
 async def add_to_cart(url: str, quantity: int):
@@ -26,7 +41,7 @@ async def add_to_cart(url: str, quantity: int):
         return {"status": "blocked", "message": "Invalid Amazon listing or quantity"}
     asin = canonical.rsplit("/", 1)[1]
     async with _lock:
-        global _playwright, _browser
+        global _playwright, _browser, _page
         try:
             if _playwright is None:
                 _playwright = await async_playwright().start()
@@ -43,18 +58,16 @@ async def add_to_cart(url: str, quantity: int):
                     viewport={"width": 1280, "height": 900},
                 )
                 _browser.on("close", _reset_browser)
-            page = await _browser.new_page()
-            cart_url = "https://www.amazon.com/gp/cart/view.html"
+            if _page is None or _page.is_closed():
+                _page = await _browser.new_page()
+            page, cart_url = _page, CART_URL
             report(
                 "checking_cart",
                 "Checking whether the selected item is already in the cart",
             )
             await page.goto(cart_url, wait_until="domcontentloaded", timeout=45000)
             if "/ap/signin" in page.url:
-                return {
-                    "status": "needs_sign_in",
-                    "message": "Sign in in the opened Amazon browser, then prepare and approve again.",
-                }
+                return dict(NEEDS_SIGN_IN)
             try:
                 await page.wait_for_selector(
                     "#sc-active-cart, #activeCartViewForm, #sc-empty-cart, .sc-empty-cart",
@@ -65,9 +78,7 @@ async def add_to_cart(url: str, quantity: int):
                     "status": "needs_attention",
                     "message": "Amazon's cart could not be read. Complete any sign-in or verification in the opened browser; no add was attempted.",
                 }
-            existing = page.locator(
-                f'#sc-active-cart [data-asin="{asin}"], #activeCartViewForm [data-asin="{asin}"]'
-            ).first
+            existing = _cart_item(page, asin)
             if await existing.count() and await existing.is_visible():
                 return {
                     "status": "cart_added",
@@ -77,10 +88,7 @@ async def add_to_cart(url: str, quantity: int):
             report("opening_listing", "Opening the exact approved Amazon listing")
             await page.goto(canonical, wait_until="domcontentloaded", timeout=45000)
             if "/ap/signin" in page.url:
-                return {
-                    "status": "needs_sign_in",
-                    "message": "Sign in in the opened Amazon browser, then prepare and approve again.",
-                }
+                return dict(NEEDS_SIGN_IN)
             if await page.locator(
                 '#captchacharacters, form[action*="validateCaptcha"]'
             ).count():
@@ -142,10 +150,7 @@ async def add_to_cart(url: str, quantity: int):
                 pass
             report("verifying_cart", "Checking the real cart for the approved ASIN")
             await page.goto(cart_url, wait_until="domcontentloaded", timeout=45000)
-            item = page.locator(
-                f'#sc-active-cart [data-asin="{asin}"], '
-                f'#activeCartViewForm [data-asin="{asin}"]'
-            ).first
+            item = _cart_item(page, asin)
             try:
                 await item.wait_for(state="visible", timeout=10000)
             except TimeoutError:
@@ -170,5 +175,5 @@ async def add_to_cart(url: str, quantity: int):
 
 
 def _reset_browser(*_):
-    global _browser
-    _browser = None
+    global _browser, _page
+    _browser = _page = None
