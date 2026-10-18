@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Focal Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@1&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
 :root{
-  --paper:#F7F7F5; --ink:#0B0B0C; --muted:#6E6E73; --hair:#E4E4E6; --cobalt:#2F47E8;
+  --paper:#F7F7F5; --ink:#0B0B0C; --muted:#6E6E73; --hair:#E4E4E6;
   --lens:#0E0E10; --signal:#139A4E; --signal-soft:rgba(19,154,78,.14); --phosphor:#3CFF7A; --white:#FFFFFF; --warn:#C2410C;
   --sans:'Inter',system-ui,sans-serif; --serif:'Instrument Serif',Georgia,serif; --mono:'JetBrains Mono',ui-monospace,monospace;
 }
@@ -17,7 +18,6 @@
 body{background:var(--paper);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
 .wrap{max-width:1296px;margin:0 auto;padding:0 24px 72px}
 em{font-family:var(--serif);font-style:italic;font-weight:400}
-.mono{font-family:var(--mono)}
 .muted{color:var(--muted)}
 
 nav.top{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center;padding:26px 0 20px;border-bottom:1px solid var(--hair)}
@@ -73,7 +73,6 @@ h2 em{color:var(--muted);font-size:1.12em}
 .field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:140px}
 .field label{font-size:12px;color:var(--muted)}
 .field input,.field select,.field textarea{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
-.field textarea{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
 .field textarea{resize:vertical;line-height:1.5;width:100%}
 .preference-form{display:flex;flex-direction:column;gap:14px;margin-top:16px}
 .preference-form fieldset{border:0;display:flex;flex-direction:column;gap:14px}
@@ -99,7 +98,7 @@ body[data-density="compact"] .agent{padding:10px}
 .lensbox .l2{font-size:15px;line-height:22px}
 .summary{font-size:15px;line-height:23px}
 .list{margin-top:12px;display:flex;flex-direction:column}
-.list a,.list div{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--hair);font-size:14px;color:var(--ink);text-decoration:none}
+.list a{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--hair);font-size:14px;color:var(--ink);text-decoration:none}
 .list a:hover span:first-child{text-decoration:underline}
 .list .p{font-family:var(--mono);font-size:13px}
 .list .best .p{color:var(--signal)}
@@ -209,6 +208,7 @@ body[data-density="compact"] .agent{padding:10px}
       </div>
       <div class="row"><button class="btn dark" id="sign-in" type="submit">Sign in</button><button class="btn" id="sign-up" type="submit">Create account</button></div>
     </form>
+    </details>
     <p id="auth-message" role="status" style="margin-top:12px;font-size:14px"></p>
     <button type="button" class="linkbtn" id="auth-retry" hidden>Reconnect</button>
   </section>
@@ -246,9 +246,7 @@ body[data-density="compact"] .agent{padding:10px}
 
       <section id="pane-chat">
         <div class="chat">
-          <div class="thread" id="thread" aria-live="polite">
-            <div class="msg bot"><span data-orb-logo></span><div class="body"><p>Ask me to consider a product. I’ll check prices, reviews, and alternatives within your budget.</p></div></div>
-          </div>
+          <div class="thread" id="thread" aria-live="polite"></div>
           <div class="starters" id="starters"></div>
           <form class="composer" id="chat-form"><input id="chat-input" placeholder="Is the Sony XM5 worth it, or is there something cheaper?" autocomplete="off" required><button class="btn dark" id="send">Send</button></form>
         </div>
@@ -271,12 +269,13 @@ body[data-density="compact"] .agent{padding:10px}
           </div>
         </form>
       </div>
-      <div class="results" id="results"><div class="empty">Answers from the agents show up here.</div></div>
+      <div class="results" id="results"></div>
       </section>
     </main>
   </div>
 </div>
 
+<script src="orb.js"></script>
 <script type="module">
 import { setupAuth } from "./auth.js";
 import { setupPreferences } from "./preferences.js";
@@ -295,20 +294,13 @@ const money=n=>n==null?"–":"$"+Number(n).toFixed(2);
 /* storage is a convenience only */
 const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
 
-/* orbs, same generator as focal.html */
-let uid=0;
-function orb(v,size=40,idle=false){
-  const id="c"+(uid++), r=size/2-1, c=size/2, g="#4A4A50";
-  let el="";
-  const st=Math.max(2.6,size/11), n=Math.floor(size/st)+1;
-  if(v===1){const gap=Math.max(3,Math.round(size/12));let i=0;for(let y=2;y<size-1;y+=gap,i++)el+=`<rect class="s1" style="animation-delay:${(i*0.09).toFixed(2)}s" x="0" y="${y}" width="${size}" height="${Math.max(1.2,size/18).toFixed(1)}" fill="#fff"/>`}
-  if(v===2)for(let i=0;i<n;i++)el+=`<rect x="${(i*st+1).toFixed(1)}" y="0" width="1" height="${size}" fill="${g}"/>`;
-  if(v===2)for(let k=0;k<5;k++)el+=`<circle class="s2" style="animation-delay:${(-k*0.32).toFixed(2)}s" cx="${(size*.15+k*size*.175).toFixed(1)}" cy="${c}" r="${Math.max(1,size/22).toFixed(1)}" fill="#fff"/>`;
-  if(v===3){for(let i=0;i<n;i++)el+=`<rect x="0" y="${(i*st+1).toFixed(1)}" width="${size}" height="1" fill="${g}"/>`;
-    [[.28,.3,1.9],[.45,.25,2.6],[.62,.2,2.2],[.8,.15,3.1]].forEach(([y,w,d],k)=>el+=`<rect class="s3" style="animation-duration:${d}s;animation-delay:${(-k*0.7).toFixed(2)}s" x="0" y="${(y*size).toFixed(1)}" width="${(w*size).toFixed(1)}" height="${Math.max(1,size/16).toFixed(1)}" fill="#fff"/>`)}
-  return `<svg class="orb${idle?" idle":""}" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><defs><clipPath id="${id}"><circle cx="${c}" cy="${c}" r="${r}"/></clipPath></defs><circle cx="${c}" cy="${c}" r="${r}" fill="#0E0E10"/><g clip-path="url(#${id})">${el}</g></svg>`;
-}
-document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=`<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
+document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=logoMark()+`Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
+const logoOrb=()=>logoMark(28,"orb");
+const WELCOME=`<div class="msg bot">${logoOrb()}<div class="body"><p>Ask me to consider a product. I’ll check prices, reviews, and alternatives within your budget.</p></div></div>`;
+const EMPTY_RESULTS='<div class="empty">Answers from the agents show up here.</div>';
+const THREAD_MAX=40;
+$("#thread").innerHTML=WELCOME;
+$("#results").innerHTML=EMPTY_RESULTS;
 
 /* state */
 let auth, preferences;
@@ -318,16 +310,23 @@ let usage=store.get("focal.usage",null)||freshUsage();
 KEYS.forEach(k=>usage.agents[k]??={calls:0,ms:0,errors:0});
 function freshUsage(){return {since:Date.now(),agents:Object.fromEntries(KEYS.map(k=>[k,{calls:0,ms:0,errors:0}]))}}
 
-function renderRoster(){
-  $("#roster").innerHTML=KEYS.map(k=>{const a=AGENTS[k],h=health[k];
-    const s=h===true?"up":h===false?"down":"";
-    return `<button class="agent" type="button" data-k="${k}" aria-pressed="${selected.has(k)}">${orb(a.v,44,true)}
-      <span class="meta"><b>${a.name}</b><small>${a.what}</small><br><span class="route">POST ${a.route}</span></span>
-      <span class="status ${s}"><i></i>${h===true?"Online":h===false?"Offline":"…"}</span></button>`}).join("");
-  document.querySelectorAll(".agent").forEach(b=>b.onclick=()=>{
-    const k=b.dataset.k; selected.has(k)?selected.delete(k):selected.add(k);
-    store.set("focal.selected",[...selected]); renderRoster(); $("#go").disabled=!selected.size});
+// Built once; later changes only touch aria-pressed and the status line.
+$("#roster").innerHTML=KEYS.map(k=>{const a=AGENTS[k];
+  return `<button class="agent" type="button" data-k="${k}" aria-pressed="false">${orb(a.v,44,true)}
+    <span class="meta"><b>${a.name}</b><small>${a.what}</small><br><span class="route">POST ${a.route}</span></span>
+    <span class="status"><i></i><span>…</span></span></button>`}).join("");
+const rosterButtons=[...document.querySelectorAll("#roster .agent")];
+function updateRoster(){
+  rosterButtons.forEach(b=>{const k=b.dataset.k,h=health[k],st=b.querySelector(".status");
+    b.setAttribute("aria-pressed",selected.has(k));
+    st.className="status"+(h===true?" up":h===false?" down":"");
+    st.lastChild.textContent=h===true?"Online":h===false?"Offline":"…"});
 }
+$("#roster").addEventListener("click",e=>{
+  const b=e.target.closest(".agent"); if(!b)return;
+  const k=b.dataset.k; selected.has(k)?selected.delete(k):selected.add(k);
+  store.set("focal.selected",[...selected]); updateRoster(); $("#go").disabled=!selected.size;
+});
 function renderUsage(){
   $("#usage").innerHTML=KEYS.map(k=>{const u=usage.agents[k];
     return `<tr><td>${AGENTS[k].name.replace(" agent","")}</td><td class="n">${u.calls}</td><td class="n">${u.calls?Math.round(u.ms/u.calls)+" ms":"–"}</td><td class="n">${u.errors}</td></tr>`}).join("");
@@ -337,6 +336,7 @@ $("#reset").onclick=()=>{usage=freshUsage();store.set("focal.usage",usage);rende
 
 /* calls */
 const ATTEMPTS=3;
+const retryMessage=n=>`Couldn't reach the orchestrator; retrying (${n} of ${ATTEMPTS})`;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 // Retry only when the orchestrator couldn't be reached at all. A stream that started, or any
 // cart action, is never resent, so nothing can be added to a cart twice.
@@ -352,7 +352,7 @@ async function call(k,body,onProgress){
     const path=k==="buyer"?"/v1/buyer/prepare/stream":`/v1/agents/${k}/stream`;
     const progress=onProgress||(()=>{});
     const result=await withRetry(()=>readEvents(path,body,progress),
-      n=>progress({kind:k,stage:"retrying",message:`Couldn't reach the orchestrator; retrying (${n} of ${ATTEMPTS})`}),k!=="buyer");
+      n=>progress({kind:k,stage:"retrying",message:retryMessage(n)}),k!=="buyer");
     if(result.result?.confirmation_token)activePurchase=result.result.confirmation_token;
     // A failed web search is still an answer: the agent is reachable.
     return {ok:!!result.result&&!result.error,reachable:!!result.result,data:result.result,error:result.error,ms:performance.now()-t0};
@@ -362,12 +362,12 @@ function record(k,res){
   const u=usage.agents[k]; u.calls++; u.ms+=res.ms; if(!res.ok||res.data?.error)u.errors++;
   store.set("focal.usage",usage); renderUsage();
   // A failed web search is a result, not an outage.
-  health[k]=res.reachable??res.ok; renderRoster();
+  health[k]=res.reachable??res.ok; updateRoster();
 }
 async function checkAll(){
-  KEYS.forEach(k=>delete health[k]); renderRoster();
+  KEYS.forEach(k=>delete health[k]); updateRoster();
   try{const r=await fetch(orch.value.replace(/\/$/,"")+"/health",{redirect:"error"});KEYS.forEach(k=>health[k]=r.ok)}catch{KEYS.forEach(k=>health[k]=false)}
-  renderRoster();
+  updateRoster();
 }
 $("#ping").onclick=checkAll;
 
@@ -429,7 +429,7 @@ $("#ask").onsubmit=async e=>{
   e.preventDefault();
   const product=$("#product").value.trim(),amazonUrl=$("#amazon-url").value.trim();
   if(!product&&!amazonUrl)return;
-  if(!product&&amazonUrl){selected=new Set(["buyer"]);renderRoster()}
+  if(!product&&amazonUrl){selected=new Set(["buyer"]);updateRoster()}
   if(!selected.size)return;
   const num=id=>{const v=$(id).value;return v===""?null:Number(v)};
   const bodies={
@@ -459,17 +459,19 @@ setMode(store.get("focal.mode","chat"));
 const orch=$("#orch");
 orch.value=store.get("focal.orch","http://127.0.0.1:8001");
 orch.onchange=()=>store.set("focal.orch",orch.value.trim());
-const logoOrb=()=>`<svg class="orb" width="28" height="28" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>`;
-document.querySelectorAll("[data-orb-logo]").forEach(e=>e.outerHTML=logoOrb());
 const convo=[];
 let activePurchase=null;
+// Cart requests are never retried, so nothing can be added to a cart twice.
+const isCartRelated=text=>!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
 const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100"];
 $("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
 document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
 
 function bubble(html,cls){
   const el=document.createElement("div"); el.className="msg "+cls; el.innerHTML=html;
-  $("#thread").appendChild(el); el.scrollIntoView({block:"end",behavior:"smooth"}); return el;
+  const thread=$("#thread"); thread.appendChild(el);
+  while(thread.children.length>THREAD_MAX)thread.firstElementChild.remove();
+  el.scrollIntoView({block:"end",behavior:"smooth"}); return el;
 }
 // Also called with one card for live previews, so `all` may be missing.
 function miniCard(c,i,all=[c]){
@@ -532,9 +534,9 @@ $("#chat-form").onsubmit=async e=>{
   const progress=makeProgress(pending.querySelector(".progress-host"));
   progress.update({kind:"coordinator",stage:"connecting",message:"Connecting to the agent workflow"});
   try{
-    const cartRelated=!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
+    const cartRelated=isCartRelated(text);
     const d=await withRetry(()=>readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update),
-      n=>progress.update({kind:"coordinator",stage:"retrying",message:`Couldn't reach the orchestrator; retrying (${n} of ${ATTEMPTS})`}),!cartRelated);
+      n=>progress.update({kind:"coordinator",stage:"retrying",message:retryMessage(n)}),!cartRelated);
     d.calls.forEach(c=>{if(c.result?.confirmation_token)activePurchase=c.result.confirmation_token;if(c.result?.status==="cart_added")activePurchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
     progress.finish(true);
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
@@ -545,7 +547,7 @@ $("#chat-form").onsubmit=async e=>{
   }catch(err){
     convo.pop();
     progress.finish(false);
-    const tried=err.retryable&&!(!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text));
+    const tried=err.retryable&&!isCartRelated(text);
     pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">${esc(err.message)}. ${tried?`Tried ${ATTEMPTS} times; is the orchestrator running?`:"No automatic retry was sent."}</p></div>`;
     pending.querySelector(".body").append(progress.el);
   }
@@ -562,15 +564,15 @@ document.addEventListener("click",e=>{
   $("#chat-form").requestSubmit();
 });
 
-renderRoster(); renderUsage();
+updateRoster(); renderUsage();
 auth=setupAuth({
   endpoint:orch,
   onUserChange(session){
     preferences?.setUser(session?.user?.id);
     convo.length=0;
     activePurchase=null;
-    $("#thread").innerHTML='<div class="msg bot"><div class="body"><p>Ask me to consider a product. I’ll check prices, reviews, and alternatives within your budget.</p></div></div>';
-    $("#results").innerHTML='<div class="empty">Answers from the agents show up here.</div>';
+    $("#thread").innerHTML=WELCOME;
+    $("#results").innerHTML=EMPTY_RESULTS;
     $("#starters").hidden=false;
     $("#chat-input").value="";
     $("#product").value="";

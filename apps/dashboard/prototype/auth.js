@@ -43,12 +43,14 @@ export function setupAuth({endpoint, onUserChange}) {
       }
       if (url.username || url.password || url.search || url.hash) throw new Error('Invalid backend URL.');
       backend = url.href.replace(/\/$/, '');
+      // Load the SDK while the config request is in flight.
+      const sdk = import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/+esm');
+      sdk.catch(() => {});
       const response = await fetch(backend + '/v1/auth/config', {
         redirect: 'error', signal: AbortSignal.timeout(10000),
       });
       if (!response.ok) throw new Error('Could not load sign-in settings.');
-      const config = await response.json();
-      const {createClient} = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/+esm');
+      const [config, {createClient}] = await Promise.all([response.json(), sdk]);
       client = createClient(config.supabase_url, config.supabase_publishable_key, {
         auth: {flowType: 'pkce', persistSession: true, autoRefreshToken: true, detectSessionInUrl: true},
       });
