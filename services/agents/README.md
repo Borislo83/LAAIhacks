@@ -1,12 +1,13 @@
 # Agents
 
-Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are three specialists and a coordinator:
+Fetch.ai [uAgents](https://uagents.fetch.ai/docs) for the glasses. There are four specialists and a coordinator:
 
 | Agent | Agent protocol | REST | What it does |
 |---|---|---|---|
 | `laai-price-compare` | `PriceCompareRequest` → `PriceCompareResponse` | `POST /price` | Prices across stores, and how much you'd save vs the current page |
 | `laai-alternatives` | `AlternativesRequest` → `AlternativesResponse` | `POST /alternatives` | Cheaper or better-rated competitors in the same category |
 | `laai-reviews` | `ReviewsRequest` → `ReviewsResponse` | `POST /reviews` | Rating, pros/cons, a review link, and a one-line summary |
+| `laai-youtube` | `YouTubeRequest` → `YouTubeResponse` | `POST /youtube` | A YouTube link for a song or video the user asks for |
 
 Every agent also speaks the **Agent Chat Protocol**, so ASI:One and Agentverse chat can talk to it in plain language.
 
@@ -30,6 +31,30 @@ not count as live evidence. DDGS needs no API key, but public search can rate-li
 Run `uv run python check_search.py` to diagnose both providers without printing secrets.
 See [ASI search documentation](https://docs.asi1.ai/documentation/build-with-asi-one/web-search)
 and [DDGS](https://pypi.org/project/ddgs/).
+
+## YouTube agent
+
+`laai-youtube` turns a request like `find the song "Bohemian Rhapsody"` or `youtube link
+for how to tie a tie` into one video link. It is separate from the shopping research.
+
+```bash
+curl http://127.0.0.1:8000/youtube -H 'Content-Type: application/json' \
+  -d '{"query":"find the song Blinding Lights","kind":"auto"}'
+```
+
+`kind` is `song`, `video` or `auto` (the default). `auto` means `song` when the request
+mentions a song, track, music or audio, and `video` otherwise. The agent strips request
+phrasing ("find the song", "youtube link for", "play") or uses a quoted title as is. For
+songs it adds "official audio" to the search. The response has `title`, `url`, `channel`,
+`duration` (when known), up to three `alternatives` and a plain-text `summary` (title,
+channel, link), which is also its chat reply.
+
+It searches the YouTube Data API first only when `YOUTUBE_API_KEY` is set. Otherwise it
+uses keyless DDGS video search, then web search for `site:youtube.com`. Only single-video
+links are returned, always as `https://www.youtube.com/watch?v=<11-character id>`
+(`youtu.be` links are rewritten). Shorts, playlists, channels and other sites are dropped,
+and no URL from the query or the results is fetched. No match gives `url: null` with a
+summary that says so. If every provider fails, `error` is set and no link is guessed.
 
 ## Live dashboard progress
 
@@ -148,7 +173,7 @@ cp .env.example .env
 
 ## Run
 
-The coordinator and three specialists in one Bureau on port 8000:
+The coordinator, the four specialists and the Amazon cart agent in one Bureau on port 8000:
 
 ```bash
 uv run laai-agents
