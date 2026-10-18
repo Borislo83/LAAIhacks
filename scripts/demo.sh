@@ -8,6 +8,7 @@
 #   scripts/demo.sh status                     what is running, with health checks
 #   scripts/demo.sh stop                       stop everything this script started
 #   scripts/demo.sh logs [name]                tail a log (agents, orchestrator, glasses, watcher, sim, tunnel)
+#   scripts/demo.sh cart                       open the cart window (FOCAL CART) to watch adds live
 #
 # Started: agents :8000, orchestrator :8001, glasses app (Vite :5180 + condense server
 # :8797), the action watcher, and optionally the Even Hub simulator and a Cloudflare
@@ -171,5 +172,9 @@ case ${1:-} in
   restart) shift; stop; start "$@" ;;
   status) status ;;
   logs) tail -n 60 -f "$LOGS/${2:-watcher}.log" ;;
-  *) sed -n '2,15p' "$0"; exit 2 ;;
+  cart)
+    token=$(grep -E '^AMAZON_CART_EXECUTOR_TOKEN=' "$ROOT/services/agents/.env" | tail -1 | cut -d= -f2-)
+    curl -s -m 90 -X POST http://127.0.0.1:8000/cart/show -H 'Content-Type: application/json' \
+      -d "{\"executor_token\":\"$token\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["summary"])' ;;
+  *) sed -n '2,16p' "$0"; exit 2 ;;
 esac

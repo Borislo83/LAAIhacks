@@ -163,8 +163,56 @@ async def _show_window():
         pass
 
 
+async def _open_page():
+    """The cart window's tab, opening the dedicated browser if needed. Call under _lock."""
+    from playwright.async_api import async_playwright
+
+    global _playwright, _browser, _page
+    if _playwright is None:
+        _playwright = await async_playwright().start()
+    # The profile stays locked while its context is open, so a live context with
+    # no tabs gets a new tab below rather than a second launch.
+    if _browser is None:
+        profile = Path(
+            os.getenv("AMAZON_BROWSER_PROFILE", ".runtime/amazon-profile")
+        ).resolve()
+        profile.mkdir(parents=True, exist_ok=True, mode=0o700)
+        report("opening_browser", "Opening the dedicated Amazon cart browser")
+        x, y, width, height = await _side_of_screen()
+        _browser = await _playwright.chromium.launch_persistent_context(
+            str(profile),
+            channel="chrome",
+            headless=False,
+            # Sized to the window, which sits on the right of the screen.
+            no_viewport=True,
+            args=[f"--window-position={x},{y}", f"--window-size={width},{height}",
+                  "--hide-crash-restore-bubble"],
+        )
+        # Marked so it is never mistaken for the user's own Chrome.
+        await _browser.add_init_script(MARKER_SCRIPT)
+        _browser.on("close", _reset_browser)
+    if _page is None or _page.is_closed():
+        # The window opens with one blank tab: use it rather than adding a second.
+        blank = [p for p in _browser.pages if p.url == "about:blank"]
+        _page = blank[0] if blank else await _browser.new_page()
+
+
+async def show_cart() -> dict:
+    """Opens (or raises) the cart window on Amazon's cart page. Adds nothing."""
+    from playwright.async_api import Error
+
+    async with _lock:
+        try:
+            await _open_page()
+            await _page.goto(CART_URL, wait_until="domcontentloaded", timeout=45000)
+        except (Error, OSError) as exc:
+            return {"status": "failed", "message": f"Couldn't open the cart window: {exc}"[:300]}
+    await _show_window()
+    return {"status": "shown", "message": "The cart window is open on the cart page."}
+
+
 async def _add_to_cart(url: str, quantity: int, require_new: bool = False):
-    from playwright.async_api import Error, TimeoutError, async_playwright
+    from playwright.async_api import Error, TimeoutError
 
     from .buyer import amazon_listing
 
@@ -175,33 +223,7 @@ async def _add_to_cart(url: str, quantity: int, require_new: bool = False):
     async with _lock:
         global _playwright, _browser, _page
         try:
-            if _playwright is None:
-                _playwright = await async_playwright().start()
-            # The profile stays locked while its context is open, so a live context with
-            # no tabs gets a new tab below rather than a second launch.
-            if _browser is None:
-                profile = Path(
-                    os.getenv("AMAZON_BROWSER_PROFILE", ".runtime/amazon-profile")
-                ).resolve()
-                profile.mkdir(parents=True, exist_ok=True, mode=0o700)
-                report("opening_browser", "Opening the dedicated Amazon cart browser")
-                x, y, width, height = await _side_of_screen()
-                _browser = await _playwright.chromium.launch_persistent_context(
-                    str(profile),
-                    channel="chrome",
-                    headless=False,
-                    # Sized to the window, which sits on the right of the screen.
-                    no_viewport=True,
-                    args=[f"--window-position={x},{y}", f"--window-size={width},{height}",
-                          "--hide-crash-restore-bubble"],
-                )
-                # Marked so it is never mistaken for the user's own Chrome.
-                await _browser.add_init_script(MARKER_SCRIPT)
-                _browser.on("close", _reset_browser)
-            if _page is None or _page.is_closed():
-                # The window opens with one blank tab: use it rather than adding a second.
-                blank = [p for p in _browser.pages if p.url == "about:blank"]
-                _page = blank[0] if blank else await _browser.new_page()
+            await _open_page()
             page, cart_url = _page, CART_URL
             report(
                 "checking_cart",
