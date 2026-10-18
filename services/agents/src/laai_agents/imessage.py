@@ -226,6 +226,8 @@ async def extract(request: str, book: dict[str, str]) -> tuple[str, str] | None:
     try:
         data = json.loads(answer or "")
         recipient, body = str(data["recipient"]).strip(), str(data["message"]).strip()
+        # The model sometimes keeps the linking word ("that the demo works").
+        body = LINK.sub("", body, count=1).strip()
         if recipient and body:
             return recipient, body
     except (ValueError, KeyError, TypeError):
