@@ -15,6 +15,7 @@ import type { CondensedPage, MangaStrip, Screen } from '../shared/types'
 import { condense, fetchStrip, report, type MangaStyle } from './api'
 import { renderScreen, screenTitle, type PageSpec, type TextBox } from './screens'
 import { mountCompanion, type Companion } from './companion'
+import { clockFrame, loadingSpec, spinnerFrame, SPIN_MS } from './loading'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
 // Status:  body 0..252 (9 lines at 27px)  +  footer 252..288 (1 line)
@@ -59,7 +60,11 @@ Double-tap: exit`
 
 // ── State ───────────────────────────────────────────────────────────────────
 let view: View = 'reader'
-let onScreen: 'reader' | 'manga' | 'other' = 'reader'
+let onScreen: 'reader' | 'manga' | 'loading' | 'other' = 'reader'
+/** Set while a page is opening; shown as the spinner screen. */
+let loading: { title: string; host: string; step: string; frame: number } | null = null
+let spinTimer: ReturnType<typeof setInterval> | undefined
+let spinBusy = false
 let doc: CondensedPage | null = null
 let screens: Screen[] = []
 let screenIdx = 0
@@ -87,6 +92,8 @@ let listItems: MenuItem[] = []
 let loadSeq = 0
 let renderSeq = 0
 let mirror: PageSpec = { texts: [], images: [] }
+/** Container ID of the shown deck screen's first text box (1 when it has no capture layer). */
+let deckTextId = 2
 
 const bridge = await waitForEvenAppBridge()
 
@@ -154,6 +161,7 @@ if (created !== 0) console.error('createStartUpPageContainer failed:', created)
 // ── Rendering ───────────────────────────────────────────────────────────────
 /** Shows the current page in whichever form it has: status text, deck or manga. */
 function showContent() {
+  if (loading && !status) return renderLoading()
   if (!status && doc && isManga()) return showStrip(mangaPage, mangaStrip)
   if (!status && doc && isDeck()) return renderDeck()
   return renderReader()
@@ -184,6 +192,99 @@ async function renderReader() {
   )
 }
 
+// Loading screen: capture layer (1), title (2), step (3), spinner image (4).
+// Built once, then the spinner frame and the two text lines are swapped in place.
+const SPINNER_ID = 4
+let spinTimes: number[] = []
+
+async function renderLoading() {
+  if (!loading) return
+  view = 'reader'
+  onScreen = 'loading'
+  renderSeq++
+  const spec = loadingSpec(loading.title, loading.host, loading.step, loading.frame)
+  mirror = spec
+  companion.update()
+  const capture = new TextContainerProperty({
+    xPosition: 0, yPosition: 0, width: 576, height: 288,
+    borderWidth: 0, borderColor: 0, paddingLength: 0,
+    containerID: 1, containerName: 'capture',
+    content: ' ',
+    isEventCapture: 1,
+  })
+  const texts = [capture, ...spec.texts.map((t, i) => textContainer(t, i + 2))]
+  const [im] = spec.images
+  const image = new ImageContainerProperty({
+    xPosition: im.x, yPosition: im.y, width: im.image.w, height: im.image.h,
+    containerID: SPINNER_ID, containerName: `i${SPINNER_ID}`,
+  })
+  clearInterval(spinTimer)
+  spinBusy = false
+  spinTimes = []
+  await enqueue(() =>
+    bridge.rebuildPageContainer(
+      new RebuildPageContainer({ containerTotalNum: texts.length + 1, textObject: texts, imageObject: [image] }),
+    ),
+  )
+  spinTimer = setInterval(spin, SPIN_MS)
+  spin()
+}
+
+function spin() {
+  if (!loading || onScreen !== 'loading') return void clearInterval(spinTimer)
+  // Skip a frame rather than queue up behind a slow BLE hop.
+  if (spinBusy) return
+  spinBusy = true
+  // Frame from the clock, so the ring turns at the same speed however slow
+  // the link is; a slow link just jumps further each frame.
+  const frame = clockFrame()
+  if (frame === loading.frame) {
+    spinBusy = false
+    return
+  }
+  loading.frame = frame
+  const image = spinnerFrame(loading.frame)
+  mirror.images = [{ ...mirror.images[0], image }]
+  companion.update()
+  const t0 = performance.now()
+  enqueue(() =>
+    bridge.updateImageRawData(
+      new ImageRawDataUpdate({ containerID: SPINNER_ID, containerName: `i${SPINNER_ID}`, imageData: base64ToBytes(image.png) }),
+    ),
+  )
+    .then(() => {
+      // Real-device frame time, printed by the dev server as [telemetry].
+      spinTimes.push(Math.round(performance.now() - t0))
+      if (spinTimes.length === 20) {
+        const sorted = [...spinTimes].sort((a, b) => a - b)
+        report({ ev: 'spinner', medianMs: sorted[10], maxMs: sorted[19] })
+        spinTimes = []
+      }
+    })
+    .catch(() => {})
+    .finally(() => (spinBusy = false))
+}
+
+/** Updates the title and step lines in place as the server reports progress. */
+function loadingProgress(step: string, title?: string) {
+  if (!loading) return
+  loading.step = step
+  if (title) loading.title = title
+  if (onScreen !== 'loading') return
+  const spec = loadingSpec(loading.title, loading.host, loading.step, loading.frame)
+  mirror = spec
+  companion.update()
+  spec.texts.forEach((t, i) => {
+    const id = i + 2
+    void enqueue(() => bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: `t${id}`, content: t.text })))
+  })
+}
+
+function stopLoading() {
+  loading = null
+  clearInterval(spinTimer)
+}
+
 function textContainer(t: TextBox, id: number) {
   return new TextContainerProperty({
     xPosition: t.x, yPosition: t.y, width: t.w, height: t.h,
@@ -191,7 +292,7 @@ function textContainer(t: TextBox, id: number) {
     paddingLength: t.pad ?? 4,
     containerID: id, containerName: `t${id}`,
     content: t.text || ' ',
-    isEventCapture: 0,
+    isEventCapture: t.scroll ? 1 : 0,
   })
 }
 
@@ -218,8 +319,10 @@ async function renderDeck() {
   mirror = spec
   companion.update()
 
-  // An invisible full-screen layer, declared first so it sits behind
-  // everything, receives all taps and swipes for the page.
+  // A scrolling box takes the swipes itself. Otherwise an invisible
+  // full-screen layer, declared first so it sits behind everything,
+  // receives all taps and swipes for the page.
+  const scrolls = spec.texts.some(t => t.scroll)
   const capture = new TextContainerProperty({
     xPosition: 0, yPosition: 0, width: 576, height: 288,
     borderWidth: 0, borderColor: 0, paddingLength: 0,
@@ -227,7 +330,8 @@ async function renderDeck() {
     content: ' ',
     isEventCapture: 1,
   })
-  const texts = [capture, ...spec.texts.map((t, i) => textContainer(t, i + 2))]
+  deckTextId = scrolls ? 1 : 2
+  const texts = [...(scrolls ? [] : [capture]), ...spec.texts.map((t, i) => textContainer(t, i + deckTextId))]
   const firstImageId = texts.length + 1
   const images = spec.images.map(
     (im, i) =>
@@ -282,8 +386,9 @@ async function refreshDeck() {
   mirror = spec
   companion.update()
   for (const [i, t] of spec.texts.entries()) {
+    // Upgrading a scrolling box jumps it back to the top, so only changed text is sent.
     if (t.text === before.texts[i].text) continue
-    const id = i + 2
+    const id = i + deckTextId
     await enqueue(() =>
       bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: `t${id}`, content: t.text || ' ' })),
     )
@@ -541,6 +646,7 @@ function goTo(index: number) {
 
 /** Swipe: through list items, then onto the next screen once you pass the last one. */
 function step(delta: 1 | -1) {
+  if (loading && !status) return
   if (isManga() && !status) return mangaStep(delta)
   if (stepList(delta)) return
   goToScreen(screenIdx + delta)
@@ -548,7 +654,7 @@ function step(delta: 1 | -1) {
 
 /** Tap: open the selected list item, otherwise the menu. */
 function select() {
-  const s = isDeck() && !status ? screens[screenIdx] : undefined
+  const s = isDeck() && !status && !loading ? screens[screenIdx] : undefined
   if (s?.layout === 'list') {
     const url = s.items[selected.get(screenIdx) ?? 0]?.url
     if (url) void load(url, 0, true)
@@ -562,7 +668,11 @@ const back: MenuItem = { label: '< Back', run: () => void showContent() }
 
 function openMenu() {
   const items: MenuItem[] = []
-  if (doc && !status) {
+  // While a page opens, the old page's screens are about to be replaced.
+  const ready = doc && !status && !loading
+  if (loading && !status) {
+    items.push({ label: `Keep loading ${loading.host}`, run: () => void showContent() })
+  } else if (ready) {
     items.push({ label: 'Resume', run: () => void showContent() })
     if (isManga()) items.push(...mangaMenuItems())
   } else {
@@ -584,12 +694,12 @@ function openMenu() {
       },
     })
   }
-  if (doc && !status && !isManga()) {
+  if (ready && doc && !isManga()) {
     if (screens.length > 1) items.push({ label: `Contents (${screens.length})`, run: openContents })
     if (doc.links.length) items.push({ label: `Links on page (${doc.links.length})`, run: openLinks })
     if (position() > 0) items.push({ label: 'Back to start', run: () => goTo(0) })
   }
-  if (isManga() && !status && position() > 0) items.push({ label: 'Back to first page', run: () => goTo(0) })
+  if (ready && isManga() && position() > 0) items.push({ label: 'Back to first page', run: () => goTo(0) })
   if (recent.length) items.push({ label: `Recent pages (${recent.length})`, run: openRecent })
   items.push({ label: 'Exit', run: () => void bridge.shutDownPageContainer(1) })
   renderList('menu', doc ? `Menu · ${doc.site}` : 'Menu', items).catch(console.error)
@@ -624,14 +734,16 @@ async function load(url: string, restore = 0, pushHistory = false) {
   if (pushHistory && doc) {
     history = [...history, { url: doc.url, title: doc.title, position: position() }].slice(-MAX_HISTORY)
   }
-  status = `Building smart view of ${host}...\n\nReading the page and picking a layout. The first screen shows in a few seconds.`
+  status = null
+  loading = { title: host, host, step: 'Fetching the page', frame: 0 }
   companion.setBusy(true)
-  renderReader().catch(console.error)
+  renderLoading().catch(console.error)
 
   // Screens stream in; show the deck as soon as the one to open on arrives.
   let shown = false
   const reveal = () => {
     shown = true
+    stopLoading()
     status = null
     companion.setBusy(false)
     void showContent()
@@ -648,8 +760,11 @@ async function load(url: string, restore = 0, pushHistory = false) {
         selected.clear()
         strips.clear()
         remember({ url: doc.url, title: doc.title })
+        const p = event.page
+        loadingProgress(p.manga ? 'Opening the chapter' : `Read ${p.wordCount.toLocaleString()} words · picking a layout`, p.title)
       } else if ('kind' in event) {
         doc!.deck = { kind: event.kind, screens }
+        loadingProgress(`${event.kind.toUpperCase()} · writing the first screen`)
       } else if ('screens' in event) {
         doc!.deck ??= { kind: 'reference', screens }
         screens.push(...event.screens)
@@ -682,7 +797,10 @@ async function load(url: string, restore = 0, pushHistory = false) {
     failed = err instanceof Error ? err.message : String(err)
     companion.setError(failed)
   } finally {
-    if (seq === loadSeq) companion.setBusy(false)
+    if (seq === loadSeq) {
+      companion.setBusy(false)
+      stopLoading()
+    }
     mangaFromEnd = false
   }
   if (seq !== loadSeq) return

@@ -1,4 +1,4 @@
-import { measureTextWrap, pxTruncate } from '@evenrealities/pretext'
+import { getTextWidth, measureTextWrap, pxTruncate } from '@evenrealities/pretext'
 import type { GlassImage, Screen } from '../shared/types'
 
 // Turns one smart-mode screen into absolutely positioned G2 containers.
@@ -6,6 +6,10 @@ import type { GlassImage, Screen } from '../shared/types'
 // layer), 4 images, 12 total. Text has one font, one size, one brightness
 // and is always left-aligned, so hierarchy comes from borders: a bright
 // thick border is "selected/primary", a dim thin one is "secondary".
+//
+// Each layout may mark one box `scroll`: it holds the full text and takes the
+// swipes, so the firmware scrolls it a line at a time with its own scrollbar.
+// Swiping past its top or bottom edge flips to the previous/next screen.
 
 export interface TextBox {
   x: number
@@ -18,6 +22,8 @@ export interface TextBox {
   /** 0-15 greyscale; 13 bright, 5 dim. */
   color?: number
   radius?: number
+  /** Scrolls natively and receives swipes; at most one per page. */
+  scroll?: boolean
 }
 
 export interface ImageBox {
@@ -47,6 +53,8 @@ const BRIGHT = 13
 const DIM = 5
 const LIST_WITH_THUMBS = 3
 const LIST_TEXT_ROWS = 5
+// Rebuilds cap each container at 1000 characters; leave room for multi-byte glyphs.
+const SCROLL_CHARS = 900
 
 export const listVisible = (s: Extract<Screen, { layout: 'list' }>) =>
   s.items.some(it => it.image) ? LIST_WITH_THUMBS : LIST_TEXT_ROWS
@@ -81,6 +89,51 @@ export function fit(text: string, width: number, lines: number): string {
 function box(b: TextBox, build: (w: number) => string): TextBox {
   return { ...b, text: build(inner(b)) || ' ' }
 }
+
+const clean = (text: string) => text.replace(/\s+/g, ' ').trim()
+
+/**
+ * A box whose whole text scrolls on the glasses, cut only at the rebuild size
+ * limit. Sized to exactly `lines` rows so no row shows half cut off.
+ */
+function scrollBox(b: Omit<TextBox, 'h' | 'text'> & { lines: number }, build: (w: number) => string): TextBox {
+  const { lines, ...rest } = b
+  const h = lines * LINE + 2 * ((b.pad ?? 4) + (b.border ?? 0))
+  let t = build(inner(b)).trim()
+  if (t.length > SCROLL_CHARS) {
+    const cut = t.slice(0, SCROLL_CHARS)
+    t = cut.slice(0, Math.max(cut.lastIndexOf(' '), SCROLL_CHARS - 40)) + '...'
+  }
+  return { ...rest, h, text: t || ' ', scroll: true }
+}
+
+/**
+ * Entries wrapped here rather than by the firmware, so each entry's
+ * continuation lines hang under its text instead of under its marker.
+ */
+function hang(entries: { marker: string; text: string }[], width: number): string {
+  const space = getTextWidth(' ')
+  return entries
+    .map(({ marker, text }) => {
+      const indent = ' '.repeat(Math.round(getTextWidth(marker) / space))
+      const rows: string[] = []
+      let row = marker
+      for (const word of clean(text).split(' ')) {
+        const next = row === marker || row === indent ? row + word : `${row} ${word}`
+        if (measureTextWrap(next, width).lineCount > 1 && row !== marker && row !== indent) {
+          rows.push(row)
+          row = indent + word
+        } else {
+          row = next
+        }
+      }
+      rows.push(row)
+      return rows.join('\n')
+    })
+    .join('\n')
+}
+
+const fitsOneLine = (text: string, width: number) => measureTextWrap(clean(text), width).lineCount <= 1
 
 /** Title and position in one box, for layouts that need every container. */
 const compactHeader = (title: string, position: string): TextBox =>
@@ -126,19 +179,15 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
       } else {
         texts.push(box({ x: 0, y: 0, w: 576, h: 144, text: '', pad: 6 }, w => `${fit(s.headline, w, 3)}\n${line(s.source, w)}`))
       }
-      texts.push(box({ x: 0, y: 150, w: 576, h: 102, text: '', pad: 8, border: 2, color: BRIGHT, radius: 10 }, w => fit(s.summary, w, 3)))
+      texts.push(scrollBox({ x: 0, y: 150, w: 576, lines: 3, pad: 8, border: 2, color: BRIGHT, radius: 10 }, () => clean(s.summary)))
       texts.push(footer(nextHint(ctx), 256, ctx.position))
       break
     }
 
     case 'points': {
       texts.push(...header(`■ ${s.heading}`, ctx.position))
-      const bodyH = s.quote ? 148 : 218
-      const maxPoints = Math.floor((bodyH - 8) / LINE)
       texts.push(
-        box({ x: 0, y: 34, w: 576, h: bodyH, text: '' }, w =>
-          s.points.slice(0, maxPoints).map(p => line(`▶ ${p}`, w)).join('\n'),
-        ),
+        scrollBox({ x: 0, y: 34, w: 576, lines: s.quote ? 5 : 8, pad: 3 }, w => hang(s.points.map(p => ({ marker: '▶ ', text: p })), w)),
       )
       if (s.quote) {
         texts.push(
@@ -192,7 +241,7 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
           `${line(s.rating || 'No rating', w)}\n${line(s.stock || ' ', w)}`,
         ),
       )
-      texts.push(box({ x: 0, y: 150, w: 576, h: 104, text: '', pad: 4 }, w => fit(s.description, w, 3)))
+      texts.push(scrollBox({ x: 0, y: 150, w: 576, lines: 3, pad: 4 }, () => clean(s.description)))
       texts.push(footer(nextHint(ctx), 256, ctx.position))
       break
     }
@@ -202,19 +251,20 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
       let tileH: number
       if (s.image) {
         images.push({ x: 0, y: 0, image: s.image })
-        texts.push(box({ x: 292, y: 0, w: 284, h: 144, text: '', pad: 2 }, w => `${line(s.heading, w)}\n${fit(s.intro, w, 4)}`))
+        texts.push(scrollBox({ x: 292, y: 0, w: 284, lines: 5, pad: 2 }, () => `${clean(s.heading)}\n${clean(s.intro)}`))
+        // Two wide rows of two, so labels and values each stay on one line.
         tileY = 150
-        tileH = 138
+        tileH = 66
       } else {
         texts.push(...header(`■ ${s.heading}`, ctx.position))
-        texts.push(box({ x: 0, y: 34, w: 576, h: 60, text: '' }, w => fit(s.intro, w, 2)))
+        texts.push(scrollBox({ x: 0, y: 34, w: 576, lines: 2 }, () => clean(s.intro)))
         tileY = 96
         tileH = 94
       }
       const tiles = s.tiles.slice(0, 4)
       tiles.forEach((t, i) => {
         const tile: TextBox = s.image
-          ? { x: i * 145, y: tileY, w: i === 3 ? 141 : 140, h: tileH, text: '', pad: 6, border: 1, color: BRIGHT, radius: 10 }
+          ? { x: (i % 2) * 292, y: tileY + Math.floor(i / 2) * (tileH + 6), w: 284, h: tileH, text: '', pad: 4, border: 1, color: DIM, radius: 10 }
           : { x: (i % 2) * 292, y: tileY + Math.floor(i / 2) * (tileH + 4), w: 284, h: tileH, text: '', pad: 4, border: 1, color: BRIGHT, radius: 10 }
         const valueLines = Math.floor((tile.h - 2 * (tile.pad! + 1)) / LINE) - 1
         texts.push(box(tile, w => `${line(t.label.toUpperCase(), w)}\n${fit(t.value, w, Math.max(1, valueLines))}`))
@@ -236,7 +286,7 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
 
     case 'split': {
       texts.push(...header(s.heading, ctx.position))
-      texts.push(box({ x: 0, y: 34, w: 576, h: 74, text: '', pad: 4, border: 2, color: BRIGHT, radius: 10 }, w => fit(s.verdict, w, 2)))
+      texts.push(scrollBox({ x: 0, y: 34, w: 576, lines: 2, pad: 4, border: 2, color: BRIGHT, radius: 10 }, () => clean(s.verdict)))
       for (const [i, side] of [s.left, s.right].entries()) {
         texts.push(
           box({ x: i * 292, y: 114, w: 284, h: 140, text: '', pad: 4, border: 1, color: DIM, radius: 10 }, w =>
@@ -251,7 +301,7 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
     case 'stat': {
       if (s.valueImage) images.push({ x: 0, y: 0, image: s.valueImage })
       else texts.push({ x: 0, y: 0, w: 200, h: 100, text: s.value, pad: 8 })
-      texts.push(box({ x: 212, y: 4, w: 364, h: 100, text: '' }, w => s.lines.slice(0, 3).map(l => line(l, w)).join('\n')))
+      texts.push(scrollBox({ x: 212, y: 4, w: 364, lines: 3 }, w => hang(s.lines.map(l => ({ marker: '', text: l })), w)))
       let tilesY = 108
       if (s.alert) {
         texts.push(
@@ -273,10 +323,18 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
 
     case 'timeline': {
       texts.push(...header(`■ ${s.heading}`, ctx.position))
-      const events = s.events.slice(0, 7)
-      texts.push({ x: 0, y: 40, w: 92, h: 214, text: events.map(e => line(e.date, 76)).join('\n') || ' ', pad: 4 })
-      texts.push({ x: 96, y: 46, w: 3, h: Math.max(30, events.length * LINE - 6), text: ' ', pad: 0, border: 1, color: BRIGHT, radius: 1 })
-      texts.push(box({ x: 108, y: 40, w: 468, h: 214, text: '' }, w => events.map(e => line(e.text, w)).join('\n')))
+      // Date and text columns only line up while every event is one line;
+      // longer timelines become a single scrolling list instead.
+      if (s.events.length <= 7 && s.events.every(e => fitsOneLine(e.text, 460))) {
+        const events = s.events
+        texts.push({ x: 0, y: 40, w: 92, h: 214, text: events.map(e => line(e.date, 76)).join('\n') || ' ', pad: 4 })
+        texts.push({ x: 96, y: 46, w: 3, h: Math.max(30, events.length * LINE - 6), text: ' ', pad: 0, border: 1, color: BRIGHT, radius: 1 })
+        texts.push(box({ x: 108, y: 40, w: 468, h: 214, text: '' }, w => events.map(e => line(e.text, w)).join('\n')))
+      } else {
+        texts.push(scrollBox({ x: 0, y: 36, w: 576, lines: 8, pad: 2 }, w =>
+            hang(s.events.map(e => ({ marker: `${clean(e.date)}: `, text: e.text })), w),
+          ))
+      }
       texts.push(footer(nextHint(ctx)))
       break
     }
@@ -312,8 +370,9 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
       texts.push(box({ x: 0, y: 0, w: 576 - dotsW, h: 34, text: '', pad: 3 }, w => line(`■ ${s.heading}`, w)))
       texts.push({ x: 576 - dotsW, y: 0, w: dotsW, h: 34, text: dots, pad: 3 })
       texts.push(
-        box({ x: 0, y: 40, w: 576, h: 150, text: '', pad: 8, border: 3, color: BRIGHT, radius: 10 }, w =>
-          `STEP ${s.index} OF ${s.total}\n${line(s.title, w)}\n${fit(s.detail, w, 2)}`,
+        scrollBox(
+          { x: 0, y: 40, w: 576, lines: 5, pad: 8, border: 3, color: BRIGHT, radius: 10 },
+          () => `STEP ${s.index} OF ${s.total}\n${clean(s.title)}\n${clean(s.detail)}`,
         ),
       )
       texts.push(
@@ -327,12 +386,19 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
 
     case 'tagged': {
       texts.push(...header(`■ ${s.heading}`, ctx.position))
-      const rows = s.rows.slice(0, 4)
-      rows.forEach((r, i) => {
-        texts.push(box({ x: 0, y: 40 + i * 54, w: 112, h: 48, text: '', pad: 6, border: 1, color: BRIGHT, radius: 10 }, w => line(r.tag.toUpperCase(), w)))
-      })
-      // One box for all row texts: blank lines keep each on its tag's 54px pitch.
-      texts.push(box({ x: 120, y: 44, w: 456, h: 216, text: '', pad: 6 }, w => rows.map(r => line(r.text, w)).join('\n\n')))
+      // Tag chips only line up while every row is one line; otherwise one scrolling list.
+      if (s.rows.length <= 4 && s.rows.every(r => fitsOneLine(r.text, 444))) {
+        const rows = s.rows
+        rows.forEach((r, i) => {
+          texts.push(box({ x: 0, y: 40 + i * 54, w: 112, h: 48, text: '', pad: 6, border: 1, color: BRIGHT, radius: 10 }, w => line(r.tag.toUpperCase(), w)))
+        })
+        // One box for all row texts: blank lines keep each on its tag's 54px pitch.
+        texts.push(box({ x: 120, y: 44, w: 456, h: 216, text: '', pad: 6 }, w => rows.map(r => line(r.text, w)).join('\n\n')))
+      } else {
+        texts.push(scrollBox({ x: 0, y: 36, w: 576, lines: 8, pad: 2 }, w =>
+            hang(s.rows.map(r => ({ marker: `[${clean(r.tag).toUpperCase()}] `, text: r.text })), w),
+          ))
+      }
       break
     }
   }

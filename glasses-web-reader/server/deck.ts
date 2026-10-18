@@ -6,7 +6,8 @@ import { bigText, fetchGlassImage, type Treatment } from './images'
 // Smart mode: Claude decides what kind of site this is and lays the page out
 // as a short deck of screens built for that kind of site (a headline card
 // for news, boxed product rows for shopping, key cards for software docs…).
-// Every length limit below matches what the glasses renderer can show.
+// Every length limit below matches what the glasses renderer can show; fields
+// marked "scrolls" sit in a box the firmware scrolls, so they can run longer.
 // The reply is streamed and each screen is sent on as soon as it is complete,
 // so the wearer sees the first screen long before Claude finishes the deck.
 
@@ -25,18 +26,18 @@ const FORMAT = `Reply with only a JSON object, no prose and no code fence:
 {"kind": "news"|"shop"|"software"|"forum"|"live"|"reference", "screens": [screen, ...]}
 
 Each screen is one of these (character limits in parentheses):
-{"layout":"headline","headline":(80),"source":"outlet · site · date"(40),"summary":"what happened"(140),"image":lead photo number or -1}
-{"layout":"points","heading":(28),"points":[3-5 facts (46 each)],"quote_text":direct quote (100) or "","quote_by":who (40) or ""}
+{"layout":"headline","headline":(80),"source":"outlet · site · date"(40),"summary":"what happened", scrolls (400),"image":lead photo number or -1}
+{"layout":"points","heading":(28),"points":[3-8 facts (90 each)], scrolls,"quote_text":direct quote (100) or "","quote_by":who (40) or ""}
 {"layout":"list","heading":(36),"items":[3-60 of {"title":(36),"meta":"price · rating" or "site · points · comments"(40),"link":link number or -1,"image":thumbnail number or -1}]}
-{"layout":"product","title":(40),"subtitle":"category · brand"(40),"price":(12),"rating":as a number out of 5 with review count if shown, e.g. "4.5/5 (210)"(14) or "","stock":(16) or "","description":(110),"image":product image number or -1}
-{"layout":"tiles","heading":(36),"intro":what it is (60),"tiles":[exactly 4 of {"label":UPPERCASE (10),"value":(28)}],"image":image number or -1}
+{"layout":"product","title":(40),"subtitle":"category · brand"(40),"price":(12),"rating":as a number out of 5 with review count if shown, e.g. "4.5/5 (210)"(14) or "","stock":(16) or "","description":scrolls (400),"image":product image number or -1}
+{"layout":"tiles","heading":(36),"intro":what it is, scrolls (200),"tiles":[exactly 4 of {"label":UPPERCASE (10),"value":(28)}],"image":image number or -1}
 {"layout":"keys","heading":(30),"keys":[4-6 of {"key":shortcut or command (14),"action":(24)}]}
-{"layout":"split","heading":(40),"verdict":one-sentence takeaway (90),"left_label":e.g. AGREE (10),"left_text":(70),"right_label":e.g. PUSHBACK (10),"right_text":(70)}
-{"layout":"stat","value":key number with unit e.g. 84°F (6),"lines":[1-3 context lines (28 each)],"alert_title":(24) or "","alert_detail":(36) or "","tiles":[0-4 of {"label":(10),"value":(24)}]}
-{"layout":"timeline","heading":(36),"events":[3-7 of {"date":(6),"text":(40)}] oldest first}
+{"layout":"split","heading":(40),"verdict":the takeaway, scrolls (200),"left_label":e.g. AGREE (10),"left_text":(70),"right_label":e.g. PUSHBACK (10),"right_text":(70)}
+{"layout":"stat","value":key number with unit e.g. 84°F (6),"lines":[1-6 context lines (28 each)], scrolls,"alert_title":(24) or "","alert_detail":(36) or "","tiles":[0-4 of {"label":(10),"value":(24)}]}
+{"layout":"timeline","heading":(36),"events":[3-12 of {"date":(6),"text":(60)}] oldest first; 7 or fewer one-line events show as two columns, more scrolls}
 {"layout":"compare","heading":(40),"columns":[2-3 of {"name":(12),"lines":[2-3 lines (22 each)]}]}
-{"layout":"steps","heading":(30),"steps":[2-10 of {"title":(40),"detail":(80)}]}
-{"layout":"tagged","heading":(36),"rows":[3-4 of {"tag":UPPERCASE (8),"text":(40)}]}`
+{"layout":"steps","heading":(30),"steps":[2-10 of {"title":(40),"detail":scrolls (240)}]}
+{"layout":"tagged","heading":(36),"rows":[3-8 of {"tag":UPPERCASE (8),"text":(60)}]; 4 or fewer one-line rows show as tag chips, more scrolls}`
 
 const SYSTEM = `You turn a web page into a short deck of screens for Even Realities G2 smart glasses: a 576x288 green-on-black heads-up display with one small font, no bold, no colors, about 9 lines of text. The wearer swipes between screens and glances at them while doing something else.
 
@@ -49,7 +50,9 @@ First decide what kind of site this is and what the wearer wants from it:
 - live: weather, scores, prices or status. Start with a stat screen (the single most important number), then other screens as needed.
 - reference: wikis and explainers. Start with points (the gist), then whichever fit: tiles (fact sheet), timeline, compare, tagged (pros/cons, risks, categories), steps.
 
-Use 2 to 8 screens. Pick each layout for the content, not for variety. Use only facts that are on the page; never invent prices, numbers or quotes. Write plain, short, concrete phrases; drop filler and marketing. Respect every character limit; text over the limit is cut off on the glasses. No markdown, no emoji. Use "·" to join short facts on one line.
+Only cover what the wearer opened this page for. Leave out site chrome and fine print: terms of service, privacy and cookie notices, copyright lines, legal disclaimers, newsletter or account prompts, "related" or "you may also like" blocks, navigation and footer links, and ads. Treat these as invisible unless the page itself is a legal or policy page (then summarize what it means for the reader). If a section would not help someone glancing at the page, drop it.
+
+Use 2 to 6 screens; fewer is better when the page is thin. Pick each layout for the content, not for variety. Use only facts that are on the page; never invent prices, numbers or quotes. Write plain, short, concrete phrases; drop filler and marketing. Respect every character limit; text over the limit is cut off on the glasses. A field marked "scrolls" can run longer than the screen: the wearer swipes through it a line at a time, so put the most important fact first and use the extra room only when the page has more worth saying. No markdown, no emoji. Use "·" to join short facts on one line.
 
 Images and links are referenced by their [number] from the lists given with the page; use -1 when there is none. Only reference an image that really shows the subject (lead photo, product shot, item thumbnail), never logos or ads.
 
@@ -252,14 +255,14 @@ function screenResolver(page: CondensedPage, images: ImageCandidate[], links: Li
           layout: 'headline',
           headline: clean(s.headline, 90),
           source: clean(s.source, 44),
-          summary: clean(s.summary, 160),
+          summary: clean(s.summary, 420),
           image: await image(s.image, 'headline'),
         }
       case 'points':
         return {
           layout: 'points',
           heading: clean(s.heading, 32),
-          points: (s.points ?? []).slice(0, 5).map((p: string) => clean(p, 52)),
+          points: (s.points ?? []).slice(0, 8).map((p: string) => clean(p, 100)),
           quote: s.quote_text ? { text: clean(s.quote_text, 110), by: clean(s.quote_by, 44) } : undefined,
         }
       case 'list': {
@@ -284,7 +287,7 @@ function screenResolver(page: CondensedPage, images: ImageCandidate[], links: Li
           price: clean(s.price, 14),
           rating: stars(s.rating),
           stock: clean(s.stock, 18),
-          description: clean(s.description, 120),
+          description: clean(s.description, 420),
           url: page.url,
           image: await image(s.image, 'product'),
         }
@@ -292,7 +295,7 @@ function screenResolver(page: CondensedPage, images: ImageCandidate[], links: Li
         return {
           layout: 'tiles',
           heading: clean(s.heading, 40),
-          intro: clean(s.intro, 64),
+          intro: clean(s.intro, 210),
           tiles: (s.tiles ?? []).slice(0, 4).map((t: any) => ({ label: clean(t.label, 12), value: clean(t.value, 30) })),
           image: await image(s.image, 'tiles'),
         }
@@ -306,7 +309,7 @@ function screenResolver(page: CondensedPage, images: ImageCandidate[], links: Li
         return {
           layout: 'split',
           heading: clean(s.heading, 44),
-          verdict: clean(s.verdict, 100),
+          verdict: clean(s.verdict, 210),
           left: { label: clean(s.left_label, 12), text: clean(s.left_text, 80) },
           right: { label: clean(s.right_label, 12), text: clean(s.right_text, 80) },
         }
@@ -315,7 +318,7 @@ function screenResolver(page: CondensedPage, images: ImageCandidate[], links: Li
         return {
           layout: 'stat',
           value,
-          lines: (s.lines ?? []).slice(0, 3).map((l: string) => clean(l, 32)),
+          lines: (s.lines ?? []).slice(0, 6).map((l: string) => clean(l, 32)),
           alert: s.alert_title ? { title: clean(s.alert_title, 26), detail: clean(s.alert_detail, 40) } : undefined,
           tiles: (s.tiles ?? []).slice(0, 4).map((t: any) => ({ label: clean(t.label, 12), value: clean(t.value, 26) })),
           valueImage: value ? await bigText(value, 200, 100).catch(() => undefined) : undefined,
@@ -325,7 +328,7 @@ function screenResolver(page: CondensedPage, images: ImageCandidate[], links: Li
         return {
           layout: 'timeline',
           heading: clean(s.heading, 40),
-          events: (s.events ?? []).slice(0, 7).map((e: any) => ({ date: clean(e.date, 7), text: clean(e.text, 44) })),
+          events: (s.events ?? []).slice(0, 12).map((e: any) => ({ date: clean(e.date, 7), text: clean(e.text, 66) })),
         }
       case 'compare':
         return {
@@ -345,7 +348,7 @@ function screenResolver(page: CondensedPage, images: ImageCandidate[], links: Li
           index: i + 1,
           total: steps.length,
           title: clean(st.title, 44),
-          detail: clean(st.detail, 90),
+          detail: clean(st.detail, 250),
           next: steps[i + 1] ? clean(steps[i + 1].title, 44) : undefined,
         }))
       }
@@ -353,7 +356,7 @@ function screenResolver(page: CondensedPage, images: ImageCandidate[], links: Li
         return {
           layout: 'tagged',
           heading: clean(s.heading, 40),
-          rows: (s.rows ?? []).slice(0, 4).map((r: any) => ({ tag: clean(r.tag, 9), text: clean(r.text, 44) })),
+          rows: (s.rows ?? []).slice(0, 8).map((r: any) => ({ tag: clean(r.tag, 9), text: clean(r.text, 66) })),
         }
       default:
         return null
