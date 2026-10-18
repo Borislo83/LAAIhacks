@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { BackendClient } from '../src/lensos/client'
-import { AgentCard, CARD_LINES, DRAFT_TAP_GRACE_MS, NO_ANSWER, askAgents, answerFor, paginate, sendDraft, type AgentAnswer } from '../src/lensos/agents'
+import { AgentCard, CARD_LINES, DRAFT_TAP_GRACE_MS, NO_ANSWER, askAgents, answerFor, paginate, plain, sendDraft, type AgentAnswer } from '../src/lensos/agents'
 import type { AgentCall, ChatReply } from '../src/lensos/types'
 
 const call = (kind: string, result: Record<string, unknown> | null, error: string | null = null): AgentCall =>
@@ -154,4 +154,12 @@ test('answers page with swipes, close on tap, and only hands-free answers fade',
   assert.equal(card.text, 'two')
   assert.equal(card.gesture('down'), 'close')
   assert.equal(new AgentCard(answer, false).gesture('tap'), 'close')
+})
+
+test('model Markdown is shown as plain text on the lens', () => {
+  assert.equal(plain('the **Bose QuietComfort Ultra** and __Sennheiser__'), 'the Bose QuietComfort Ultra and Sennheiser')
+  assert.equal(plain('## Verdict\n* **Noise Cancelling:** Bose wins'), 'Verdict\n- Noise Cancelling: Bose wins')
+  assert.equal(plain('compare: * Noise * Battery'), 'compare:\n- Noise\n- Battery')
+  assert.equal(plain('see [RTINGS](https://www.rtings.com/x) or `code`'), 'see RTINGS (https://www.rtings.com/x) or code')
+  assert.equal(plain('5 * 3 = 15'), '5 * 3 = 15')
 })

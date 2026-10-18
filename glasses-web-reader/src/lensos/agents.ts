@@ -44,9 +44,21 @@ export function wrap(text: string, width = CARD_W): string[] {
   return rows
 }
 
+/** Model replies arrive as Markdown; the lens shows plain text (no **, #, or link syntax). */
+export function plain(text: string): string {
+  return text
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1 ($2)')
+    .replace(/(\*\*|__)(?=\S)([^*_\n]+?)\1/g, '$2')
+    .replace(/`([^`\n]+)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[*+]\s+/gm, '- ')
+    // An inline list run together on one line ("compare: * Noise ... * Battery"), not "5 * 3".
+    .split('\n').map(line => /:\s\*\s+\S/.test(line) ? line.replace(/\s\*\s+(?=\S)/g, '\n- ') : line).join('\n')
+}
+
 /** Pages of `CARD_LINES` rows, each under the title line. */
 export function paginate(title: string, body: string): string[] {
-  const rows = wrap(body)
+  const rows = wrap(plain(body))
   const heading = pxTruncate(title, CARD_W)
   const pages: string[] = []
   for (let i = 0; i < Math.max(rows.length, 1) && pages.length < MAX_PAGES; i += CARD_LINES) {
