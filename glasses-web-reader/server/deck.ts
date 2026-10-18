@@ -47,7 +47,7 @@ First decide what kind of site this is and what the wearer wants from it:
 - catalogs (Goodreads, stores, search results): when a <products> list is given, those items — with their image and link numbers — MUST be the list. Do not invent extras, drop covers, or replace it with a text-only list.
 - software: a product or tool site, docs or a creative app. Start with tiles (what it does, with an image if there is a good one); keys for keyboard shortcuts or commands; steps for how-tos; compare for plans or editions.
 - forum: a feed (Hacker News, Reddit, forums) becomes a list (title, then site, points and comment count; link each item to its discussion or article). A discussion thread becomes a split screen (the overall verdict, what people agree on vs the main pushback), then points for other notable sub-threads.
-- live: weather, scores, prices or status. Start with a stat screen (the single most important number), then other screens as needed.
+- live: weather, scores, prices or status. Start with a stat screen (the single most important number), then other screens as needed. For a restaurant, dining hall, cafe or store with opening hours, the stat value is the current status or next opening time (e.g. Open, 5 PM), the tiles are the hours with one per meal or period (label BREAKFAST, value 7:00-10:00 a.m.), and the lines hold the date, location and anything else worth a glance; then a list of what is being served today.
 - reference: wikis and explainers. Start with points (the gist), then whichever fit: tiles (fact sheet), timeline, compare, tagged (pros/cons, risks, categories), steps.
 
 Only cover what the wearer opened this page for. Leave out site chrome and fine print: terms of service, privacy and cookie notices, copyright lines, legal disclaimers, newsletter or account prompts, "related" or "you may also like" blocks, navigation and footer links, and ads. Treat these as invisible unless the page itself is a legal or policy page (then summarize what it means for the reader). If a section would not help someone glancing at the page, drop it.
@@ -209,7 +209,7 @@ function stars(rating: unknown): string {
 const IMAGE_BOX: Record<string, [number, number, Treatment]> = {
   headline: [288, 144, 'auto'],
   tiles: [288, 144, 'auto'],
-  product: [116, 144, 'auto'],
+  product: [200, 144, 'auto'],
   list: [48, 72, 'auto'],
 }
 

@@ -7,7 +7,7 @@ import { extract } from './extract'
 import { FetchError, safeFetch } from './safe-fetch'
 import { buildDeck } from './deck'
 import { renderPage } from './render'
-import { isMangaDex, mangaPage, mangaStrip, type MangaStyle } from './manga'
+import { isMangaDex, mangaPage, mangaStrip } from './manga'
 import type { Extracted } from './extract'
 import { orchestratorGateway } from './orchestrator'
 import { recommendationRoutes } from './recommendations'
@@ -234,15 +234,14 @@ app.get('/api/search', async c => {
   }
 })
 
-// GET /api/manga/strip?chapter=<id>&page=<0-based>&strip=<n, or -1 for the last>&style=natural|lines
+// GET /api/manga/strip?chapter=<id>&page=<0-based>&strip=<n, or -1 for the last>
 app.get('/api/manga/strip', async c => {
   const chapter = c.req.query('chapter') ?? ''
   const page = Number(c.req.query('page') ?? 0)
   const strip = Number(c.req.query('strip') ?? 0)
-  const style: MangaStyle = c.req.query('style') === 'lines' ? 'lines' : 'natural'
   if (!Number.isInteger(page) || page < 0 || !Number.isInteger(strip)) return c.json({ error: 'Bad page or strip' }, 400)
   try {
-    return c.json(await mangaStrip(chapter, page, strip, style))
+    return c.json(await mangaStrip(chapter, page, strip))
   } catch (err) {
     const status = err instanceof FetchError ? err.status : 500
     const message = err instanceof Error ? err.message : String(err)
