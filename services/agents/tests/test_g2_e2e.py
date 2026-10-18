@@ -392,7 +392,8 @@ async def test_page_change_invalidates_old_actions(base_url, tmp_path):
         assert await g2.decide(old) is None
         assert g2.notices == ["That option is no longer available."]
         assert g2.display["page"]["page_id"] == "page-bose"
-        assert all(a["status"] == "invalidated" for a in g2.display["actions"])
+        # Invalidated actions are left out of the display entirely.
+        assert g2.display["actions"] == []
         assert render(g2.display).items == [] and g2.display["mode"] == "summary"
     assert await events(base_url, session_id) == []
 
