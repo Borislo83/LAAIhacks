@@ -34,10 +34,28 @@ test('gateway preserves bearer, marks forwarded requests and refuses non-reader 
   assert.equal(calls[0].headers.get('authorization'), 'Bearer user-token')
   assert.ok(calls[0].headers.has('x-forwarded-for'))
   assert.equal(calls[0].redirect, 'error')
-  assert.equal((await app.request('/api/backend/v1/chat', { method: 'POST', headers: { Authorization: 'Bearer user-token' } })).status, 404)
+  assert.equal((await app.request('/api/backend/v1/chat/stream', { method: 'POST', headers: { Authorization: 'Bearer user-token' } })).status, 404)
   assert.equal((await app.request('/api/backend/v1/tasks')).status, 401)
   assert.equal((await app.request('/api/backend/v1/tasks', { headers: { Authorization: 'Bearer user-token', Origin: 'https://evil.example' } })).status, 403)
   assert.equal(calls.length, 1)
+})
+
+test('gateway forwards voice chat and confirmed message sends, and nothing else of chat or messages', async () => {
+  const calls: Request[] = []
+  const transport: typeof fetch = async (input, init) => { calls.push(new Request(input, init)); return Response.json({ reply: 'ok', calls: [] }) }
+  const app = new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001', transport }))
+  const post = (path: string, method = 'POST') => app.request(`/api/backend${path}`, { method,
+    headers: { Authorization: 'Bearer user-token', 'Content-Type': 'application/json' }, body: method === 'GET' ? undefined : '{"x":1}' })
+  assert.equal((await post('/v1/chat')).status, 200)
+  assert.equal((await post('/v1/messages/send')).status, 200)
+  assert.deepEqual(calls.map(c => `${c.method} ${new URL(c.url).pathname}`), ['POST /v1/chat', 'POST /v1/messages/send'])
+  assert.equal(await calls[1].text(), '{"x":1}')
+  for (const [path, method] of [['/v1/chat', 'GET'], ['/v1/chat/stream', 'POST'], ['/v1/messages', 'POST'],
+    ['/v1/messages/send/x', 'POST'], ['/v1/agents/news/stream', 'POST'], ['/v1/buyer/prepare/stream', 'POST']]) {
+    assert.equal((await post(path, method)).status, 404, `${method} ${path}`)
+  }
+  assert.equal(calls.length, 2)
+  assert.equal((await app.request('/api/backend/v1/messages/send', { method: 'POST', headers: { Authorization: 'Bearer demo-all' }, body: '{}' })).status, 401)
 })
 
 test('gateway rejects insecure remote upstreams and public demo tokens', async () => {

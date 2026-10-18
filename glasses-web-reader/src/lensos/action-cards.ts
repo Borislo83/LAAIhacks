@@ -40,6 +40,12 @@ export function apiActionCards(send: (intent: DecisionIntent) => void, changed =
       if (!pending) { mode = display?.actions.length ? 'actions' : 'summary'; selected = 0; reviewPage = 0; }
       changed();
     },
+    /** Opens one action's review (from the popup); approving still needs review, confirm and a tap. */
+    focus(actionId: string) {
+      const index = display?.actions.findIndex(a => a.action_id === actionId) ?? -1;
+      if (!pending && index >= 0) { selected = index; mode = 'detail'; reviewPage = 0; }
+      changed();
+    },
     show(next: DisplayState) {
       if (!display || next.revision !== display.revision) {
         mode = 'summary'; selected = 0; reviewPage = 0; notice = '';
