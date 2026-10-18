@@ -169,3 +169,21 @@ test('the packaged Even Hub app (a non-web origin) is accepted with a valid pair
   assert.equal((await get('null', 'Bearer pair-wrong')).status, 401)
   assert.equal((await get('https://evil.example', `Bearer pair-${secret}`)).status, 403)
 })
+
+test('bookmarks are one list on the laptop for every signed-in device', async () => {
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const file = `${mkdtempSync(`${tmpdir()}/bm-`)}/bookmarks.json`
+  const secret = 'b'.repeat(32)
+  let peer = '127.0.0.1'
+  const app = new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001', devToken: 'demo-all', pairSecret: secret, peerAddress: () => peer, bookmarksFile: file }))
+  const put = (auth: string, bookmarks: unknown) => app.request('/api/backend/bookmarks', { method: 'PUT', headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ bookmarks }) })
+  const get = (auth: string) => app.request('/api/backend/bookmarks', { headers: { Authorization: auth } })
+  const mark = { url: 'https://www.apple.com/airpods-pro/', title: 'AirPods Pro 3', position: 2 }
+  assert.equal((await put(`Bearer pair-${secret}`, [mark])).status, 200)          // the glasses save it
+  assert.deepEqual((await (await get('Bearer local-dev')).json()).bookmarks, [mark]) // the simulator sees it
+  assert.equal((await put(`Bearer pair-${secret}`, [{ url: 'javascript:alert(1)', title: 'x', position: 0 }])).status, 400)
+  peer = '203.0.113.9'
+  assert.equal((await get('Bearer local-dev')).status, 401)
+  assert.equal((await get('Bearer someone')).status, 401)
+})

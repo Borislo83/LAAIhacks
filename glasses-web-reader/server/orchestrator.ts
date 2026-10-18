@@ -4,6 +4,8 @@ import { bodyLimit } from 'hono/body-limit'
 import type { Context } from 'hono'
 import { getConnInfo } from '@hono/node-server/conninfo'
 import { execFile } from 'node:child_process'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { LAPTOP_URLS } from '../shared/routes'
 
 interface Options {
@@ -19,6 +21,21 @@ interface Options {
   peerAddress?: (c: Context) => string | undefined
   /** Opens a URL on this laptop (macOS `open`). Injectable for tests. */
   openOnLaptop?: (url: string) => Promise<void>
+  /** Where the shared bookmarks live (one list for the simulator and the glasses). */
+  bookmarksFile?: string
+}
+
+interface Bookmark { url: string; title: string; position: number; where?: string }
+/** The bookmark list a device sent, kept to sane sizes; null when it isn't one. */
+function cleanBookmarks(value: unknown): Bookmark[] | null {
+  if (!Array.isArray(value) || value.length > 200) return null
+  const out: Bookmark[] = []
+  for (const b of value) {
+    if (!b || typeof b.url !== 'string' || !/^https?:\/\//i.test(b.url) || b.url.length > 2000 || typeof b.title !== 'string') return null
+    out.push({ url: b.url, title: b.title.slice(0, 300), position: Number.isFinite(b.position) ? Math.max(0, Math.floor(b.position)) : 0,
+      ...(typeof b.where === 'string' ? { where: b.where.slice(0, 120) } : {}) })
+  }
+  return out
 }
 
 const macOpen = (url: string) => new Promise<void>((resolve, reject) =>
@@ -77,6 +94,27 @@ export function orchestratorGateway(options: Options) {
   gateway.get('/dev', c => c.json({ local: !!options.devToken && isLocal(c), pairing: !!pairBearer }, 200, { 'Cache-Control': 'no-store' }))
   // Opens one of the hardcoded routes (YouTube, Spotify, the AirPods page) on this laptop,
   // for this machine or a paired phone only. Any other URL is refused.
+  // One bookmark list on the laptop, shared by every device signed in to it (this machine's
+  // simulator and the paired glasses), so a page saved on one shows on the other.
+  const bookmarksFile = options.bookmarksFile ?? '.runtime/bookmarks.json'
+  const signedIn = (c: Context) => {
+    const auth = c.req.header('authorization') ?? ''
+    return (auth === LOCAL_DEV_BEARER && !!options.devToken && isLocal(c)) || paired(auth)
+  }
+  gateway.get('/bookmarks', async c => {
+    if (!signedIn(c)) return c.json({ error: 'Sign in to the laptop first.' }, 401)
+    const saved = cleanBookmarks(JSON.parse(await readFile(bookmarksFile, 'utf8').catch(() => '[]')))
+    return c.json({ bookmarks: saved ?? [] }, 200, { 'Cache-Control': 'no-store' })
+  })
+  gateway.put('/bookmarks', async c => {
+    if (!signedIn(c)) return c.json({ error: 'Sign in to the laptop first.' }, 401)
+    const body = await c.req.json<{ bookmarks?: unknown }>().catch(() => ({ bookmarks: undefined }))
+    const list = cleanBookmarks(body.bookmarks)
+    if (!list) return c.json({ error: 'Not a bookmark list.' }, 400)
+    await mkdir(dirname(bookmarksFile), { recursive: true })
+    await writeFile(bookmarksFile, JSON.stringify(list))
+    return c.json({ bookmarks: list }, 200, { 'Cache-Control': 'no-store' })
+  })
   gateway.post('/laptop/open', async c => {
     const origin = c.req.header('origin')
     if (origin && /^https?:/i.test(origin) && ![new URL(c.req.url).origin, ...(options.origins ?? [])].includes(origin)) return c.json({ error: 'Origin not allowed' }, 403)

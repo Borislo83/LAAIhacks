@@ -1780,6 +1780,23 @@ async function flushSave() {
   await enqueue(() => bridge.setLocalStorage(STATE_KEY, JSON.stringify(state))).catch(() => {})
   await enqueue(() => bridge.setLocalStorage(BOOKMARKS_KEY, JSON.stringify(bookmarks))).catch(() => {})
   await enqueue(() => bridge.setLocalStorage(RECENT_KEY, JSON.stringify(recent))).catch(() => {})
+  // The laptop keeps one list for the simulator and the glasses.
+  void backend.agents?.saveSharedBookmarks(bookmarks).catch(() => {})
+}
+
+/** Merges the laptop's shared bookmarks with this device's, then saves the union on both. */
+async function syncBookmarks() {
+  const client = backend.agents
+  if (!client) return
+  try {
+    const { bookmarks: shared } = await client.sharedBookmarks()
+    const known = new Set(bookmarks.map(b => b.url))
+    const added = shared.filter(b => !known.has(b.url))
+    bookmarks = [...bookmarks, ...added]
+    if (added.length || shared.length !== bookmarks.length) await client.saveSharedBookmarks(bookmarks)
+    await enqueue(() => bridge.setLocalStorage(BOOKMARKS_KEY, JSON.stringify(bookmarks))).catch(() => {})
+    companion.update()
+  } catch { /* the laptop's list is a convenience */ }
 }
 
 async function restore() {
@@ -2093,6 +2110,7 @@ async function connectBackend(token: string, g2Token: string) {
     const resumeId = savedSession, resumeUrl = savedSessionUrl
     const restoreDisplay = !loading && !deckLoading && (!doc || doc.url === resumeUrl)
     await backend.connect(new BackendClient(`${api}/api/backend`, token, g2Token), resumeId, restoreDisplay)
+    void syncBookmarks()
     // A page PUT invalidates session actions, even for the same URL. Resume instead
     // of submitting again when the device is showing this session's saved page.
     if (backend.state.connected && doc && !loading && !deckLoading &&
