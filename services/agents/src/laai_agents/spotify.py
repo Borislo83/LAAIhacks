@@ -12,10 +12,12 @@ Automation).
 """
 
 import asyncio
+import json
 import os
 import re
 import secrets
 import sys
+from pathlib import Path
 
 from pydantic.v1 import SecretStr
 
@@ -208,9 +210,50 @@ def norm(text: str | None) -> str:
     return re.sub(r"[^a-z0-9]", "", (text or "").lower())
 
 
+SPOTIFY_URI = re.compile(r"spotify:(?:track|artist|album|playlist):[A-Za-z0-9]{22}")
+def found_file() -> Path:
+    return Path(os.getenv("SPOTIFY_FOUND_FILE", ".runtime/spotify-found.json"))
+
+
+def _found() -> dict[str, list[str]]:
+    try:
+        data = json.loads(found_file().read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _remember(key: str, hit: tuple[str, str, str]) -> None:
+    found = _found()
+    found[key] = list(hit)
+    while len(found) > 500:
+        del found[next(iter(found))]
+    try:
+        found_file().parent.mkdir(parents=True, exist_ok=True)
+        found_file().write_text(json.dumps(found))
+    except OSError:
+        pass
+
+
 async def find(query: str, kind: str) -> tuple[str, str, str]:
-    """(kind, uri, title) of the best open.spotify.com match. 'auto' prefers an artist
-    whose name is exactly the query, else the first track, else the first hit."""
+    """(kind, uri, title) of the best open.spotify.com match, remembered once found (the
+    web search behind it is often rate-limited). A failed search is retried once."""
+    key = f"{kind}:{norm(query)}"
+    known = _found().get(key)
+    if isinstance(known, list) and len(known) == 3 and SPOTIFY_URI.fullmatch(str(known[1])):
+        return known[0], known[1], known[2]
+    try:
+        hit = await _find(query, kind)
+    except SearchUnavailable:
+        await asyncio.sleep(0.5)
+        hit = await _find(query, kind)
+    _remember(key, hit)
+    return hit
+
+
+async def _find(query: str, kind: str) -> tuple[str, str, str]:
+    """'auto' prefers an artist whose name is exactly the query, else the first track,
+    else the first hit."""
     scope = "" if kind == "auto" else f"/{kind}"
     sources, _ = await search(f"site:open.spotify.com{scope} {query}")
     hits = []

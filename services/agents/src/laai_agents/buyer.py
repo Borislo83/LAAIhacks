@@ -305,6 +305,9 @@ async def add_approved_listing(req: CartListingRequest) -> CartAddResponse:
     return CartAddResponse(product=title, status="cart_added", summary=summary)
 
 
+VOICE_PICK_SECONDS = 25
+
+
 async def add_product(req: CartAddRequest) -> CartAddResponse:
     """Picks the one Amazon listing for the product (cart_action.pick_listing, as the page
     watcher does) and adds it on the laptop. Never starts checkout."""
@@ -315,7 +318,8 @@ async def add_product(req: CartAddRequest) -> CartAddResponse:
             product=req.product, status="not_connected",
             summary="The laptop's Amazon cart isn't connected. Nothing was added.",
         )
-    listing = await cart_action.pick_listing({}, req.product)
+    # Asked for by voice, so it can take longer than the watcher's quick proposals.
+    listing = await cart_action.pick_listing({}, req.product, VOICE_PICK_SECONDS)
     if not listing:
         return CartAddResponse(
             product=req.product, status="not_found",

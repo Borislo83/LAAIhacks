@@ -228,16 +228,17 @@ async def _pick(page: dict, product: str) -> dict | None:
     return _listing(priced[0], None, False) if priced else None
 
 
-async def pick_listing(page: dict, product: str) -> dict | None:
-    """The one Amazon listing the cart action would add, or None (then no action)."""
+async def pick_listing(page: dict, product: str, seconds: float = PICK_SECONDS) -> dict | None:
+    """The one Amazon listing the cart action would add, or None (then no action).
+    `seconds`: the page watcher keeps proposals quick; a spoken add can wait longer."""
     key = (product.lower(), asin_of(page.get("url")))
     cached = _picks.get(key)
     if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
         return cached[1]
     try:
-        listing = await asyncio.wait_for(_pick(page, product), PICK_SECONDS)
+        listing = await asyncio.wait_for(_pick(page, product), seconds)
     except Exception:  # noqa: BLE001 -- no listing means no cart action, never a failed proposal
-        return None
+        return None  # A timeout isn't cached: the next try searches again.
     while len(_picks) >= 64:
         del _picks[next(iter(_picks))]
     _picks[key] = (time.monotonic(), listing)

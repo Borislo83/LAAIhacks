@@ -124,7 +124,8 @@ start_tunnel() {
   local host="" i=0
   until [[ -n $host ]] || (( i >= 30 )); do
     sleep 1; i=$((i + 1))
-    host=$(curl -s -m 2 http://127.0.0.1:20241/quicktunnel | sed -nE 's/.*"hostname":"([^"]+)".*/\1/p')
+    # Not up yet is normal here: under set -e a failed curl must not end the script.
+    host=$(curl -s -m 2 http://127.0.0.1:20241/quicktunnel 2>/dev/null | sed -nE 's/.*"hostname":"([^"]+)".*/\1/p' || true)
   done
   if [[ -z $host ]]; then echo "  ! tunnel did not come up"; return; fi
   echo "https://$host" >"$RUN/tunnel.url"
