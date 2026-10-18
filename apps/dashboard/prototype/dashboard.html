@@ -159,6 +159,26 @@ body[data-density="compact"] .agent{padding:10px}
 .src{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 10px;border:1px solid var(--hair);border-radius:999px;background:var(--white);color:var(--ink);text-decoration:none;font-size:12px;line-height:18px}
 .src:hover{border-color:var(--ink)}
 .sources .when{font:11px var(--mono);margin-left:2px}
+.picks{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.pick{border:1px solid var(--hair);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;background:var(--white)}
+.pick .plabel{font:500 11px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--signal)}
+.pick b{font-weight:500;font-size:14px;line-height:19px}
+.pick .pmeta{font-size:13px;color:var(--muted)}
+.pick .pprice{font-family:var(--mono);color:var(--ink)}
+.pick small{font-size:12px;color:var(--muted);line-height:17px;flex:1}
+.cartbtn,.viewbtn{display:inline-block;text-align:center;border-radius:999px;padding:7px 12px;font-size:13px;text-decoration:none}
+.cartbtn{background:var(--ink);color:var(--white)}
+.cartbtn:hover{background:var(--signal)}
+.viewbtn{border:1px solid var(--hair);color:var(--ink)}
+.viewbtn:hover{border-color:var(--ink)}
+/* sources stay folded until clicked, then show as chips */
+details.sources{display:block}
+details.sources summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px;user-select:none}
+details.sources summary::-webkit-details-marker{display:none}
+details.sources summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+details.sources[open] summary::before{transform:rotate(45deg)}
+details.sources summary:hover{color:var(--ink)}
+details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
 .warn-note{grid-column:1/-1;font-size:12px;color:var(--warn)}
 .yt{display:flex;gap:12px;align-items:center;max-width:520px;padding:8px;border:1px solid var(--hair);border-radius:12px;background:var(--white);color:var(--ink);text-decoration:none}
 .yt img{width:160px;height:90px;object-fit:cover;border-radius:8px;background:var(--lens);flex-shrink:0}
@@ -433,8 +453,12 @@ async function call(k,body,onProgress){
     return {ok:!!result.result&&!result.error,reachable:!!result.result,data:result.result,error:result.error,ms:performance.now()-t0};
   }catch(e){return {ok:false,reachable:false,error:e.message||String(e),ms:performance.now()-t0}}
 }
+// The orchestrator names Messenger calls "message"; the dashboard's agent key is "messenger".
+const kindOf=k=>k==="message"?"messenger":k;
 function record(k,res){
-  const u=usage.agents[k]; u.calls++; u.ms+=res.ms; if(!res.ok||res.data?.error)u.errors++;
+  k=kindOf(k);
+  // Usage saved before an agent existed has no row for it yet.
+  const u=usage.agents[k]??=({calls:0,ms:0,errors:0}); u.calls++; u.ms+=res.ms; if(!res.ok||res.data?.error)u.errors++;
   store.set("focal.usage",usage); renderUsage();
   // A failed web search is a result, not an outage.
   health[k]=res.reachable??res.ok; updateRoster();
@@ -482,7 +506,7 @@ const VIEW={
       <div>To: ${who}</div>
       <textarea rows="3" maxlength="1000" aria-label="Message text" data-original="${esc(d.text)}">${esc(d.text)}</textarea>
       <div class="draft-foot"><span class="draft-status" role="status"></span><span class="draft-exp" data-expires="${esc(d.expires_at||"")}"></span></div>
-      <div class="draft-actions"><button type="button" class="btn dark" data-msg-send>Send via iMessage</button><button type="button" class="btn" data-msg-redraft hidden>Re-draft</button><button type="button" class="btn" data-msg-cancel>Cancel</button></div>
+      <div class="draft-actions"><button type="button" class="btn dark" data-msg-send>Approve to send</button><button type="button" class="btn" data-msg-redraft hidden>Re-draft</button><button type="button" class="btn" data-msg-cancel>Cancel</button></div>
     </div>`:"";
     return {lens:lens("IMESSAGE DRAFT",d.recipient_name?`To ${d.recipient_name}`:"Pick a recipient","nothing sends until you approve"),
       body:(cands?`<div class="draft-cands">Who did you mean?${cands}</div>`:"")+card};
@@ -547,7 +571,7 @@ function evidence(d){
   const when=d.fetched_at?new Date(d.fetched_at).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}):"";
   const links=items.map(({s,u})=>`<a class="src" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" title="${esc(s.title||u.hostname)}">${esc(u.hostname.replace(/^www\./,""))}</a>`).join("");
   const meta=[d.data_source,when].filter(Boolean).join(", ");
-  return `<div class="sources">${d.notice?`<p class="note">${esc(d.notice)}</p>`:""}${links}${meta?`<span class="when">${esc(meta)}</span>`:""}</div>`;
+  return `<details class="sources"><summary>Sources (${items.length})${meta?` · <span class="when">${esc(meta)}</span>`:""}</summary><div class="chips">${d.notice?`<p class="note">${esc(d.notice)}</p>`:""}${links}</div></details>`;
 }
 
 function cardShell(k){
@@ -652,6 +676,22 @@ function bubble(html,cls){
   if(cls==="user")pin();
   follow(); return el;
 }
+// Cart buttons only for the stores' own add-to-cart links; everything else is "View".
+const CARTS=[["https://www.amazon.com/gp/aws/cart/add.html?","Add to Amazon cart"],["https://api.bestbuy.com/click/-/","Add to Best Buy cart"]];
+const storeName=s=>({"amazon.com":"Amazon","bestbuy.com":"Best Buy"})[s]||s||"store";
+function picksCard(picks){
+  if(!picks?.length)return "";
+  const tiles=picks.map(p=>{
+    const cart=CARTS.find(([prefix])=>String(p.cart_url||"").startsWith(prefix));
+    const link=/^https:\/\//.test(p.url||"")?p.url:null;
+    const action=cart
+      ?`<a class="cartbtn" href="${esc(p.cart_url)}" target="_blank" rel="noopener noreferrer">${cart[1]}</a>`
+      :link?`<a class="viewbtn" href="${esc(link)}" target="_blank" rel="noopener noreferrer">View at ${esc(storeName(p.store))} ↗</a>`:"";
+    return `<div class="pick"><span class="plabel">${esc(p.label)}</span><b>${esc(p.product)}</b>
+      <span class="pmeta">${p.price!=null?`<span class="pprice">${money(p.price)}</span>`:"price not shown"}${p.rating!=null?` · ${Number(p.rating).toFixed(1)}★`:""} · ${esc(storeName(p.store))}</span>
+      <small>${esc(p.reason||"")}</small>${action}</div>`}).join("");
+  return `<div class="picks">${tiles}</div>`;
+}
 // Also called with one card for live previews, so `all` may be missing.
 function miniCard(c,i,all=[c]){
   const a=AGENTS[c.kind];
@@ -659,7 +699,9 @@ function miniCard(c,i,all=[c]){
   const head=`<header>${orb(a.v,20,true)}<b>${a.name}</b>${tag}<span class="ms">${Math.round(c.ms)} ms</span></header>`;
   if(!c.result)return `<section class="out">${head}<p class="err">${esc(c.error||"No result")}</p></section>`;
   const v=VIEW[c.kind](c.result);
-  const warn=c.result.error?`<p class="warn-note">${esc(c.result.error)}. The agent is fine; the free web search refused this request. Try again in a moment.</p>`:"";
+  // Only research agents depend on web search; other agents' errors speak for themselves.
+  const searchy=["price","alternatives","reviews","youtube","news"].includes(c.kind);
+  const warn=c.result.error?`<p class="warn-note">${esc(c.result.error)}.${searchy?" The agent is fine; the free web search refused this request. Try again in a moment.":""}</p>`:"";
   const summary=c.kind==="buyer"||c.kind==="news"?"":`<p class="summary">${esc(c.result.summary)}</p>`;
   return `<section class="out out-${c.kind}">${head}${summary}${v.body}${warn}${v.lens}${c.kind==="news"?"":evidence(c.result)}</section>`;
 }
@@ -742,13 +784,14 @@ $("#chat-form").onsubmit=async e=>{
     const cartRelated=isCartRelated(text);
     const d=await withRetry(()=>readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update),
       n=>progress.update({kind:"coordinator",stage:"retrying",message:retryMessage(n)}),!cartRelated);
+    d.calls=(d.calls||[]).map(c=>({...c,kind:kindOf(c.kind)}));
     d.calls.forEach(c=>{if(c.result?.confirmation_token)activePurchase=c.result.confirmation_token;if(c.result?.status==="cart_added")activePurchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
     const by=d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules";
     const via=d.calls.length?`${d.calls.length} agent${d.calls.length>1?"s":""} via ${by}`:d.source==="asi_one"?"ASI:One, no agents needed":by;
     // Live previews become the final blocks in the same frame, so nothing blinks out and back.
-    morph(pending,()=>{progress.finish(true,via);outs.innerHTML=d.calls.map(miniCard).join("")});
+    morph(pending,()=>{progress.finish(true,via);outs.innerHTML=picksCard(d.picks)+d.calls.map(miniCard).join("")});
     tickDrafts();
     await streamReply(body,d.reply||"");
   }catch(err){
@@ -779,7 +822,7 @@ function draftControls(d){
   const t=d.querySelector("textarea"),edited=t.value!==t.dataset.original,expired=d.dataset.state==="expired";
   t.disabled=false;d.querySelector("[data-msg-cancel]").disabled=false;
   const send=d.querySelector("[data-msg-send]"),redraft=d.querySelector("[data-msg-redraft]");
-  send.disabled=edited||expired;send.textContent="Send via iMessage";
+  send.disabled=edited||expired;send.textContent="Approve to send";
   // After an edit or expiry, re-drafting is the next step, so it becomes the primary action.
   redraft.hidden=!(edited||expired);send.classList.toggle("dark",!(edited||expired));redraft.classList.toggle("dark",edited||expired);
 }
@@ -823,6 +866,9 @@ async function sendDraft(d){
   orbEl?.classList.add("idle");
   const at=new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
   if(res.status==="sent")return lockDraft(d,"sent",`Sent at ${at}${res.dry_run?'<span class="badge">Dry run — not actually sent</span>':""}`);
+  // Link delivery: approved; the user's own Messages app sends it after they tap Send.
+  if(res.status==="open_link"&&/^sms:/.test(res.open_url||""))
+    return lockDraft(d,"sent",`Approved at ${at}. <a class="btn dark" href="${esc(res.open_url)}">Open in Messages</a> <span class="muted">then tap Send</span>`);
   d.dataset.state=res.status==="needs_permission"?"needs_permission":"failed";
   draftControls(d);
   draftStatus(d,res.status==="needs_permission"
