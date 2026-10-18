@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { BackendClient } from '../src/lensos/client'
-import { AgentCard, CARD_LINES, DRAFT_TAP_GRACE_MS, NO_ANSWER, askAgents, answerFor, paginate, plain, sendDraft, type AgentAnswer } from '../src/lensos/agents'
+import { AgentCard, CARD_LINES, DRAFT_TAP_GRACE_MS, NO_ANSWER, askAgents, answerFor, compareSpec, compareTable, paginate, plain, sendDraft, type AgentAnswer } from '../src/lensos/agents'
 import type { AgentCall, ChatReply } from '../src/lensos/types'
 
 const call = (kind: string, result: Record<string, unknown> | null, error: string | null = null): AgentCall =>
@@ -162,4 +162,53 @@ test('model Markdown is shown as plain text on the lens', () => {
   assert.equal(plain('compare: * Noise * Battery'), 'compare:\n- Noise\n- Battery')
   assert.equal(plain('see [RTINGS](https://www.rtings.com/x) or `code`'), 'see RTINGS (https://www.rtings.com/x) or code')
   assert.equal(plain('5 * 3 = 15'), '5 * 3 = 15')
+})
+
+const shopping = (calls: any[], extra: Record<string, unknown> = {}) =>
+  ({ reply: 'Details.', source: 'rules', calls: calls.map(c => ({ payload: {}, error: null, ms: 1, ...c })), ...extra }) as any
+
+test('price comparison shows the top three offers, verified first, then cheapest', () => {
+  const reply = shopping([{ kind: 'price', result: { product: 'Sony WH-1000XM5', offers: [
+    { store: 'eBay', price: 249, trust: 'low' }, { store: 'Best Buy', price: 329.99, trust: 'high' },
+    { store: 'Amazon', price: 298, trust: 'high' }, { store: 'Walmart', price: 310, trust: 'medium' },
+  ] } }])
+  const table = compareTable(reply)!
+  assert.equal(table.title, 'Prices: Sony WH-1000XM5')
+  assert.deepEqual(table.columns.map(c => [c.head, c.price, c.note]),
+    [['Amazon', '$298', 'Verified'], ['Best Buy', '$329.99', 'Verified'], ['Walmart', '$310', 'Unverified']])
+  const answer = answerFor(reply)!
+  assert.ok(answer.kind === 'answer' && answer.compare, 'a price check opens on the comparison')
+})
+
+test('compare with rivals puts the product next to two alternatives', () => {
+  const reply = shopping([
+    { kind: 'price', result: { product: 'Sony WH-1000XM5', best: { store: 'Amazon', price: 298 }, offers: [] } },
+    { kind: 'alternatives', result: { product: 'Sony WH-1000XM5', alternatives: [
+      { product: 'Bose QuietComfort Ultra', price: 379, store: 'Bose', rating: 4.6 },
+      { product: 'Sennheiser Momentum 4', price: 299.95, store: 'Amazon' },
+      { product: 'Apple AirPods Max', price: 549 },
+    ] } },
+  ])
+  const table = compareTable(reply)!
+  assert.equal(table.columns.length, 3)
+  assert.deepEqual(table.columns.map(c => c.head), ['Sony WH-1000XM5', 'Bose QuietComfort Ultra', 'Sennheiser Momentum 4'])
+  assert.equal(table.columns[0].price, '$298')
+  assert.equal(table.columns[1].extra, '4.6★')
+
+  const spec = compareSpec(table, 'footer')
+  assert.equal(spec.texts.length, 5) // title, 3 columns, footer: within the 8-container limit
+  for (const box of spec.texts) assert.ok(box.x >= 0 && box.x + box.w <= 576 && box.y + box.h <= 288)
+
+  const answer = answerFor(reply)!
+  const card = new AgentCard(answer, false)
+  assert.ok(card.compare, 'the comparison is the first page')
+  assert.match(card.footer(), /^1\/2/)
+  assert.equal(card.gesture('down'), 'render')
+  assert.equal(card.compare, undefined)
+  assert.match(card.text, /Details/)
+})
+
+test('no comparison with fewer than two choices', () => {
+  assert.equal(compareTable(shopping([{ kind: 'price', result: { offers: [{ store: 'Amazon', price: 298, trust: 'high' }] } }])), undefined)
+  assert.equal(compareTable(shopping([{ kind: 'reviews', result: { summary: 'Good' } }])), undefined)
 })

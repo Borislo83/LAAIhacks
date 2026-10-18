@@ -26,7 +26,7 @@ import { BackendClient } from './lensos/client'
 import { BackendSession, type ActionGroup } from './lensos/session'
 import { apiActionCards } from './lensos/action-cards'
 import { ActionPopup, POPUP_TAP_GRACE_MS, popupAllowed } from './lensos/action-popup'
-import { AgentCard, askAgents, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
+import { AgentCard, askAgents, compareSpec, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
 import type { RecommendationBatch, RecommendationContext, RecommendedAction } from '../shared/recommendations'
 
@@ -1399,7 +1399,9 @@ function showAgentCard(answer: AgentAnswer, quiet: boolean) {
 async function renderAgentCard() {
   if (!agentCard) return
   view = 'voice'
-  await showText(agentCard.text, agentCard.footer())
+  const table = agentCard.compare
+  if (table) await renderPageSpec(compareSpec(table, agentCard.footer()))
+  else await showText(agentCard.text, agentCard.footer())
 }
 
 function armAgentFade() {
