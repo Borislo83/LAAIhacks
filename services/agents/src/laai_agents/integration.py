@@ -8,7 +8,6 @@ durable execution journal and the glasses team's outbox/ack agreement.
 
 import argparse
 import asyncio
-import fcntl
 import json
 import os
 from datetime import UTC, datetime, timedelta
@@ -309,6 +308,18 @@ class GlassesWorkflow:
         return len(events)
 
 
+def lock_exclusive(stream):
+    """Fail fast (OSError) if another poller already holds this journal's lock."""
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 async def run_cli(args):
     workflow = GlassesWorkflow(
         os.environ["GLASSES_API_URL"],
@@ -349,7 +360,7 @@ def main():
     lock = Path(args.journal + ".lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("w") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_exclusive(stream)
         asyncio.run(run_cli(args))
 
 

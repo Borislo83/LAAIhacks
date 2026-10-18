@@ -7,10 +7,10 @@ read-only, private-network-refusing fetcher as merchant pages.
 """
 
 import json
-from urllib.parse import urlsplit
 
 from lxml import html
 
+from .merchants import store_of as site_name
 from .models import SourceRating
 
 
@@ -51,11 +51,6 @@ def to_five(value, best=None) -> float | None:
     if not 0 < rating <= scale:
         return None
     return round(rating / scale * 5, 1)
-
-
-def site_name(url: str) -> str:
-    host = (urlsplit(url).hostname or "").removeprefix("www.")
-    return host
 
 
 def parse_review(page: str, url: str, product: str) -> tuple[SourceRating | None, list, list]:
