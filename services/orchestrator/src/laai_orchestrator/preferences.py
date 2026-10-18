@@ -5,7 +5,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from .models import InputModel, TaskKind
 
@@ -18,6 +18,10 @@ class Preferences(InputModel):
 
 
 class SavedPreferences(Preferences):
+    # A database row, not client input: columns added later (e.g. learned_since) are
+    # ignored instead of failing every request that reads preferences.
+    model_config = ConfigDict(extra="ignore")
+
     updated_at: datetime
 
 

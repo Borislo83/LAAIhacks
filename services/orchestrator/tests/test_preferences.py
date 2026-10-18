@@ -113,3 +113,15 @@ async def test_llm_receives_structured_priority_but_no_private_notes():
 
     assert "Saved shopping priority: quality" in seen[0]["messages"][0]["content"]
     assert "PRIVATE-NOTES-NEVER-SENT" not in json.dumps(seen)
+
+
+def test_saved_preferences_ignore_columns_added_to_the_database_later():
+    import pytest
+    from pydantic import ValidationError
+
+    from laai_orchestrator.preferences import Preferences, SavedPreferences
+
+    row = {"shopping_priority": "price", "updated_at": "2026-10-17T00:00:00Z", "learned_since": None}
+    assert SavedPreferences.model_validate(row).shopping_priority == "price"
+    with pytest.raises(ValidationError):  # client input stays strict
+        Preferences.model_validate({"learned_since": None})
