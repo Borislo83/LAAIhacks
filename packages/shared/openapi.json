@@ -2152,7 +2152,8 @@
           "price",
           "alternatives",
           "reviews",
-          "youtube"
+          "youtube",
+          "news"
         ],
         "title": "AgentKind",
         "description": "Every routable specialist. Only the shopping TaskKinds are persisted as tasks."
@@ -3447,6 +3448,13 @@
             ],
             "title": "Kind",
             "default": "auto"
+          },
+          "max_sources": {
+            "type": "integer",
+            "maximum": 12.0,
+            "minimum": 3.0,
+            "title": "Max Sources",
+            "default": 6
           }
         },
         "type": "object",

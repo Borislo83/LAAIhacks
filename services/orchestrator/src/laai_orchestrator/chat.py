@@ -1,10 +1,12 @@
 """Chat orchestration: ASI:One picks which agents to call, then answers from their results."""
 
 import asyncio
+import ipaddress
 import json
 import re
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import ValidationError
@@ -28,6 +30,9 @@ MAX_ROUNDS = 3
 
 SYSTEM = """You are Focal, a shopping assistant on smart glasses. You answer by calling agents.
 Tools:
+- summarize_news: one headline, one image and a short sourced summary of recent news. Use it,
+  not the shopping tools, for news, headlines, "what's happening with", "latest on" or
+  "what happened" questions. Name the outlets it cites; never add facts it did not return.
 - find_youtube: a YouTube link for a song or video. Use it, not the shopping tools, whenever the
   user wants to play, watch, listen to or find a song, music video or other video.
 - message_friend: drafts an iMessage for the user to review. It never sends; the user confirms
@@ -93,6 +98,26 @@ TOOLS.append(
     {
         "type": "function",
         "function": {
+            "name": "summarize_news",
+            "description": (
+                "Research recent news on a topic and return one headline, one image "
+                "and a short sourced summary."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The news topic"},
+                    "max_sources": {"type": "integer", "minimum": 3, "maximum": 12},
+                },
+                "required": ["query"],
+            },
+        },
+    }
+)
+TOOLS.append(
+    {
+        "type": "function",
+        "function": {
             "name": "message_friend",
             "description": "Draft an iMessage to a contact for the user to review. Never sends.",
             "parameters": {
@@ -113,6 +138,7 @@ TOOL_KINDS = {
     "find_alternatives": AgentKind.ALTERNATIVES,
     "get_reviews": AgentKind.REVIEWS,
     "find_youtube": AgentKind.YOUTUBE,
+    "summarize_news": AgentKind.NEWS,
 }
 # Agent output is untrusted: only canonical watch or short links reach the user.
 YOUTUBE_LINK = re.compile(
@@ -136,6 +162,68 @@ def safe_youtube(result: dict[str, Any]) -> dict[str, Any]:
             if isinstance(alternative, dict) and _youtube_link(alternative.get("url"))
         ],
     }
+
+
+NEWS_HEADLINE_MAX = 200
+NEWS_SUMMARY_MAX = 800
+NEWS_SOURCES_MAX = 8
+NEWS_TEXT_MAX = 300  # image_alt and each source's title, publisher and date
+
+
+def public_https(url: Any) -> str | None:
+    """Keep only an https URL on a public hostname; the dashboard loads these directly."""
+    if not isinstance(url, str) or len(url) > 2048 or any(c.isspace() for c in url):
+        return None
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        parts.port  # noqa: B018 - raises on a malformed port
+    except ValueError:
+        return None
+    if parts.scheme != "https" or not host or parts.username or parts.password:
+        return None
+    try:
+        return url if ipaddress.ip_address(host).is_global else None
+    except ValueError:
+        pass
+    labels = host.rstrip(".").split(".")
+    if len(labels) < 2 or labels[-1] in {"localhost", "local", "internal", "lan", "home", "test"}:
+        return None
+    return url
+
+
+def _text(value: Any, limit: int = NEWS_TEXT_MAX) -> str | None:
+    return (value.strip()[:limit] or None) if isinstance(value, str) else None
+
+
+def safe_news(result: dict[str, Any]) -> dict[str, Any]:
+    """Drop non-public or non-https links and cap the text the news agent returns."""
+    image_url = public_https(result.get("image_url"))
+    raw_sources = result.get("sources")
+    sources = []
+    for source in raw_sources if isinstance(raw_sources, list) else []:
+        url = public_https(source.get("url")) if isinstance(source, dict) else None
+        if url:
+            sources.append(
+                {
+                    "title": _text(source.get("title")),
+                    "url": url,
+                    "publisher": _text(source.get("publisher")),
+                    "published_at": _text(source.get("published_at")),
+                }
+            )
+    return {
+        **result,
+        "headline": _text(result.get("headline"), NEWS_HEADLINE_MAX),
+        "summary": result["summary"][:NEWS_SUMMARY_MAX],
+        "image_url": image_url,
+        # Alt text and credit describe the image, so they go with it.
+        "image_alt": _text(result.get("image_alt")) if image_url else None,
+        "image_source_url": public_https(result.get("image_source_url")) if image_url else None,
+        "sources": sources[:NEWS_SOURCES_MAX],
+    }
+
+
 # Each agent call is tried up to three times before it counts as failed.
 ATTEMPTS = 3
 RETRY_DELAY = 1.0
@@ -177,6 +265,8 @@ async def call_agent(
                 raise TypeError("Invalid agent result")
             if kind == AgentKind.YOUTUBE:
                 answer = safe_youtube(answer)
+            elif kind == AgentKind.NEWS:
+                answer = safe_news(answer)
         except httpx.TimeoutException:
             break  # Retrying a timed-out request would only multiply the wait.
         except (httpx.HTTPError, ValueError, TypeError):
@@ -329,6 +419,16 @@ async def chat_with_llm(
     return rules_reply(calls)
 
 
+NEWS_WORDS = (
+    r"\bnews\b|\bheadlines?\b|\bwhat(?:'|’)?s (?:happening|going on) (?:with|in)\b"
+    r"|\bwhat is (?:happening|going on) (?:with|in)\b"
+    r"|\blatest (?:on|about|with)\b|\bwhat happened\b"
+)
+# A news word does not win over a clear shopping question ("latest on iPhone prices").
+SHOPPING_WORDS = (
+    r"\bprices?\b|\bcheap|\bdeals?\b|\$|\bcompare|\balternatives?\b|\breviews?\b"
+    r"|\bvs\b|\bversus\b|\bworth\b|\bbuy\b"
+)
 MEDIA_WORDS = r"\bsongs?\b|\bvideos?\b|\bplay\b|\bmusic\b|\blisten to\b"
 # Requests that need all three agents with a budget go to the coordinator:
 # "consider X", "under $100", "like the X", "similar to X", "instead of X".
@@ -351,6 +451,9 @@ KEYWORDS = {
 def _line(call: AgentCall) -> str:
     link = call.result.get("url") if call.kind == AgentKind.YOUTUBE else None
     summary = call.result["summary"]
+    headline = call.result.get("headline") if call.kind == AgentKind.NEWS else None
+    if headline and headline not in summary:
+        summary = f"{headline.rstrip('.')}. {summary}"
     return f"{summary} {link}" if link and link not in summary else summary
 
 
@@ -380,7 +483,15 @@ async def chat_with_rules(
     if _is_message_request(text):
         return rules_reply([await prepare_message(text, config, http, emit)])
     kinds = [k for k, pattern in KEYWORDS.items() if re.search(pattern, text, re.IGNORECASE)]
-    if re.search(r"youtube", text, re.IGNORECASE) or (
+    youtube = re.search(r"youtube", text, re.IGNORECASE)
+    if (
+        not youtube
+        and re.search(NEWS_WORDS, text, re.IGNORECASE)
+        and not re.search(SHOPPING_WORDS, text, re.IGNORECASE)
+    ):
+        args = ToolArgs(query=text[:300])
+        return rules_reply([await call_agent(AgentKind.NEWS, args, config, http, emit)])
+    if youtube or (
         not kinds and re.search(MEDIA_WORDS, text, re.IGNORECASE)
     ):
         # Media requests go to YouTube alone; "video doorbell reviews" stays shopping.
