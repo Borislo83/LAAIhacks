@@ -76,7 +76,12 @@ _CACHE: OrderedDict[str, tuple[float, list[Source]]] = OrderedDict()
 CACHE_SECONDS = 600
 CACHE_SIZE = 256
 _SLOTS = asyncio.Semaphore(2)
-BACKENDS = ("yahoo,duckduckgo", "google,startpage", "auto")
+# Different engines are asked at once and the first useful answer wins; "auto" (ddgs's
+# own rotation) is the last resort. One engine rate-limiting no longer costs seconds.
+RACE = ("duckduckgo", "bing", "yahoo")
+FALLBACK = "auto"
+BACKENDS = (*RACE, FALLBACK)
+ENGINE_SECONDS = 4
 
 
 def _cached(query: str) -> list[Source] | None:
@@ -102,20 +107,29 @@ async def free_search(query: str) -> list[Source]:
     def run(backend):
         from ddgs import DDGS
 
-        return DDGS(timeout=8).text(
+        return DDGS(timeout=ENGINE_SECONDS).text(
             query, region="us-en", max_results=12, backend=backend
         )
 
+    async def attempt(backend):
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(run, backend), ENGINE_SECONDS + 1)
+        except Exception:  # noqa: BLE001 -- any provider failure means use another one
+            return []
+
     rows = []
     async with _SLOTS:
-        for attempt, backend in enumerate(BACKENDS):
-            try:
-                rows = await asyncio.wait_for(asyncio.to_thread(run, backend), timeout=20)
-            except Exception:  # noqa: BLE001 -- any provider failure means try the next one
-                rows = []
-            if rows:
-                break
-            await asyncio.sleep(0.5 * (attempt + 1))
+        racers = [asyncio.create_task(attempt(backend)) for backend in RACE]
+        try:
+            for finished in asyncio.as_completed(racers):
+                rows = await finished
+                if rows:
+                    break
+        finally:
+            for racer in racers:
+                racer.cancel()
+        if not rows:
+            rows = await attempt(FALLBACK)
     sources = [
         Source(
             title=str(row.get("title", "")),

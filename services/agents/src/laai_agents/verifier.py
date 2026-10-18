@@ -66,7 +66,9 @@ async def verify(req: VerifyRequest) -> VerifyResponse:
                     )
                 )
     kept.sort(key=lambda o: (o.trust != "high", o.price))
-    best = min(kept, key=lambda o: (o.trust != "high", o.price)) if kept else None
+    # Used or refurbished listings stay visible but are never the headline price.
+    new = [o for o in kept if o.condition == "new"]
+    best = min(new, key=lambda o: (o.trust != "high", o.price)) if new else None
     if best and best.source == "search_snippet":
         flags.append(f"Best price at {best.store} comes from a search listing, not the product page")
     stores = {o.store for o in kept}

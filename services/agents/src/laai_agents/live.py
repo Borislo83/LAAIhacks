@@ -2,6 +2,8 @@
 
 import asyncio
 import re
+import time
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from functools import lru_cache
 from urllib.parse import quote_plus
@@ -16,7 +18,6 @@ from .models import (
 )
 from .progress import report
 from .search import SearchUnavailable, search
-
 
 # Question phrasing around a product: "Is the Garmin Forerunner worth it or not?"
 QUESTION_PARTS = [
@@ -113,8 +114,26 @@ def _name_words(product: str) -> tuple[frozenset[str], ...]:
     )
 
 
+def _glued(tokens: set[str], words) -> set[str]:
+    """Stores write "WH-1000XM5" as "WH1000XM5" or "WH1000XM5P" (pink): a title token
+    that is two adjacent name words glued together (plus at most one color letter)
+    counts as both words. The glued model must hold a digit, so XM5 never matches XM6."""
+    found = set()
+    for a, b in zip(words, words[1:]):
+        joined = a + b
+        if len(joined) < 5 or not any(c.isdigit() for c in joined):
+            continue
+        if any(t == joined or (len(t) == len(joined) + 1 and t.startswith(joined) and t[-1].isalpha())
+               for t in tokens):
+            found |= {a, b}
+    return found
+
+
 def matches_product(title: str, product: str) -> bool:
     tokens = set(re.findall(r"[a-z0-9]+", title.lower()))
+    known = catalog.find_product(product)
+    for name in [product, *([known.name, *known.aliases] if known else [])]:
+        tokens |= _glued(tokens, re.findall(r"[a-z0-9]+", name.lower()))
     if _model_inside(title, product) or _other_model(title, product):
         return False
     return any(
@@ -150,26 +169,101 @@ def _model_inside(title: str, product: str) -> bool:
     return False
 
 
-async def _candidates(sources, name):
-    from .merchants import fetch_offers, snippet_offer
+# Price lookups answer by a deadline with what has arrived; stragglers are dropped and
+# the answer says it may be incomplete. Answers are reused for a few minutes.
+PRICE_DEADLINE = 3.5
+MAX_PAGES = 6
+MAX_OFFERS = 8
+PER_STORE = 3
+CACHE_SECONDS = 600
+PARTIAL_CACHE_SECONDS = 60
+_PRICE_CACHE: dict[tuple, tuple[float, float, PriceCompareResponse]] = {}
 
+
+async def _candidates(sources, name, found: list | None = None):
+    """Snippet leads at once, then offers read from up to MAX_PAGES store pages as each
+    page arrives (into `found`, so a deadline keeps whatever was read in time)."""
+    from . import merchants
+    from .merchants import snippet_offer
+
+    found = [] if found is None else found
     leads = [s for s in sources if matches_product(f"{s.title} {s.snippet}", name)]
-    urls = list(dict.fromkeys(s.url for s in leads))[:5]
+    found.extend(offer for s in leads if (offer := snippet_offer(s, name)))
+    urls = [u for u in dict.fromkeys(s.url for s in leads) if not merchants.blocked(u)]
+    urls = urls[:MAX_PAGES]
     report("validating", f"Checking offers on {len(urls)} merchant pages and ranking evidence")
-    page_offers = [
-        offer
-        for group in await asyncio.gather(*(fetch_offers(url, name) for url in urls))
-        for offer in group
-    ]
-    read = {o.url for o in page_offers}
-    return page_offers + [
-        offer
-        for s in leads
-        if s.url not in read and (offer := snippet_offer(s, name))
-    ]
+    async def read_page(url):
+        return url, await merchants.fetch_offers(url, name)
+
+    for page in asyncio.as_completed([read_page(url) for url in urls]):
+        url, offers = await page
+        if offers:
+            # A price read from the page replaces that page's snippet lead.
+            read = {url, *(o.url for o in offers)}
+            found[:] = [o for o in found if o.source != "search_snippet" or o.url not in read]
+            found.extend(offers)
+    return found
 
 
-STORE_SOURCES = {"bestbuy_api", "serpapi_amazon", "serpapi_shopping", "amazon_search_page"}
+async def _web_offers(name: str, deep: bool, found: list, state: dict) -> None:
+    sources, meta = await search(f"{name} price USD")
+    state["sources"], state["meta"] = sources, meta
+    await _candidates(sources, name, found)
+    if deep:
+        # A second, store-focused query widens the pool when asked (verifier retry).
+        try:
+            more, _ = await search(f"buy {name} online store")
+        except SearchUnavailable:
+            return
+        seen = {s.url for s in state["sources"]}
+        more = [s for s in more if s.url not in seen]
+        state["sources"] = state["sources"] + more
+        await _candidates(more, name, found)
+
+
+STORE_LABELS = {"amazon.com": "Amazon", "bestbuy.com": "Best Buy", "walmart.com": "Walmart",
+                "target.com": "Target"}  # fmt: skip
+
+
+def where_sold(offer) -> str:
+    store = STORE_LABELS.get(offer.store, offer.store)
+    return f"{store} ({offer.seller})" if offer.seller else store
+
+
+def _diverse(offers, limit: int = MAX_OFFERS):
+    """At most PER_STORE offers per store and seller, so one listing's colors don't fill
+    the list (each marketplace seller counts as its own shop)."""
+    picked, count = [], {}
+    for offer in offers:
+        key = (offer.store, offer.seller)
+        if count.get(key, 0) < PER_STORE:
+            picked.append(offer)
+            count[key] = count.get(key, 0) + 1
+    return picked[:limit]
+
+
+def price_summary(name: str, offers, best, budget=None) -> str:
+    if not offers:
+        return (
+            f"Found sources for {name}, but none quoted a clear USD price. "
+            "Open the sources to check current offers."
+        )
+    verified = sum(o.verified for o in offers)
+    head = f"{len(offers)} offer{'s' if len(offers) != 1 else ''}, {verified} verified"
+    if best is None:
+        low = min(offers, key=lambda o: o.price)
+        return (
+            f"{head}: only used or refurbished listings, lowest ${low.price:.2f} at "
+            f"{where_sold(low)}. Check the condition before buying."
+        )
+    within = f" under ${budget:.2f}" if budget is not None else ""
+    tag = "verified" if best.verified else f"{best.trust} trust, unverified"
+    line = f"{head}: best ${best.price:.2f}{within} at {where_sold(best)} ({tag})."
+    cheaper = [o for o in offers if o.condition == "new" and o.price < best.price]
+    if cheaper:
+        low = min(cheaper, key=lambda o: o.price)
+        line += f" Lowest unverified lead: ${low.price:.2f} at {where_sold(low)}."
+    return line + " Verify the listing before buying."
 
 
 async def store_listings(name: str, budget: float | None = None):
@@ -238,6 +332,7 @@ async def browse(req):
     offers = [
         o for o in found
         if not is_accessory(o.product, category) and (budget is None or o.price < budget)
+        and o.condition == "new"
     ]  # fmt: skip
     offers.sort(key=_popularity, reverse=True)
     offers = offers[:8]
@@ -274,101 +369,104 @@ async def compare(req):
         return await browse(req)
     name = product_name(req.product)
     budget = getattr(req, "max_price", None)
-    # Official store listings (when API keys are set) run alongside the web search.
-    listings_task = asyncio.create_task(store_listings(name, budget))
-    # Stage 1: every result naming the product is a candidate, from any store.
-    try:
-        sources, meta = await search(f"{name} price USD")
-    except SearchUnavailable:
-        listings = await listings_task
-        if not listings:
-            raise
-        sources, meta = [], {"data_source": "store_api", "sources": [], "notice": None}
-    except BaseException:
-        listings_task.cancel()
-        raise
-    offers = await _candidates(sources, name)
-    if not offers or getattr(req, "deep", False):
-        # A second, store-focused query widens the pool only when the first found nothing.
-        try:
-            more, _ = await search(f"buy {name} online store")
-        except SearchUnavailable:
-            more = []
-        seen = {s.url for s in sources}
-        more = [s for s in more if s.url not in seen]
-        sources += more
-        offers += await _candidates(more, name)
-    meta["sources"] = sources
-    # Stage 2: rank by trust, then price; only clear mismatches were dropped.
-    offers = rank(offers)
-    listings = await listings_task
-    if listings:
-        meta["data_source"] = "store_api+" + meta.get("data_source", "web")
-    offers = listings + offers
     store = getattr(req, "store", None)
+    deep = bool(getattr(req, "deep", False))
+    key = (name.lower(), budget, store, deep)
+    hit = _PRICE_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < hit[1]:
+        report("cached", "Reusing prices checked in the last few minutes")
+        return hit[2].copy(deep=True)
+    # Store listings and the web search (then its pages) run at the same time; whatever
+    # has arrived by the deadline is ranked.
+    found: list = []
+    state: dict = {"sources": [], "meta": None}
+    web = asyncio.create_task(_web_offers(name, deep, found, state))
+    listings_task = asyncio.create_task(store_listings(name, budget))
+    done, pending = await asyncio.wait({web, listings_task}, timeout=PRICE_DEADLINE)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    partial = bool(pending)
+    listings = []
+    if listings_task in done:
+        if listings_task.exception():
+            raise listings_task.exception()
+        listings = listings_task.result()
+    failed = web.exception() if web in done else None
+    if failed and (not isinstance(failed, SearchUnavailable) or not listings):
+        raise failed
+    meta = state["meta"] or {
+        "data_source": "unavailable", "notice": None,
+        "fetched_at": datetime.now(UTC).isoformat(),
+    }  # fmt: skip
+    meta = {**meta, "sources": state["sources"]}
+    if listings:
+        meta["data_source"] = "store_api+" + (meta["data_source"] if state["meta"] else "web")
+    if partial:
+        report("deadline", f"Answering after {PRICE_DEADLINE:g}s with the offers found so far")
+        meta["notice"] = (meta.get("notice") or "") + (
+            f" Some stores didn't answer within {PRICE_DEADLINE:g} s; results may be incomplete."
+        )
+        meta["notice"] = meta["notice"].strip()
+    # Rank by trust, then price; only clear mismatches were dropped.
+    offers = rank(listings + list(found))
     if store:
         # "at Amazon": only that store's offers count; say so if it had none.
         at_store = [o for o in offers if sold_at(o.store, store)]
         if not at_store:
             return PriceCompareResponse(
-                product=name, offers=offers, best=None, savings=None, **meta,
+                product=name, offers=_diverse(offers), best=None, savings=None, partial=partial,
+                **meta,
                 summary=f"No {STORE_NAMES.get(store, store)} listing for {name} was found"
                 + (f" under ${budget:g}" if budget is not None else "")
                 + ". Other stores' offers are listed.",
             )  # fmt: skip
         offers = at_store
     best = best_offer(offers)
-    if best is not None and best.source in STORE_SOURCES:
-        within = f" under ${budget:.2f}" if budget is not None else ""
-        summary = (
-            f"Best price{within}: {best.product} at ${best.price:.2f} on {best.store} "
-            f"({len(listings)} store listings checked)."
-        )
-    elif best is None:
-        summary = (
-            f"Found sources for {name}, but none quoted a clear USD price. "
-            "Open the sources to check current offers."
-        )
-    elif best.trust == "low":
-        summary = (
-            f"Only unverified price leads found: lowest ${best.price:.2f} at {best.store}. "
-            "Confirm on the store page before relying on it."
-        )
-    else:
-        where = (
-            "read from the product page"
-            if best.source != "search_snippet"
-            else "from the search listing"
-        )
-        summary = (
-            f"Lowest {best.trust}-trust price: ${best.price:.2f} at {best.store} ({where}). "
-            "Verify the listing before buying."
-        )
-    return PriceCompareResponse(
-        product=name, offers=offers, best=best, savings=None, summary=summary, **meta
-    )
+    offers = _diverse(offers)
+    if best is not None and best not in offers:
+        offers = [best, *offers[: MAX_OFFERS - 1]]
+    result = PriceCompareResponse(
+        product=name, offers=offers, best=best, savings=None, partial=partial,
+        summary=price_summary(name, offers, best, budget), **meta,
+    )  # fmt: skip
+    if offers or not partial:
+        while len(_PRICE_CACHE) >= 256:
+            del _PRICE_CACHE[next(iter(_PRICE_CACHE))]
+        ttl = PARTIAL_CACHE_SECONDS if partial else CACHE_SECONDS
+        _PRICE_CACHE[key] = (time.monotonic(), ttl, result)
+    return result.copy(deep=True)
 
 
 async def store_alternatives(name, known, max_price):
     """Other brands in the same category from store listings, best rated first."""
     from .merchants import is_accessory
-    from .stores import has_store_keys, store_offers
+    from .stores import store_offers
 
-    if not has_store_keys():
-        return []
     words = re.findall(r"[A-Za-z0-9]+", name)
-    # "Sony headphones" -> "headphones"; a known product uses its catalog category.
-    query = known.category if known else " ".join(words[1:]) or name
+    # A known product uses its catalog category; otherwise only a category word in the
+    # name ("Sony headphones" -> "headphones") says what to look for.
+    query = known.category if known else next(
+        (w.lower() for w in words if w.lower() in GENERIC_WORDS), None
+    )
+    if not query:
+        return []
     brand = (known.name if known else name).split()[0].lower()
     offers = await store_offers(query, max_price)
     picked = [
         o
         for o in offers
         if not is_accessory(o.product, query)
+        and o.condition == "new"
+        # A store search for "headphones" also lists earbuds and speakers: the listing
+        # must name the category itself.
+        and re.search(rf"\b{re.escape(query.rstrip('s'))}s?\b", o.product, re.IGNORECASE)
         and brand not in o.product.lower()
         and not matches_product(o.product, name)
     ]
-    picked.sort(key=lambda o: (-(o.rating or 0), -(o.review_count or 0), o.price))
+    picked.sort(key=lambda o: (-(o.rating or 0) * (o.review_count or 0) ** 0.1, o.price))
+    # One listing per model: colors of the same product share their first words.
+    picked = list({_short(o.product, 4).lower(): o for o in reversed(picked)}.values())[::-1]
     return [
         Alternative(
             product=o.product,
@@ -378,15 +476,42 @@ async def store_alternatives(name, known, max_price):
             store=o.store,
             cart_url=o.cart_url,
             image=o.image,
-            reason=(f"{o.rating}★ on {o.store}" if o.rating else f"Listed on {o.store}")
-            + (f", under ${max_price:.2f}" if max_price is not None else ""),
+            verified=o.trust == "high",
+            reason=(f"{o.rating}★ on {where_sold(o)}" if o.rating else f"Listed on {where_sold(o)}")
+            + (f", under ${max_price:.2f}" if max_price is not None else "")
+            + ("" if o.trust == "high" else "; unverified marketplace price"),
         )
-        for o in picked[:3]
+        for o in picked[:5]
     ]
+
+
+def _short(title: str, words: int = 8) -> str:
+    """The start of a long store title: "Beats Solo 4 - Wireless On-Ear ..." -> "Beats Solo 4"."""
+    head = re.split(r"\s[-–|,(]\s?|,\s", title)[0]
+    return " ".join(head.split()[:words])
+
+
+ALT_DEADLINE = 4.5
+MAX_ALTERNATIVES = 8
+_ALT_CACHE: dict[tuple, tuple[float, float, AlternativesResponse]] = {}
+
+
+def _priced(best, product: str, reason: str) -> Alternative:
+    tag = "verified" if best.verified else f"{best.trust}-trust, unverified"
+    return Alternative(
+        product=product, price=best.price, rating=best.rating, url=best.url,
+        store=where_sold(best), cart_url=best.cart_url, image=best.image,
+        verified=best.verified, reason=f"{reason}; {tag} price from {where_sold(best)}",
+    )  # fmt: skip
 
 
 async def alternatives(req):
     name = product_name(req.product)
+    key = (name.lower(), req.max_price)
+    hit = _ALT_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < hit[1]:
+        report("cached", "Reusing alternatives checked in the last few minutes")
+        return hit[2].copy(deep=True)
     # Category identity only; prices/reviews never come from the fixture catalog.
     known = catalog.find_product(name)
     category = known.category if known else "products in the same category"
@@ -397,29 +522,53 @@ async def alternatives(req):
         p
         for p in catalog.PRODUCTS
         if known and p.category == known.category and p.name != known.name
-    ][:3]
+    ][:4]
     # Known names/category are seeds only. Each candidate needs its own live price
-    # evidence; the category search runs alongside those comparisons.
-    found, *results = await asyncio.gather(
-        search(f"{name} alternatives {category} {budget} USD"),
-        *(
-            compare(PriceCompareRequest(product=p.name, max_price=req.max_price))
-            for p in candidates
-        ),
-        return_exceptions=True,
-    )
-    if isinstance(found, SearchUnavailable):
+    # evidence. The category search, store listings, candidate prices and (for products
+    # outside the catalog) the web's own comparisons all run at once, until the deadline.
+    jobs = {
+        "search": search(f"{name} alternatives {category} {budget} USD"),
+        "stores": store_alternatives(name, known, req.max_price),
+        **{
+            f"candidate:{i}": compare(PriceCompareRequest(product=p.name, max_price=req.max_price))
+            for i, p in enumerate(candidates)
+        },
+    }
+    if not candidates:
+        until = time.monotonic() + ALT_DEADLINE - 0.2
+        jobs["compared"] = compared_alternatives(name, req.max_price, until)
+    tasks = {label: asyncio.create_task(job) for label, job in jobs.items()}
+    done, pending = await asyncio.wait(tasks.values(), timeout=ALT_DEADLINE)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    partial = bool(pending)
+
+    def result(label):
+        task = tasks.get(label)
+        if task is None or task not in done or task.cancelled():
+            return None
+        error = task.exception()
+        if error is not None and not isinstance(error, Exception):
+            raise error
+        return error or task.result()
+
+    found = result("search")
+    if found is None or isinstance(found, SearchUnavailable):
         # The category search only adds source links; the candidates are checked on their own.
         found = ([], {"data_source": "unavailable", "sources": [],
                       "notice": "Category search unavailable; each candidate was checked directly."})
     elif isinstance(found, BaseException):
         raise found
     sources, meta = found
-    report("comparing", f"Comparing {len(results)} candidates against the budget")
-    # Store-search alternatives are always priced; catalog leads may not be.
-    priced, unpriced = await store_alternatives(name, known, req.max_price), []
-    for product, result in zip(candidates, results):
-        best = None if isinstance(result, BaseException) else result.best
+    sources = list(sources)
+    report("comparing", f"Comparing {len(candidates)} candidates against the budget")
+    stored = result("stores")
+    priced = [] if stored is None or isinstance(stored, BaseException) else list(stored)
+    unpriced = []
+    for i, product in enumerate(candidates):
+        outcome = result(f"candidate:{i}")
+        best = None if outcome is None or isinstance(outcome, BaseException) else outcome.best
         if best is None:
             # Stores often block automated reads; keep the candidate, flag the price.
             unpriced.append(
@@ -433,30 +582,22 @@ async def alternatives(req):
             continue
         if req.max_price is not None and best.price >= req.max_price:
             continue
-        priced.append(
-            Alternative(
-                product=best.product,
-                price=best.price,
-                rating=best.rating,
-                url=best.url,
-                store=best.store,
-                cart_url=best.cart_url,
-                reason=f"{best.trust.capitalize()}-trust price from {best.store}; verify listing",
-            )
-        )
-        sources.extend(result.sources)
-    if not candidates and not priced:
-        # Not in the catalog and no store listings: use what the web compares it with.
-        found_priced, found_unpriced = await compared_alternatives(name, req.max_price)
-        priced += found_priced
-        unpriced += found_unpriced
+        priced.append(_priced(best, product.name, "Same category"))
+        sources.extend(outcome.sources)
+    compared = result("compared")
+    if compared and not isinstance(compared, BaseException):
+        priced += compared[0]
+        unpriced += compared[1]
     # Catalog leads without a price stay last.
     priced = list({a.product.lower(): a for a in reversed(priced)}.values())
-    priced.sort(key=lambda a: (-(a.rating or 0), a.price))
-    options = priced + unpriced
+    priced.sort(key=lambda a: (not a.verified, -(a.rating or 0), a.price))
+    options = (priced + unpriced)[:MAX_ALTERNATIVES]
     if priced:
+        verified = sum(a.verified for a in priced)
         summary = (
-            f"Candidate {budget}: {priced[0].product} at ${priced[0].price:.2f}. "
+            f"{len(options)} alternatives, {len(priced)} priced ({verified} verified). "
+            f"Top pick {budget}: {_short(priced[0].product)} at ${priced[0].price:.2f} "
+            f"({'verified' if priced[0].verified else 'unverified'}). "
             "Check availability and final checkout price at the source."
         )
     elif unpriced:
@@ -469,13 +610,24 @@ async def alternatives(req):
             f"Found alternative research sources {budget}, but no known products in the "
             "same category; review the linked sources before choosing."
         )
-    meta["sources"] = list({s.url: s for s in sources}.values())[:20]
-    return AlternativesResponse(
+    notice = meta.get("notice")
+    if partial:
+        notice = ((notice or "") + f" Some lookups didn't finish within {ALT_DEADLINE:g} s; "
+                  "results may be incomplete.").strip()  # fmt: skip
+    meta = {**meta, "notice": notice, "sources": list({s.url: s for s in sources}.values())[:20]}
+    response = AlternativesResponse(
         product=name,
         alternatives=options,
         summary=summary,
+        partial=partial,
         **meta,
     )
+    if options or not partial:
+        while len(_ALT_CACHE) >= 256:
+            del _ALT_CACHE[next(iter(_ALT_CACHE))]
+        ttl = PARTIAL_CACHE_SECONDS if partial else CACHE_SECONDS
+        _ALT_CACHE[key] = (time.monotonic(), ttl, response)
+    return response.copy(deep=True)
 
 
 # "Garmin Forerunner 55 vs Coros Pace 3: Which is better?" names a real competitor.
@@ -567,20 +719,30 @@ async def resolve_product(name: str) -> str:
     return versus_titles(sources, name)[0] or name
 
 
-async def compared_alternatives(name: str, max_price: float | None):
-    """(priced, unpriced) alternatives from products commonly compared with `name`."""
+async def compared_alternatives(name: str, max_price: float | None, until: float | None = None):
+    """(priced, unpriced) alternatives from products commonly compared with `name`.
+    Rival prices still pending at `until` (time.monotonic) are listed unpriced."""
     try:
         sources, _ = await search(f"{name} vs")
     except SearchUnavailable:
         return [], []
-    rivals = compared_products(sources, name)[:3]
+    rivals = compared_products(sources, name)[:5]
     if not rivals:
         return [], []
     report("comparing", f"Checking prices for {', '.join(r for r, _ in rivals)}")
-    results = await asyncio.gather(
-        *(compare(PriceCompareRequest(product=r, max_price=max_price)) for r, _ in rivals),
-        return_exceptions=True,
-    )
+    tasks = [
+        asyncio.create_task(compare(PriceCompareRequest(product=r, max_price=max_price)))
+        for r, _ in rivals
+    ]
+    wait = None if until is None else max(0.2, until - time.monotonic())
+    _, pending = await asyncio.wait(tasks, timeout=wait)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    results = [
+        task.exception() or task.result() if not task.cancelled() else TimeoutError()
+        for task in tasks
+    ]
     priced, unpriced = [], []
     for (rival, count), result in zip(rivals, results):
         why = f"Often compared with {name}" + (f" ({count} comparisons)" if count > 1 else "")
@@ -589,9 +751,7 @@ async def compared_alternatives(name: str, max_price: float | None):
             unpriced.append(Alternative(product=rival, price=None, url=_research_url(rival),
                                         reason=f"{why}; no store price could be read, check it yourself"))
         elif max_price is None or best.price < max_price:
-            priced.append(Alternative(product=rival, price=best.price, rating=best.rating, url=best.url,
-                                      store=best.store, cart_url=best.cart_url,
-                                      reason=f"{why}; {best.trust}-trust price from {best.store}"))
+            priced.append(_priced(best, rival, why))
     return priced, unpriced
 
 
@@ -651,7 +811,12 @@ def combine_verdict(per_source: list[tuple[str, list[str]]]) -> str:
 
 
 async def reviews(req):
-    from .expert_reviews import drop_contradictions, parse_review, site_name, text_review
+    from .expert_reviews import (
+        drop_contradictions,
+        parse_review,
+        site_name,
+        text_review,
+    )
     from .merchants import MALFORMED, fetch_page
 
     name = product_name(req.product)

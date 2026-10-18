@@ -18,14 +18,27 @@ Product data defaults to online search. Set `SEARCH_PROVIDER=ddgs` for keyless o
 search, `auto` to try ASI:One search with DDGS fallback, or `asi` to require ASI search.
 `PRODUCT_DATA_MODE=demo` explicitly selects the illustrative fixture catalog. Live failures
 never fall back to fixture prices. Every result identifies its data source, retrieval time,
-source links, and limitations. Prices are gathered broadly, then ranked by trust. Any public HTTPS search result
-that names the product is a candidate: its JSON-LD offers (Offer or AggregateOffer), price
-meta tags, or a single clear dollar price in the search snippet. Each price is labeled
+source links, and limitations. Prices are gathered broadly, then ranked by trust. Candidates
+come from Amazon's and Walmart's public search pages (Walmart marketplace sellers are named)
+and from any public HTTPS search result that names the product: its JSON-LD offers (Offer or
+AggregateOffer), Walmart/Amazon product-page buy-box prices, price meta tags, or a single
+clear dollar price in the search snippet. Model numbers match however stores write them
+("WH1000XM5/B" is the WH-1000XM5; "WH1000XM6" is not). Each price is labeled
 `high` (major retailer/brand store + read from the page), `medium` (one of the two) or
-`low` (neither), and the best price is the cheapest in the most trusted tier available.
-Only clear mismatches are dropped: other currencies, explicit out-of-stock or used
-listings, installments, ranges, other model variants and price outliers. Pages are
-fetched read-only, redirects are re-checked, and private network hosts are refused.
+`low` (neither); `verified` means high trust and new. Up to 8 offers are returned, each
+with its trust, `verified` flag, `condition` and a note saying why it is unverified; used,
+renewed and open-box listings are kept but labeled `used/refurb` and never chosen as best.
+The best price is the cheapest new offer in the most trusted tier available, and the
+summary reads "8 offers, 3 verified: best $279.00 at Amazon (verified)…". Only clear
+mismatches are dropped: other currencies, out-of-stock listings, accessories,
+installments, ranges, other model variants and price outliers.
+
+Speed: store search pages and the web search run at once; up to 6 candidate pages are read
+concurrently with a 2.5 s per-page timeout, stores that just refused are skipped for 10
+minutes, and `/price` answers by a 3.5 s deadline with whatever has arrived (`partial: true`
+and a notice when some sources were still pending). Answers are cached for 10 minutes per
+product (1 minute when partial); `/alternatives` works the same way with a 4.5 s deadline.
+Pages are fetched read-only, redirects are re-checked, and private network hosts are refused.
 Search results can be old or incomplete; prices are leads,
 not verified checkout offers. Missing numeric evidence stays missing.
 

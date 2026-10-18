@@ -79,7 +79,7 @@ def test_amazon_search_url_filters_price_in_cents():
 async def test_amazon_page_reader_uses_the_safe_fetcher(monkeypatch):
     asked = []
 
-    async def fetch(url, limit=merchants.LIMIT):
+    async def fetch(url, limit=merchants.LIMIT, timeout=None):
         asked.append((url, limit))
         return PAGE
 
@@ -89,7 +89,7 @@ async def test_amazon_page_reader_uses_the_safe_fetcher(monkeypatch):
 
 
 async def test_amazon_page_reader_gives_nothing_for_a_captcha(monkeypatch):
-    async def fetch(url, limit=merchants.LIMIT):
+    async def fetch(url, limit=merchants.LIMIT, timeout=None):
         return "<html>Enter the characters you see below. captcha</html>"
 
     monkeypatch.setattr(stores, "AMAZON_RETRY_DELAY", 0)
@@ -100,7 +100,7 @@ async def test_amazon_page_reader_gives_nothing_for_a_captcha(monkeypatch):
 async def test_amazon_page_reader_retries_a_short_interstitial(monkeypatch):
     pages = ["<html><head></head><body>Continue shopping</body></html>", PAGE]
 
-    async def fetch(url, limit=merchants.LIMIT):
+    async def fetch(url, limit=merchants.LIMIT, timeout=None):
         return pages.pop(0)
 
     monkeypatch.setattr(stores, "AMAZON_RETRY_DELAY", 0)

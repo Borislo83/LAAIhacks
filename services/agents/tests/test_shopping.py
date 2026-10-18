@@ -130,7 +130,8 @@ async def test_price_agent_puts_store_listings_first(monkeypatch):
     monkeypatch.setattr(stores, "store_offers", store_offers)
     result = await live.compare(type("R", (), {"product": "Sony XM5", "max_price": 300})())
     assert [o.store for o in result.offers] == ["bestbuy.com"]  # ear pads dropped
-    assert result.best.cart_url and "Best price under $300.00" in result.summary
+    assert result.best.cart_url and result.best.verified
+    assert result.summary.startswith("1 offer, 1 verified: best $279.99 under $300.00 at Best Buy (verified)")
     assert result.data_source.startswith("store_api")
 
 

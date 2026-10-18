@@ -42,7 +42,10 @@ def _price(value) -> float | None:
 
 
 def _offer(product, store, price, url, cart_url, rating, reviews, source, image=None):
+    from .merchants import condition_of
+
     return Offer(
+        condition=condition_of(product),
         product=product,
         store=store,
         price=price,
@@ -218,13 +221,21 @@ async def shopping_search(query: str, max_price: float | None = None) -> list[Of
 
 
 async def store_offers(query: str, max_price: float | None = None) -> list[Offer]:
-    """Listings from every configured store API, within budget."""
+    """Listings from every configured store API and the public store search pages,
+    within budget. A store that fails or is slow adds nothing; the others still count."""
     results = await asyncio.gather(
         bestbuy_search(query, max_price),
         amazon_search(query, max_price),
         shopping_search(query, max_price),
+        walmart_page_search(query, max_price),
+        return_exceptions=True,
     )
-    offers = [o for group in results for o in group]
+    for group in results:
+        if isinstance(group, BaseException) and not isinstance(
+            group, (TimeoutError, aiohttp.ClientError, ValueError)
+        ):
+            raise group
+    offers = [o for group in results if not isinstance(group, BaseException) for o in group]
     if max_price is not None:
         offers = [o for o in offers if o.price < max_price]
     return offers
@@ -365,10 +376,127 @@ async def _read_amazon_page(query: str, max_price: float | None) -> list[Offer]:
     for attempt in range(AMAZON_ATTEMPTS):
         if attempt:
             await asyncio.sleep(AMAZON_RETRY_DELAY * attempt)
-        page = await fetch_page(amazon_search_url(query, max_price), limit=4_000_000)
+        page = await fetch_page(
+            amazon_search_url(query, max_price), limit=4_000_000,
+            timeout=aiohttp.ClientTimeout(total=3.5),
+        )
         if not page or "captcha" in page[:20000].lower():
             continue
         offers = parse_amazon_results(page, max_price)
         if offers or 's-search-result' in page:
             return offers
     return []
+
+
+# --- Walmart's own search page (no key) -----------------------------------------------
+# Walmart's public search page embeds its results as JSON (__NEXT_DATA__): name, current
+# price, seller and condition. Items sold by Walmart.com are high trust; marketplace
+# sellers are medium and named; restored/open-box/pre-owned items are labeled used.
+WALMART_SEARCH = "https://www.walmart.com/search"
+WALMART_CONDITION_NEW = 1
+
+
+def walmart_search_url(query: str) -> str:
+    from urllib.parse import urlencode
+
+    return f"{WALMART_SEARCH}?{urlencode({'q': ' '.join(query.split())[:120]})}"
+
+
+def _walmart_items(node):
+    if isinstance(node, dict):
+        if "priceInfo" in node and "name" in node and node.get("canonicalUrl"):
+            yield node
+            return
+        for value in node.values():
+            yield from _walmart_items(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walmart_items(value)
+
+
+def _walmart_price(item: dict) -> float | None:
+    details = (item.get("priceInfo") or {}).get("priceDetails") or {}
+    if details.get("currency", "USD") != "USD":
+        return None
+    for line in details.get("priceLines") or []:
+        if line.get("lineType") in {"CURRENT_PRICE", "DISCOUNTED_PRICE"}:
+            for value in line.get("values") or []:
+                if value.get("key") == "PRICE":
+                    return _price(value.get("value"))
+    # Older pages carry only the number.
+    price = item.get("price")
+    return _price(price) if isinstance(price, (int, float)) else None
+
+
+def parse_walmart_results(page: str, max_price: float | None = None) -> list[Offer]:
+    import json
+
+    from lxml import html
+
+    from .merchants import MALFORMED, USED
+
+    try:
+        doc = html.fromstring(page)
+        data = json.loads(doc.xpath('//script[@id="__NEXT_DATA__"]/text()')[0])
+    except (*MALFORMED, IndexError, TypeError):
+        return []
+    offers, seen = [], set()
+    for item in _walmart_items(data):
+        path = str(item.get("canonicalUrl", "")).split("?")[0]
+        name = " ".join(str(item.get("name", "")).split())
+        price = _walmart_price(item)
+        if not path.startswith("/ip/") or path in seen or not name or price is None:
+            continue
+        if item.get("isOutOfStock"):
+            continue
+        if max_price is not None and price >= max_price:
+            continue
+        seen.add(path)
+        code = (item.get("conditionV2") or {}).get("code", WALMART_CONDITION_NEW)
+        used = item.get("isPreowned") or code != WALMART_CONDITION_NEW or USED.search(name)
+        seller = " ".join(str(item.get("sellerName") or "").split())[:80] or None
+        by_walmart = seller is None or seller.lower() in {"walmart.com", "walmart"}
+        offer = _offer(
+            name[:200],
+            "walmart.com",
+            price,
+            "https://www.walmart.com" + path,
+            None,
+            item.get("averageRating"),
+            item.get("numberOfReviews"),
+            "walmart_search_page",
+        )
+        offers.append(
+            offer.copy(
+                update={
+                    "trust": "high" if by_walmart else "medium",
+                    "seller": None if by_walmart else seller,
+                    "condition": "used/refurb" if used else "new",
+                    "note": None if by_walmart else f"Marketplace seller on Walmart: {seller}",
+                }
+            )
+        )
+    return offers
+
+
+_WALMART: dict[tuple, tuple[float, list[Offer]]] = {}
+
+
+async def walmart_page_search(query: str, max_price: float | None = None) -> list[Offer]:
+    from .merchants import fetch_page
+
+    if not _words(query):
+        return []
+    key = (" ".join(query.lower().split()), max_price)
+    cached = _WALMART.get(key)
+    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+        return cached[1]
+    page = await fetch_page(
+        walmart_search_url(query), limit=4_000_000, timeout=aiohttp.ClientTimeout(total=3.5)
+    )
+    offers = parse_walmart_results(page, max_price) if page else []
+    if offers:
+        while len(_WALMART) >= CACHE_SIZE:
+            del _WALMART[next(iter(_WALMART))]
+        _WALMART[key] = (time.monotonic(), offers)
+    return offers

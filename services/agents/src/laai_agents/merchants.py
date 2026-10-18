@@ -14,6 +14,7 @@ import asyncio
 import ipaddress
 import json
 import re
+import time
 from statistics import median
 from urllib.parse import urljoin, urlsplit
 
@@ -48,6 +49,8 @@ TRUST_ORDER = {"high": 0, "medium": 1, "low": 2}
 LIMIT = 2_000_000
 MAX_REDIRECTS = 3
 TIMEOUT = aiohttp.ClientTimeout(total=7)
+# Price lookups wait at most this long for one store page; slow stores are skipped.
+PAGE_TIMEOUT = aiohttp.ClientTimeout(total=2.5)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36",
@@ -56,9 +59,23 @@ HEADERS = {
 }
 WRONG_ITEM = re.compile(
     r"replacement|ear\s*pads?|ear\s*tips?|cushions?|carrying case|cover|skin|"
-    r"charger|cable|adapter|refurbished|renewed|pre-?owned",
+    r"charger|cable|adapter",
     re.IGNORECASE,
 )
+# Not new: shown with a "used/refurb" label, never picked as the best price.
+USED = re.compile(
+    r"\b(?:renewed|refurbished|refurb|restored|pre-?owned|open[- ]box|"
+    r"(?:certified\s+)?used\s*(?:-|–|:|\)|,|\])|like\s+new)|\(used\b|^\s*used\b",
+    re.IGNORECASE,
+)
+
+
+BUNDLE = re.compile(r"\bbundle\b|\s\+\s", re.IGNORECASE)
+
+
+def condition_of(title: str) -> str:
+    return "used/refurb" if USED.search(title or "") else "new"
+
 ACCESSORY = re.compile(
     r"\b(?:screen\s+protectors?|protectors?|keychains?|stickers?|decals?|straps?|lanyards?|"
     r"skins?|sleeves?|pouch(?:es)?)\b",
@@ -176,9 +193,6 @@ def _offer_price(offer: dict) -> float | None:
         return None
     if offer.get("priceCurrency", "USD") != "USD":
         return None
-    condition = str(offer.get("itemCondition", ""))
-    if condition and not condition.endswith("NewCondition"):
-        return None
     availability = str(offer.get("availability", ""))
     if re.search(r"OutOfStock|SoldOut|Discontinued", availability):
         return None
@@ -194,7 +208,7 @@ def parse_offers(page: str, url: str, product: str) -> list[Offer]:
     store = store_of(url)
     result = []
 
-    def add(price: float | None, source: str) -> None:
+    def add(price: float | None, source: str, condition: str = "new") -> None:
         if price is not None:
             result.append(
                 Offer(
@@ -204,6 +218,7 @@ def parse_offers(page: str, url: str, product: str) -> list[Offer]:
                     url=url,
                     source=source,
                     trust=trust_for(url, source),
+                    condition=condition,
                 )
             )
 
@@ -219,9 +234,14 @@ def parse_offers(page: str, url: str, product: str) -> list[Offer]:
             offers = node.get("offers", [])
             for offer in [offers] if isinstance(offers, dict) else offers:
                 if isinstance(offer, dict):
-                    add(_offer_price(offer), "structured")
+                    state = str(offer.get("itemCondition", ""))
+                    used = (state and not state.endswith("NewCondition")) or USED.search(name)
+                    add(_offer_price(offer), "structured", "used/refurb" if used else "new")
     if result:
         return result
+    store_page = _walmart_product(doc, url, product) or _amazon_product(doc, url, product)
+    if store_page:
+        return store_page
 
     # Many stores omit JSON-LD but still publish Open Graph / microdata price tags.
     title = " ".join(
@@ -240,8 +260,73 @@ def parse_offers(page: str, url: str, product: str) -> list[Offer]:
         '/@content | //*[@itemprop="price"]/@content'
     )
     if amounts:
-        add(_price(amounts[0]), "page_meta")
+        add(_price(amounts[0]), "page_meta", condition_of(title))
     return result
+
+
+def _walmart_product(doc, url: str, product: str) -> list[Offer]:
+    """A walmart.com /ip/ page: its embedded product JSON has the buy-box price and seller."""
+    from .live import matches_product
+
+    if store_of(url) != "walmart.com" or "/ip/" not in url:
+        return []
+    try:
+        data = json.loads(doc.xpath('//script[@id="__NEXT_DATA__"]/text()')[0])
+        item = data["props"]["pageProps"]["initialData"]["data"]["product"]
+        current = item["priceInfo"]["currentPrice"]
+    except (IndexError, KeyError, TypeError, ValueError):
+        return []
+    name = str(item.get("name", ""))
+    price = _price(current.get("price"))
+    if price is None or current.get("currencyUnit", "USD") != "USD":
+        return []
+    if not matches_product(name, product) or is_accessory(name, product):
+        return []
+    if str(item.get("availabilityStatus", "IN_STOCK")) != "IN_STOCK":
+        return []
+    seller = " ".join(str(item.get("sellerDisplayName") or item.get("sellerName") or "").split())[:80]
+    by_walmart = not seller or seller.lower() in {"walmart.com", "walmart"}
+    used = item.get("isConditionNew") is False or condition_of(name) != "new"
+    return [
+        Offer(
+            product=product, store="walmart.com", price=price, url=url.split("?")[0],
+            source="structured", trust="high" if by_walmart else "medium",
+            seller=None if by_walmart else seller,
+            note=None if by_walmart else f"Marketplace seller on Walmart: {seller}",
+            condition="used/refurb" if used else "new",
+        )
+    ]  # fmt: skip
+
+
+def _amazon_product(doc, url: str, product: str) -> list[Offer]:
+    """An amazon.com product page: the buy-box price next to the product title. A page
+    with no buy-box price (unavailable new) gives nothing; other products' prices on the
+    page (ads, "compare with similar items") are never read."""
+    from .live import matches_product
+
+    if store_of(url) != "amazon.com":
+        return []
+    title = " ".join(" ".join(doc.xpath('//span[@id="productTitle"]//text()')).split())
+    if not title or not matches_product(title, product) or is_accessory(title, product):
+        return []
+    for box in ("corePriceDisplay_desktop_feature_div", "corePrice_feature_div", "corePrice_desktop"):
+        amounts = [
+            t.strip()
+            for t in doc.xpath(
+                f'//*[@id="{box}"]//span[contains(@class,"a-price") and '
+                'not(contains(@class,"a-text-price"))]/span[@class="a-offscreen"]/text()'
+            )
+            if t.strip()
+        ]
+        if amounts:
+            price = _price(amounts[0].replace("$", "")) if amounts[0].startswith("$") else None
+            if price is None:
+                return []
+            return [
+                Offer(product=product, store="amazon.com", price=price, url=url,
+                      source="structured", condition=condition_of(title))
+            ]  # fmt: skip
+    return []
 
 
 # Brand, search and category pages list many products; a price there may be any of them.
@@ -281,16 +366,18 @@ def snippet_offer(source: Source, product: str) -> Offer | None:
         url=source.url,
         source="search_snippet",
         trust=trust_for(source.url, "search_snippet"),
+        condition=condition_of(f"{source.title} {text}"),
     )
 
 
 def rank(offers: list[Offer]) -> list[Offer]:
-    """Keep one offer per store and price, drop clear price outliers, trust first.
+    """Keep one offer per store, seller and price, drop clear price outliers, trust first.
 
     Prices read from product pages anchor the expected range when there are any;
     otherwise all candidates do (with at least three, so one stray can't skew it).
+    Within a trust tier new offers come before used/refurbished ones.
     """
-    unique = list({(o.store, o.price): o for o in offers}.values())
+    unique = list({(o.store, o.seller, o.price, o.condition): o for o in offers}.values())
     # Search engines sometimes merge results, so a snippet can carry another site's
     # price. A snippet price identical to one read from a different site's page is a copy.
     read = {(o.price, o.store) for o in unique if o.source != "search_snippet"}
@@ -300,31 +387,63 @@ def rank(offers: list[Offer]) -> list[Offer]:
         if o.source != "search_snippet"
         or not any(price == o.price and store != o.store for price, store in read)
     ]
-    page = [o.price for o in unique if o.source != "search_snippet"]
-    anchor = page or ([o.price for o in unique] if len(unique) >= 3 else [])
+    new = [o for o in unique if o.condition == "new"] or unique
+    page = [o.price for o in new if o.source != "search_snippet"]
+    anchor = page or ([o.price for o in new] if len(new) >= 3 else [])
     if anchor:
         mid = median(anchor)
         unique = [o for o in unique if 0.4 * mid <= o.price <= 2.5 * mid]
-    return sorted(unique, key=lambda o: (TRUST_ORDER[o.trust], o.price))
+    return sorted(
+        (labeled(o) for o in unique),
+        key=lambda o: (TRUST_ORDER[o.trust], o.condition != "new", o.price),
+    )
+
+
+def labeled(offer: Offer) -> Offer:
+    """Mark whether the price is verified, and say why not when it isn't."""
+    verified = offer.trust == "high" and offer.condition == "new"
+    note = None if verified else offer.note
+    if BUNDLE.search(offer.product):
+        note = "Bundle: includes extras, so it isn't a like-for-like price"
+    elif re.search(r"\bwithout\s+(?:a\s+|the\s+)?(?:manufacturer(?:'s)?\s+)?warranty", offer.product, re.IGNORECASE):
+        note = "Sold without manufacturer warranty"
+    if not note and not verified:
+        if offer.condition != "new":
+            note = "Used or refurbished listing"
+        elif offer.source == "search_snippet":
+            note = "Price from a search listing; not confirmed on the store page"
+        elif not verified:
+            note = "Price read from a store not on the major-retailer list"
+    return offer.copy(update={"verified": verified, "note": note})
 
 
 def best_offer(offers: list[Offer]) -> Offer | None:
-    """Cheapest offer from the most trusted tier that has one."""
+    """Cheapest new offer from the most trusted tier that has one."""
     for tier in TRUST_ORDER:
-        tiered = [o for o in offers if o.trust == tier]
+        tiered = [o for o in offers if o.trust == tier and o.condition == "new"]
         if tiered:
             return min(tiered, key=lambda o: o.price)
     return None
 
 
-async def fetch_page(url: str, limit: int = LIMIT) -> str | None:
+# Stores that just refused or timed out are skipped for a while instead of re-waited on.
+_BLOCKED: dict[str, float] = {}
+BLOCKED_SECONDS = 600
+
+
+def blocked(url: str) -> bool:
+    at = _BLOCKED.get(store_of(url))
+    return at is not None and time.monotonic() - at < BLOCKED_SECONDS
+
+
+async def fetch_page(url: str, limit: int = LIMIT, timeout=TIMEOUT) -> str | None:
     """Read one public HTML page, re-checking every redirect; None if not readable."""
     try:
         for _ in range(MAX_REDIRECTS + 1):
             if not fetchable(url) or not await public_host(urlsplit(url).hostname):
                 return None
             async with net.session().get(
-                url, allow_redirects=False, headers=HEADERS, timeout=TIMEOUT
+                url, allow_redirects=False, headers=HEADERS, timeout=timeout
             ) as response:
                 if response.status in {301, 302, 303, 307, 308}:
                     url = urljoin(url, response.headers.get("Location", ""))
@@ -346,8 +465,16 @@ async def fetch_page(url: str, limit: int = LIMIT) -> str | None:
         return None
 
 
+AMAZON_LANDING = re.compile(r"^https://(?:www\.)?amazon\.com/clp/([A-Z0-9]{10})(?:[/?]|$)")
+
+
 async def fetch_offers(url: str, product: str) -> list[Offer]:
-    page = await fetch_page(url)
+    # Search engines link Amazon's /clp/<ASIN> landing pages; the product page has the price.
+    if landing := AMAZON_LANDING.match(url):
+        url = f"https://www.amazon.com/dp/{landing[1]}"
+    page = await fetch_page(url, limit=4_000_000, timeout=PAGE_TIMEOUT)
+    if not page:
+        _BLOCKED[store_of(url)] = time.monotonic()
     try:
         return parse_offers(page, url, product) if page else []
     except MALFORMED:

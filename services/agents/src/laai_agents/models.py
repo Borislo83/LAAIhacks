@@ -35,6 +35,14 @@ class Offer(Model):
     review_count: int | None = None
     # Product photo from the store listing (Amazon's image CDN).
     image: str | None = None
+    # "new", or "used/refurb" (renewed, restored, open box, pre-owned): shown, never "best".
+    condition: str = "new"
+    # High trust and new: the price was read from a major store's own page or listing.
+    verified: bool = False
+    # Who sells it when that isn't the store itself ("Video & Audio Center" on Walmart).
+    seller: str | None = None
+    # Why it is unverified or what to check ("price from a search listing").
+    note: str | None = None
 
 
 class PriceCompareRequest(Model):
@@ -57,6 +65,8 @@ class PriceCompareResponse(EvidenceResponse):
     best: Offer | None = None
     savings: float | None = None
     summary: str
+    # True when some sources hadn't answered by the deadline; results may be incomplete.
+    partial: bool = False
 
 
 class AlternativesRequest(Model):
@@ -76,12 +86,15 @@ class Alternative(Model):
     # Official add-to-cart link, only for Amazon and Best Buy listings.
     cart_url: str | None = None
     image: str | None = None
+    # The price came from a major store's own listing (high trust, new condition).
+    verified: bool = False
 
 
 class AlternativesResponse(EvidenceResponse):
     product: str
     alternatives: list[Alternative]
     summary: str
+    partial: bool = False
 
 
 class ReviewsRequest(Model):
