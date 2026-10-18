@@ -1,5 +1,4 @@
 # Dashboard
 
-Web UI (PaperOS) for customising the glasses and managing the orchestrator's agent permissions.
-
-Talks to the orchestrator only through its API; shared types come from `packages/shared`.
+Focal Studio, the web dashboard for preferences and agent permissions. See
+[`prototype/README.md`](prototype/README.md).

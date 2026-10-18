@@ -690,7 +690,6 @@ TOPICS = (
                          r"research|nasa|space|climate|hospital|medical|drug)\b"),
 )
 MAX_PER_SECTION = 2
-TOPIC_WORDS = re.compile(r"[A-Za-z][A-Za-z'-]+")
 
 
 def section_of(cluster: list[dict], fallback: str) -> str:

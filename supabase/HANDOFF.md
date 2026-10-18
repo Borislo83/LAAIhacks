@@ -2,7 +2,7 @@
 
 The DB team owns the Supabase Postgres schema and migrations for the shared session workflow.
 This page explains what each team gets and how to plug in. Contract terms follow
-`TEAM_CONTRACT.md` v1.0.
+[`apps/glasses/INTEGRATION.md`](../apps/glasses/INTEGRATION.md) v1.0.
 
 ## Status
 

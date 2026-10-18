@@ -1,5 +1,4 @@
 # Glasses
 
-Glasses UI/UX, head-tracking input, and the client that projects websites onto the glasses.
-
-Receives display updates from the orchestrator and sends head and button events back.
+The G2 glasses client lives in [`glasses-web-reader/`](../../glasses-web-reader/README.md).
+This folder holds the session API contract: [INTEGRATION.md](INTEGRATION.md).

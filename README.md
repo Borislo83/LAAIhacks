@@ -5,15 +5,18 @@ Smart glasses that project websites and run Fetch.ai agents to act on what you'r
 ## Structure
 
 ```
+glasses-web-reader/  G2 glasses app (Even Hub SDK) + condense server; voice, action popups
 apps/
-  glasses/        Glasses UI/UX, head tracking, website projection client
-  dashboard/      PaperOS web UI to customise glasses and manage permissions
+  glasses/        G2 session API contract (INTEGRATION.md)
+  dashboard/      Focal Studio web dashboard (prototype/)
+  public-info/    Public homepage and privacy pages for Google OAuth branding
 services/
-  orchestrator/   Backend orchestrator: task prediction, agent dispatch, persistence
-  agents/         Fetch.ai uAgents (price compare, competitor redirect, reviews)
+  orchestrator/   FastAPI backend: chat, sessions and approvals, Supabase persistence
+  agents/         Fetch.ai uAgents: price, reviews, news, YouTube, Spotify, iMessage, coordinator
 packages/
-  shared/         Shared types and schemas
-demo/             Demo flows, scripts, video assets
+  shared/         OpenAPI schema shared by clients
+supabase/         Migrations and database tests
+demo/             Demo script and sample pages
 ```
 
 ## Deploy
