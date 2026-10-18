@@ -7,6 +7,7 @@ read-only, private-network-refusing fetcher as merchant pages.
 """
 
 import json
+import re
 
 from lxml import html
 
@@ -93,7 +94,6 @@ def parse_review(page: str, url: str, product: str) -> tuple[SourceRating | None
 # --- Reviews without structured data -------------------------------------------------
 # Many review sites publish no schema.org Review. Their text still has a score, pros and
 # cons lists and a verdict, which is what the user actually wants from a review.
-import re  # noqa: E402
 
 PROS_LABEL = re.compile(
     r"^\s*(?:pros|the\s+good|what\s+we\s+(?:like|liked|love)|likes|positives|strengths|"
@@ -192,7 +192,7 @@ def text_review(page: str, url: str, product: str) -> tuple[SourceRating | None,
             pros = _list_after(element)
         elif not cons and CONS_LABEL.match(label):
             cons = _list_after(element)
-    text = " ".join(" ".join(doc.text_content().split()).split())
+    text = " ".join(doc.text_content().split())
     score = None
     found = TEXT_SCORE.search(text)
     if found:

@@ -94,10 +94,11 @@ def store_from(text: str) -> str | None:
 
 def is_listing(text: str, product: str) -> bool:
     """A category ("smart watches"), or any ask to list a store's products, not one model."""
-    if catalog.find_product(product) or re.search(r"\d", product):
-        return False
     words = re.findall(r"[a-z0-9]+", product.lower())
-    if not words:
+    if not words or catalog.find_product(product):
+        return False
+    # A number names a model ("Garmin 55"), unless it is a category word ("4k").
+    if any(re.search(r"\d", w) and w not in CATEGORY_WORDS for w in words):
         return False
     generic = all(w in CATEGORY_WORDS for w in words)
     return generic or bool(LISTING_ASK.search(text) and store_from(text))
@@ -266,7 +267,7 @@ async def consider(
 
         try:
             resolved = await asyncio.wait_for(resolve_product(req.product), timeout=8)
-        except (TimeoutError, ValueError):
+        except Exception:  # noqa: BLE001 -- naming is optional; research the name as asked
             resolved = req.product
         if resolved != req.product:
             publish(req.progress_id, "coordinator", "identified", f"Researching {resolved}")
@@ -539,6 +540,9 @@ def build_coordinator(addresses: dict[str, str]):
             parsed.max_price = req.max_price
         if req.store:
             parsed.store = req.store
+        # A budget or store given as a field still makes a category a store listing.
+        if parsed.max_price is not None or parsed.store is not None:
+            parsed.browse = parsed.browse or is_listing(req.product, parsed.product)
         parsed.progress_id = req.progress_id
         return await consider(ctx, addresses, parsed)
 

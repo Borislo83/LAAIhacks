@@ -79,16 +79,18 @@ def is_accessory(title: str, product: str) -> bool:
         re.IGNORECASE,
     ):
         return True
-    from .live import GENERIC_WORDS
+    from .live import GENERIC_WORDS, matches_product
 
     words = [w for w in re.findall(r"[a-z0-9]+", product.lower()) if w not in GENERIC_WORDS]
     for word in words[:3]:
-        if re.search(
+        made_for = re.search(
             rf"\b(?:for|compatible\s+with|fits|designed\s+for|made\s+for)\s+"
             rf"(?:[\w-]+\s+){{0,2}}{re.escape(word)}\b",
             title,
             re.IGNORECASE,
-        ):
+        )
+        # "AirPods Pro 2 ... for iPhone 15 Pro" names the product first: it is the product.
+        if made_for and not matches_product(title[: made_for.start()], product):
             return True
     return False
 

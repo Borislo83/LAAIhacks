@@ -87,7 +87,13 @@ def has_word(word: str, tokens: set[str]) -> bool:
     Words with digits are model numbers and must match exactly: XM5 is not XM6."""
     if word in tokens:
         return True
-    if len(word) < 6 or any(c.isdigit() for c in word):
+    if any(c.isdigit() for c in word):
+        # Stores glue a color code onto long model numbers: "WH-1000XM5B" is the black
+        # XM5. Short ones stay exact, since "8a" is not the "8".
+        return len(word) >= 5 and any(
+            len(t) == len(word) + 1 and t.startswith(word) and t[-1].isalpha() for t in tokens
+        )
+    if len(word) < 6:
         return False
     return any(
         len(t) >= 6 and not any(c.isdigit() for c in t) and _close_spelling(word, t)
@@ -109,11 +115,28 @@ def _name_words(product: str) -> tuple[frozenset[str], ...]:
 
 def matches_product(title: str, product: str) -> bool:
     tokens = set(re.findall(r"[a-z0-9]+", title.lower()))
-    if _model_inside(title, product):
+    if _model_inside(title, product) or _other_model(title, product):
         return False
     return any(
         words <= tokens or all(has_word(w, tokens) for w in words) for words in _name_words(product)
     )
+
+
+def _other_model(title: str, product: str) -> bool:
+    """Another number after the same name is another generation: "AirPods Pro 3" is not
+    the "AirPods Pro 2", even though the catalog alias "AirPods Pro" fits both."""
+    names = [product, *([known.name] if (known := catalog.find_product(product)) else [])]
+    low = title.lower()
+    for name in names:
+        words = re.findall(r"[a-z0-9]+", name.lower())
+        for a, b in zip(words, words[1:]):
+            # "Pro 3", or a generation spelled out: "Pro (1st Generation)", "Pro 2nd Gen".
+            if a.isalpha() and b.isdigit() and any(
+                m[1] != b
+                for m in re.finditer(rf"\b{a}\s*\(?\s*(\d+)(?:\b|(?:st|nd|rd|th)\s+gen)", low)
+            ):
+                return True
+    return False
 
 
 def _model_inside(title: str, product: str) -> bool:
@@ -168,6 +191,14 @@ async def store_listings(name: str, budget: float | None = None):
 
 
 STORE_NAMES = {"amazon.com": "Amazon", "bestbuy.com": "Best Buy"}
+
+
+def sold_at(offer_store: str, store: str) -> bool:
+    """Offers name their store by domain ("walmart.com") or, from Google Shopping, by
+    name ("Walmart", "Best Buy", "Walmart - Seller"); both count for "walmart.com"."""
+    seller = offer_store.lower()
+    stem = re.sub(r"[^a-z0-9]", "", store.lower().split(".")[0])
+    return seller.endswith(store) or re.sub(r"[^a-z0-9]", "", seller).startswith(stem)
 
 
 def _popularity(offer) -> float:
@@ -277,7 +308,7 @@ async def compare(req):
     store = getattr(req, "store", None)
     if store:
         # "at Amazon": only that store's offers count; say so if it had none.
-        at_store = [o for o in offers if o.store.endswith(store)]
+        at_store = [o for o in offers if sold_at(o.store, store)]
         if not at_store:
             return PriceCompareResponse(
                 product=name, offers=offers, best=None, savings=None, **meta,
