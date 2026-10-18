@@ -28,7 +28,7 @@ import { apiActionCards } from './lensos/action-cards'
 import { ActionPopup, POPUP_TAP_GRACE_MS, popupAllowed } from './lensos/action-popup'
 import { AgentCard, askAgents, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
-import type { RecommendationBatch } from '../shared/recommendations'
+import type { RecommendationBatch, RecommendationContext, RecommendedAction } from '../shared/recommendations'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
 // Status:  body 0..252 (9 lines at 27px)  +  footer 252..288 (1 line)
@@ -1349,6 +1349,36 @@ async function stopVoice(send: boolean) {
   }
 }
 
+// A chosen next step runs like a spoken command: the Focal agents first when
+// signed in, otherwise (or when no agent fits) a web search that opens a page.
+let suggestionSeq = 0
+async function runSuggestion(action: RecommendedAction, context: RecommendationContext) {
+  const seq = ++suggestionSeq
+  const command = `${action.instruction}\nPage: ${context.title} (${context.url})`
+  const client = backend.agents
+  // The spinner takes the lens first, so closing the overlay doesn't redraw the page.
+  void renderThinking(action.title, client ? 'Asking the agents' : 'Searching the web')
+  companion.closeRecommendations()
+  try {
+    if (client) {
+      const asking = loading
+      const answer = await askAgents(client, command)
+      if (seq !== suggestionSeq || loading !== asking) return
+      if (answer) return void showAgentCard(answer, false)
+    }
+    void renderThinking(action.title, 'Searching the web')
+    const searching = loading
+    const page = await searchPage(`${action.title}: ${context.title}`)
+    if (seq !== suggestionSeq || loading !== searching) return
+    void load(page.url, 0, true, true)
+  } catch (err) {
+    if (seq !== suggestionSeq) return
+    if (loading?.host === ASSISTANT) stopLoading()
+    console.error('[suggestion]', err)
+    void renderAssistant(`Couldn't run "${action.title}".`, VOICE_HINT)
+  }
+}
+
 // Agent answers use the reader layout: a title row, 8 rows of text, then the
 // gestures in the footer. Swipes page through; a draft waits for a tap to send.
 function showAgentCard(answer: AgentAnswer, quiet: boolean) {
@@ -1726,7 +1756,7 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
       if (!glassRecommendations) return
       recommendationIndex = glassRecommendations.actions.findIndex(action => action.id === selection.action.id)
       recommendationSelected = true
-      if (view === 'recommendations') void renderGlassesRecommendations()
+      void runSuggestion(selection.action, selection.context)
     },
     reset() { glassRecommendations = undefined; recommendationBase = undefined; recommendationsOpen = false },
     closed() {
