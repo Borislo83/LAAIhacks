@@ -8,11 +8,13 @@ No destination returned by either provider is fetched by this service.
 import asyncio
 import os
 import time
+from collections import OrderedDict
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 import aiohttp
 
+from . import asi, net
 from .models import Source
 from .progress import report
 
@@ -32,22 +34,19 @@ def https_url(value: str) -> bool:
 
 
 async def asi_search(query: str) -> list[Source]:
-    key = os.getenv("ASI_ONE_API_KEY", "")
+    key = asi.api_key()
     if not key:
         raise SearchUnavailable("ASI:One API key is not configured")
-    async with (
-        aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=35)) as session,
-        session.post(
-            "https://api.asi1.ai/v1/responses",
-            headers={"Authorization": f"Bearer {key}"},
-            json={
-                "model": os.getenv("ASI_ONE_MODEL", "asi1-mini"),
-                "input": query
-                + " Search the web now and cite sources. Do not use memory.",
-                "tools": [{"type": "web_search", "search_context_size": "medium"}],
-            },
-        ) as response,
-    ):
+    async with net.session().post(
+        asi.BASE_URL + "/responses",
+        headers=asi.headers(key),
+        timeout=aiohttp.ClientTimeout(total=35),
+        json={
+            "model": asi.model(),
+            "input": query + " Search the web now and cite sources. Do not use memory.",
+            "tools": [{"type": "web_search", "search_context_size": "medium"}],
+        },
+    ) as response:
         if response.status != 200:
             raise SearchUnavailable(f"ASI search returned HTTP {response.status}")
         data = await response.json()
@@ -73,16 +72,32 @@ async def asi_search(query: str) -> list[Source]:
 
 
 # Public search rate-limits bursts, so queries are cached briefly and run two at a time.
-_CACHE: dict[str, tuple[float, list[Source]]] = {}
+_CACHE: OrderedDict[str, tuple[float, list[Source]]] = OrderedDict()
 CACHE_SECONDS = 600
+CACHE_SIZE = 256
 _SLOTS = asyncio.Semaphore(2)
 BACKENDS = ("yahoo,duckduckgo", "google,startpage", "auto")
 
 
+def _cached(query: str) -> list[Source] | None:
+    now = time.monotonic()
+    # Insertion order is age order, so expired entries sit at the front.
+    while _CACHE and now - next(iter(_CACHE.values()))[0] >= CACHE_SECONDS:
+        _CACHE.popitem(last=False)
+    hit = _CACHE.get(query)
+    return hit[1] if hit else None
+
+
+def _remember(query: str, sources: list[Source]) -> None:
+    _CACHE.pop(query, None)
+    _CACHE[query] = (time.monotonic(), sources)
+    while len(_CACHE) > CACHE_SIZE:
+        _CACHE.popitem(last=False)
+
+
 async def free_search(query: str) -> list[Source]:
-    cached = _CACHE.get(query)
-    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
-        return cached[1]
+    if (cached := _cached(query)) is not None:
+        return cached
 
     def run(backend):
         from ddgs import DDGS
@@ -112,8 +127,11 @@ async def free_search(query: str) -> list[Source]:
     ]
     if not sources:
         raise SearchUnavailable("Free search is temporarily unavailable")
-    _CACHE[query] = (time.monotonic(), sources)
+    _remember(query, sources)
     return sources
+
+
+ASI_FAILURES = (TimeoutError, SearchUnavailable, aiohttp.ClientError, ValueError)
 
 
 async def search(query: str) -> tuple[list[Source], dict]:
@@ -122,27 +140,34 @@ async def search(query: str) -> tuple[list[Source], dict]:
     if provider not in {"auto", "asi", "ddgs"}:
         raise SearchUnavailable("SEARCH_PROVIDER must be auto, asi, or ddgs")
     notice = "Search results are leads; verify price, availability and product variant at the source."
-    if provider in {"auto", "asi"}:
+    if provider == "asi":
         try:
             sources = await asi_search(query)
-            # Seek verbatim snippets for numerical claims even if ASI finds citations.
-            if provider == "auto":
-                snippets = await free_search(query)
-                sources = snippets + [
-                    s for s in sources if s.url not in {x.url for x in snippets}
-                ]
-                provider = "asi_web_search+ddgs"
-            else:
-                provider = "asi_web_search"
-        except (TimeoutError, SearchUnavailable, aiohttp.ClientError, ValueError):
-            if provider == "asi":
-                raise SearchUnavailable(
-                    "ASI search unavailable; choose auto or ddgs for fallback"
-                )
-            report("fallback", "ASI search unavailable; trying free search")
-            sources = await free_search(query)
-            provider = "ddgs"
+        except ASI_FAILURES:
+            raise SearchUnavailable(
+                "ASI search unavailable; choose auto or ddgs for fallback"
+            )
+        provider = "asi_web_search"
+    elif provider == "auto":
+        # Seek verbatim snippets for numerical claims even if ASI finds citations.
+        cited, snippets = await asyncio.gather(
+            asi_search(query), free_search(query), return_exceptions=True
+        )
+        for result in (cited, snippets):
+            if isinstance(result, BaseException) and not isinstance(result, ASI_FAILURES):
+                raise result
+        if isinstance(cited, BaseException):
+            if isinstance(snippets, BaseException):
+                raise snippets
+            report("fallback", "ASI search unavailable; used free search")
+            sources, provider = snippets, "ddgs"
             notice += " ASI search unavailable; used the free search fallback."
+        elif isinstance(snippets, BaseException):
+            sources, provider = cited, "asi_web_search"
+        else:
+            seen = {s.url for s in snippets}
+            sources = snippets + [s for s in cited if s.url not in seen]
+            provider = "asi_web_search+ddgs"
     else:
         sources = await free_search(query)
     report("sources_found", f"Found {len(sources)} online sources")

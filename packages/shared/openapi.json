@@ -52,7 +52,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "$ref": "#/components/schemas/TaskKind"
+              "$ref": "#/components/schemas/AgentKind"
             }
           }
         ],
@@ -451,7 +451,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "$ref": "#/components/schemas/TaskKind"
+              "$ref": "#/components/schemas/AgentKind"
             }
           }
         ],
@@ -480,6 +480,49 @@
             }
           }
         }
+      }
+    },
+    "/v1/messages/send": {
+      "post": {
+        "summary": "Send Message",
+        "operationId": "send_message_v1_messages_send_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageSend"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageSent"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/v1/buyer/prepare/stream": {
@@ -601,6 +644,7 @@
     "/v1/devices": {
       "post": {
         "summary": "Register Device",
+        "description": "Allowed role(s): `g2`.",
         "operationId": "register_device_v1_devices_post",
         "requestBody": {
           "content": {
@@ -624,16 +668,78 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Device"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -649,6 +755,7 @@
     "/v1/sessions": {
       "post": {
         "summary": "Create Session",
+        "description": "Allowed role(s): `web`.",
         "operationId": "create_session_v1_sessions_post",
         "requestBody": {
           "content": {
@@ -672,16 +779,78 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRef"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -697,6 +866,7 @@
     "/v1/sessions/{session_id}": {
       "get": {
         "summary": "Session Status",
+        "description": "Allowed role(s): any role; owner only.",
         "operationId": "session_status_v1_sessions__session_id__get",
         "security": [
           {
@@ -720,16 +890,78 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -740,6 +972,7 @@
     "/v1/sessions/{session_id}/page": {
       "put": {
         "summary": "Page",
+        "description": "Allowed role(s): `web`.",
         "operationId": "page_v1_sessions__session_id__page_put",
         "security": [
           {
@@ -773,16 +1006,78 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRef"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -793,6 +1088,7 @@
     "/v1/sessions/{session_id}/actions": {
       "put": {
         "summary": "Actions",
+        "description": "Allowed role(s): `agent`.",
         "operationId": "actions_v1_sessions__session_id__actions_put",
         "security": [
           {
@@ -826,16 +1122,78 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRef"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -846,6 +1204,7 @@
     "/v1/sessions/{session_id}/display": {
       "get": {
         "summary": "Display",
+        "description": "Allowed role(s): `g2`, `web`.",
         "operationId": "display_v1_sessions__session_id__display_get",
         "security": [
           {
@@ -880,16 +1239,81 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DisplayState"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Display unchanged"
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -900,6 +1324,7 @@
     "/v1/sessions/{session_id}/actions/{action_id}/approve": {
       "post": {
         "summary": "Approve",
+        "description": "Allowed role(s): `g2`.",
         "operationId": "approve_v1_sessions__session_id__actions__action_id__approve_post",
         "security": [
           {
@@ -945,16 +1370,78 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -965,6 +1452,7 @@
     "/v1/sessions/{session_id}/actions/{action_id}/reject": {
       "post": {
         "summary": "Reject",
+        "description": "Allowed role(s): `g2`.",
         "operationId": "reject_v1_sessions__session_id__actions__action_id__reject_post",
         "security": [
           {
@@ -1010,16 +1498,78 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -1030,6 +1580,7 @@
     "/v1/sessions/{session_id}/events": {
       "get": {
         "summary": "Events",
+        "description": "Allowed role(s): `executor`.",
         "operationId": "events_v1_sessions__session_id__events_get",
         "security": [
           {
@@ -1064,16 +1615,78 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EventList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -1084,6 +1697,7 @@
     "/v1/sessions/{session_id}/events/{event_id}/ack": {
       "post": {
         "summary": "Ack",
+        "description": "Allowed role(s): `executor`.",
         "operationId": "ack_v1_sessions__session_id__events__event_id__ack_post",
         "security": [
           {
@@ -1117,16 +1731,78 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EventAck"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -1137,6 +1813,7 @@
     "/v1/sessions/{session_id}/actions/{action_id}/result": {
       "post": {
         "summary": "Result",
+        "description": "Allowed role(s): `executor`.",
         "operationId": "result_v1_sessions__session_id__actions__action_id__result_post",
         "security": [
           {
@@ -1182,16 +1859,78 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ResultResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller role cannot perform this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Session, action, event or device not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale revision or expired action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Request does not match the v1.0 schema",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backend unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -1258,6 +1997,12 @@
       },
       "ActionResult": {
         "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
           "request_id": {
             "type": "string",
             "maxLength": 160,
@@ -1348,11 +2093,14 @@
           "kind": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/TaskKind"
+                "$ref": "#/components/schemas/AgentKind"
               },
               {
                 "type": "string",
-                "const": "buyer"
+                "enum": [
+                  "buyer",
+                  "message"
+                ]
               }
             ],
             "title": "Kind"
@@ -1397,6 +2145,52 @@
           "ms"
         ],
         "title": "AgentCall"
+      },
+      "AgentKind": {
+        "type": "string",
+        "enum": [
+          "price",
+          "alternatives",
+          "reviews",
+          "youtube"
+        ],
+        "title": "AgentKind",
+        "description": "Every routable specialist. Only the shopping TaskKinds are persisted as tasks."
+      },
+      "ApprovalResponse": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "title": "Action Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "rejected"
+            ],
+            "title": "Status"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "action_id",
+          "status"
+        ],
+        "title": "ApprovalResponse"
       },
       "BuyerPreparation": {
         "properties": {
@@ -1587,6 +2381,27 @@
         ],
         "title": "Decision"
       },
+      "Device": {
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Device Id"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen At"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "device_id",
+          "last_seen_at"
+        ],
+        "title": "Device"
+      },
       "DeviceRegistration": {
         "properties": {
           "device_id": {
@@ -1617,6 +2432,401 @@
         "additionalProperties": false,
         "type": "object",
         "title": "DispatchRequest"
+      },
+      "DisplayAction": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "title": "Action Id"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "approved",
+              "rejected",
+              "running",
+              "completed",
+              "failed",
+              "invalidated"
+            ],
+            "title": "Status"
+          },
+          "requires_approval": {
+            "type": "boolean",
+            "title": "Requires Approval",
+            "default": true
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "action_id",
+          "type",
+          "label",
+          "description",
+          "status",
+          "expires_at"
+        ],
+        "title": "DisplayAction"
+      },
+      "DisplayFact": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "DisplayFact"
+      },
+      "DisplayPage": {
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "title": "Page Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "summary": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Summary",
+            "default": []
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/DisplayFact"
+            },
+            "type": "array",
+            "title": "Facts",
+            "default": []
+          },
+          "source_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Label"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "page_id",
+          "title",
+          "kind"
+        ],
+        "title": "DisplayPage"
+      },
+      "DisplayPreferences": {
+        "properties": {
+          "display_density": {
+            "type": "string",
+            "enum": [
+              "comfortable",
+              "compact"
+            ],
+            "title": "Display Density"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "display_density"
+        ],
+        "title": "DisplayPreferences"
+      },
+      "DisplayState": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DisplayPage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/DisplayAction"
+            },
+            "type": "array",
+            "title": "Actions",
+            "default": []
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "actions",
+              "confirm",
+              "loading",
+              "result",
+              "error",
+              "reader"
+            ],
+            "title": "Mode"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "preferences": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DisplayPreferences"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "session_id",
+          "revision",
+          "mode"
+        ],
+        "title": "DisplayState"
+      },
+      "ErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorDetail"
+      },
+      "ErrorEnvelope": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "ErrorEnvelope"
+      },
+      "Event": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Event Id"
+          },
+          "cursor": {
+            "type": "string",
+            "title": "Cursor"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "action_id": {
+            "type": "string",
+            "title": "Action Id"
+          },
+          "page_id": {
+            "type": "string",
+            "title": "Page Id"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Occurred At"
+          },
+          "consumed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consumed At"
+          },
+          "action_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Status"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "event_id",
+          "cursor",
+          "type",
+          "session_id",
+          "action_id",
+          "page_id",
+          "occurred_at"
+        ],
+        "title": "Event"
+      },
+      "EventAck": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Event Id"
+          },
+          "cursor": {
+            "type": "string",
+            "title": "Cursor"
+          },
+          "consumed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consumed At"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "event_id",
+          "cursor"
+        ],
+        "title": "EventAck"
+      },
+      "EventList": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "type": "array",
+            "title": "Events"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "title": "EventList"
       },
       "Fact": {
         "properties": {
@@ -1651,6 +2861,60 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "MessageSend": {
+        "properties": {
+          "draft_id": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Draft Id"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "draft_id",
+          "text"
+        ],
+        "title": "MessageSend",
+        "description": "A draft the signed-in user reviewed and confirmed; text may be edited first."
+      },
+      "MessageSent": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "failed",
+              "needs_permission"
+            ],
+            "title": "Status"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Summary"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "summary"
+        ],
+        "title": "MessageSent"
       },
       "PageContext": {
         "properties": {
@@ -1850,6 +3114,30 @@
         "type": "object",
         "title": "Preferences"
       },
+      "ResultResponse": {
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "title": "Action Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "Status"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "action_id",
+          "status"
+        ],
+        "title": "ResultResponse"
+      },
       "SavedPreferences": {
         "properties": {
           "display_density": {
@@ -1913,6 +3201,75 @@
         "additionalProperties": false,
         "type": "object",
         "title": "SessionCreate"
+      },
+      "SessionRef": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "session_id",
+          "revision"
+        ],
+        "title": "SessionRef"
+      },
+      "SessionStatus": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "active_page_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Page Id"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "session_id",
+          "revision",
+          "expires_at"
+        ],
+        "title": "SessionStatus"
       },
       "Task": {
         "properties": {
@@ -2020,9 +3377,16 @@
       "ToolArgs": {
         "properties": {
           "product": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Product"
           },
           "current_store": {
@@ -2060,12 +3424,32 @@
               }
             ],
             "title": "Max Price"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "song",
+              "video",
+              "auto"
+            ],
+            "title": "Kind",
+            "default": "auto"
           }
         },
         "type": "object",
-        "required": [
-          "product"
-        ],
         "title": "ToolArgs",
         "description": "Agent arguments chosen by the LLM; validated before any agent call."
       },

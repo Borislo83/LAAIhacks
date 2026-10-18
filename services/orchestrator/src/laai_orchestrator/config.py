@@ -17,6 +17,8 @@ class Config(BaseSettings):
     # Local prototyping only: lets /v1/chat run without a Supabase sign-in.
     chat_auth_required: bool = True
     amazon_cart_executor_token: SecretStr = SecretStr("")
+    # Sends confirmed iMessage drafts. Empty disables sending (503). Never sent to clients.
+    imessage_executor_token: SecretStr = SecretStr("")
     # Local development only. Accepts the fixture tokens in DEMO_TOKENS from loopback clients
     # and maps them to DEMO_USER_ID, which must be an existing Supabase Auth user.
     demo_auth_mode: bool = False

@@ -1,6 +1,6 @@
 """Run the agents.
 
-    uv run laai-agents                 # all three in one Bureau on :8000
+    uv run laai-agents                 # every agent in one Bureau on :8000
     uv run laai-agents --demo          # same, plus a client that queries each agent once
     uv run laai-agents --only reviews --port 8003   # one agent on its own (e.g. with AGENTVERSE_MAILBOX=1)
 """
@@ -13,7 +13,13 @@ from uagents import Bureau
 load_dotenv()
 
 from . import llm
-from .agents import build_alternatives_agent, build_price_agent, build_reviews_agent
+from .agents import (
+    build_alternatives_agent,
+    build_messenger_agent,
+    build_price_agent,
+    build_reviews_agent,
+    build_youtube_agent,
+)
 from .buyer import build_buyer_agent
 from .carts import build_amazon_cart_agent, build_bestbuy_cart_agent
 
@@ -21,6 +27,8 @@ BUILDERS = {
     "price": build_price_agent,
     "alternatives": build_alternatives_agent,
     "reviews": build_reviews_agent,
+    "youtube": build_youtube_agent,
+    "messenger": build_messenger_agent,
     "buyer": build_buyer_agent,
     "amazon-cart": build_amazon_cart_agent,
     "bestbuy-cart": build_bestbuy_cart_agent,
