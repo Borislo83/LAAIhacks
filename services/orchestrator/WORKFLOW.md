@@ -58,6 +58,11 @@ Approvals require the current revision and a proposed, unexpired action on the a
 Only registered `compare_prices` and `find_reviews` handlers can be proposed for this release.
 Other contract type names are recognized but rejected until a reviewed handler is registered.
 
+`GET /v1/sessions` (`agent` or `executor` role, migration 006) lists the caller's unexpired
+sessions as `{"sessions":[{session_id, revision, active_page_id, updated_at, expires_at}]}`,
+newest activity first, at most 100. It takes no lock and is rate limited like every other
+operation. Agent-side watchers compare revisions to notice page PUTs without a per-page event.
+
 `GET .../events?after=cursor` returns `{"events": [...]}` in cursor order, at most 100 at a time.
 Cursors are 19-digit strings. Reads never consume events. Terminal result acceptance marks the
 corresponding event consumed in the same transaction as the saved result and display revision.

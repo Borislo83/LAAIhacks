@@ -138,11 +138,13 @@ async def raw(base_url, token, method, path, body=None, params=None):
         return response.status, json.loads(text) if text else None
 
 
-def page_body(page_id="page-sony", title="Sony WH-1000XM5 Wireless Headphones"):
+def page_body(
+    page_id="page-sony", title="Sony WH-1000XM5 Wireless Headphones", kind="product"
+):
     return {
         "page_id": page_id,
         "url": "https://example.com/sony-wh-1000xm5",
-        "kind": "product",
+        "kind": kind,
         "title": title,
         "summary": ["Active noise cancellation", "Up to 30 hours battery"],
         "facts": [{"label": "Price", "value": "$399.99 (demo)"}],

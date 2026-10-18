@@ -35,6 +35,8 @@ def rpc_response(call):
         return {"event_id": payload["event_id"], "cursor": "1".zfill(19), "consumed_at": None}
     if operation == "events":
         return {"events": []}
+    if operation == "sessions":
+        return {"sessions": []}
     return ref
 
 
@@ -194,6 +196,34 @@ def test_ack_and_device_registration_are_role_scoped():
         assert client.post(f"/v1/sessions/{SESSION}/events/{uuid4()}/ack").status_code == 403
         assert client.post("/v1/devices").json()["error"]["code"] == "FORBIDDEN"
         assert calls == []
+
+
+def test_agents_and_executors_list_their_sessions_for_page_watching():
+    listed = {
+        "session_id": SESSION,
+        "revision": 4,
+        "active_page_id": "page-1",
+        "updated_at": "2026-10-17T00:00:00Z",
+        "expires_at": "2026-10-18T00:00:00Z",
+    }
+    client, calls = client_for(["agent"], {"sessions": [listed]})
+    with client:
+        client.headers["Authorization"] = "Bearer valid"
+        response = client.get("/v1/sessions")
+        assert response.status_code == 200
+        assert response.json()["sessions"][0]["revision"] == 4
+        assert calls[-1]["p_operation"] == "sessions"
+        assert calls[-1]["p_session_id"] is None and calls[-1]["p_user_id"] == str(USER)
+    client, calls = client_for(["executor"])
+    with client:
+        client.headers["Authorization"] = "Bearer valid"
+        assert client.get("/v1/sessions").json() == {"sessions": []}
+    for roles in (["web"], ["g2"]):
+        client, calls = client_for(roles)
+        with client:
+            client.headers["Authorization"] = "Bearer valid"
+            assert client.get("/v1/sessions").json()["error"]["code"] == "FORBIDDEN"
+            assert calls == []
 
 
 def demo_client(host="127.0.0.1", **overrides):
@@ -375,6 +405,9 @@ def test_openapi_declares_typed_responses_and_error_envelopes():
         assert ref == "#/components/schemas/ErrorEnvelope"
     assert "g2" in display["description"]
     components = schema["components"]["schemas"]
+    assert schema["paths"]["/v1/sessions"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/SessionList"}
     for name in ("SessionRef", "ApprovalResponse", "EventList", "Event", "ResultResponse"):
         assert name in components
     assert "schema_version" in components["ActionResult"]["properties"]

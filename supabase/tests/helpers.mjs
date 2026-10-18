@@ -6,10 +6,12 @@ export const alice='00000000-0000-4000-8000-000000000001',bob='00000000-0000-400
 export const M={
  orchestrator:'202610170001_orchestrator.sql',shared:'202610170002_shared_workflow.sql',
  preferences:'202610170003_user_preferences.sql',v1_1:'202610170004_workflow_v1_1.sql',perf:'202610170005_workflow_perf.sql',
+ sessions:'202610170006_session_list.sql',
 };
 // Every behavior test runs against what is live today and against the next migration on top.
 export const LIVE=[M.orchestrator,M.shared,M.preferences,M.v1_1];
 export const NEXT=[...LIVE,M.perf];
+export const WATCH=[...NEXT,M.sessions];
 export const STACKS={'001-004 (live)':LIVE,'001-005':NEXT};
 
 export const migration=name=>readFile(new URL('../migrations/'+name,import.meta.url),'utf8');
