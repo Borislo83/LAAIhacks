@@ -466,7 +466,8 @@ function bubble(html,cls){
   const el=document.createElement("div"); el.className="msg "+cls; el.innerHTML=html;
   $("#thread").appendChild(el); el.scrollIntoView({block:"end",behavior:"smooth"}); return el;
 }
-function miniCard(c,i,all){
+// Also called with one card for live previews, so `all` may be missing.
+function miniCard(c,i,all=[c]){
   const a=AGENTS[c.kind];
   const tag=c.kind==="reviews"&&all.filter(x=>x.kind==="reviews").length>1?` <span class="tag">· ${esc(c.result?.product||c.payload?.product||"")}</span>`:"";
   const head=`<div class="hd">${orb(a.v,22,true)}<b>${a.name}${tag}</b><span class="ms">${c.ms} ms</span></div>`;
@@ -487,7 +488,8 @@ async function readEvents(path,body,onProgress){
     const raw=frame.split("\n").filter(line=>line.startsWith("data:")).map(line=>line.slice(5).trimStart()).join("\n");
     if(!raw)return;
     const event=JSON.parse(raw);
-    if(event.type==="progress")onProgress(event);
+    // A display problem in a progress update must never cancel the research itself.
+    if(event.type==="progress"){try{onProgress(event)}catch(err){console.error("progress update failed",err)}}
     if(event.type==="error")throw new Error(event.message);
     if(event.type==="result")result=event.data;
   }
