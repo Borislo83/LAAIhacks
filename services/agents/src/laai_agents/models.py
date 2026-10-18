@@ -187,6 +187,20 @@ class NewsSource(Model):
     published_at: str | None = None
 
 
+class NewsStory(Model):
+    """One story in a news brief."""
+
+    section: str
+    headline: str
+    summary: str
+    url: str
+    publisher: str
+    published_at: str | None = None
+    image_url: str | None = None
+    # How many outlets in the results covered this story: a rough importance signal.
+    coverage: int = 1
+
+
 class NewsResponse(Model):
     query: str
     headline: str | None = None
@@ -198,3 +212,6 @@ class NewsResponse(Model):
     # Most relevant first.
     sources: list[NewsSource] = Field(default_factory=list, max_items=8)
     error: str | None = None
+    # A general request ("brief me on the news") returns several stories instead.
+    brief: bool = False
+    stories: list[NewsStory] = Field(default_factory=list, max_items=10)

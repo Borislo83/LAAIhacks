@@ -188,6 +188,17 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
 .yt:hover b{text-decoration:underline}
 /* News brief: image left, sourced text right; stacks when the card itself is narrow */
 .out-news{container-type:inline-size}
+.brief{max-width:720px;display:flex;flex-direction:column;gap:6px}
+.brief h3{margin:0;font:500 17px/24px var(--sans)}
+.stories{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.story{display:flex;gap:14px;justify-content:space-between;align-items:flex-start;padding:12px 0;border-top:1px solid var(--hair)}
+.story-text{display:flex;flex-direction:column;gap:4px;min-width:0}
+.story-sec{font:500 10px var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--signal)}
+.story h4{margin:0;font:500 15px/21px var(--sans);overflow-wrap:anywhere}
+.story h4 a{color:var(--ink);text-decoration:none}
+.story h4 a:hover{text-decoration:underline}
+.story p{margin:0;font-size:13px;line-height:20px;color:var(--ink);overflow-wrap:anywhere}
+.story img{width:96px;height:72px;object-fit:cover;border-radius:8px;flex-shrink:0;background:#ECECE8}
 .news{display:grid;grid-template-columns:minmax(0,40%) minmax(0,1fr);gap:14px 18px;align-items:start;max-width:720px}
 .news-img{position:relative;margin:0;aspect-ratio:4/3;border-radius:10px;overflow:hidden;background:#ECECE8;border:1px solid var(--hair)}
 .news-img a,.news-img img{display:block;width:100%;height:100%}
@@ -512,6 +523,16 @@ const VIEW={
       body:(cands?`<div class="draft-cands">Who did you mean?${cands}</div>`:"")+card};
   },
   news(d){
+    // A brief ("brief me on the news"): several stories, each with its own source.
+    if(d.brief&&d.stories?.length){
+      const rows=d.stories.map(s=>{
+        const u=httpsUrl(s.url),img=httpsUrl(s.image_url),ago=relTime(s.published_at);
+        const meta=[esc(s.publisher||(u?u.hostname.replace(/^www\./,""):"")),ago&&`<time datetime="${esc(s.published_at)}">${esc(ago)}</time>`,s.coverage>1&&`${Number(s.coverage)} outlets`].filter(Boolean).join(" · ");
+        const head=u?`<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${esc(s.headline)}</a>`:esc(s.headline);
+        return `<li class="story"><div class="story-text"><span class="story-sec">${esc(s.section||"")}</span><h4>${head}</h4>${s.summary?`<p>${esc(s.summary)}</p>`:""}<span class="news-meta">${meta}</span></div>${img?`<img src="${esc(img.href)}" alt="" width="96" height="72" loading="lazy" referrerpolicy="no-referrer">`:""}</li>`}).join("");
+      return {lens:lens("NEWS BRIEF",d.headline||"News brief",`${d.stories.length} stories · glance down`),
+        body:`<div class="brief"><h3>${esc(d.headline||"News brief")}</h3><ol class="stories">${rows}</ol></div>`};
+    }
     const srcs=(d.sources||[]).map(s=>({s,u:httpsUrl(s.url)})).filter(x=>x.u);
     if(!d.headline)return {lens:lens("NEWS","No story found",""),body:`<p class="muted">${esc(d.summary||"No sources reported this yet.")}</p>`};
     const img=httpsUrl(d.image_url),link=httpsUrl(d.image_source_url),top=srcs[0];
@@ -634,7 +655,7 @@ const convo=[];
 let activePurchase=null;
 // Cart requests are never retried, so nothing can be added to a cart twice.
 const isCartRelated=text=>!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
-const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100","Find the song Blinding Lights","Text Alex that I'm running 10 minutes late"];
+const STARTERS=["Brief me on the news today.","Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100","Find the song Blinding Lights","Text Alex that I'm running 10 minutes late"];
 $("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
 document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
 
