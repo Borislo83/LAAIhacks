@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import type { Context } from 'hono'
@@ -8,6 +9,10 @@ interface Options {
   /** Local development only: an orchestrator DEMO_AUTH_MODE token (demo-*) the gateway attaches
    *  for requests made on this machine. Tunnel and LAN requests never get it. */
   devToken?: string
+  /** Optional per-run pairing secret (at least 24 characters) from the QR code the phone
+   *  scans. A request carrying it gets the dev token from anywhere, so it never lives
+   *  longer than one demo run and is only shared through that QR. */
+  pairSecret?: string
   /** The TCP peer address; defaults to the Node socket. Injectable for tests. */
   peerAddress?: (c: Context) => string | undefined
 }
@@ -18,6 +23,8 @@ const TUNNEL = ['forwarded', 'x-real-ip', 'cf-connecting-ip', 'cf-ray']
 const nodePeer = (c: Context) => { try { return getConnInfo(c).remote.address } catch { return undefined } }
 /** The client's stand-in for "use the gateway's local dev token". */
 export const LOCAL_DEV_BEARER = 'Bearer local-dev'
+/** The client's stand-in for "I scanned the pairing QR": `Bearer pair-<secret>`. */
+export const PAIR_PREFIX = 'pair-'
 
 /** Narrow gateway to the existing Supabase orchestrator. No service credentials. */
 export function orchestratorGateway(options: Options) {
@@ -25,6 +32,15 @@ export function orchestratorGateway(options: Options) {
   if (base.username || base.password || base.pathname !== '/' || base.search || base.hash ||
       (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)))) {
     throw new Error('ORCHESTRATOR_URL must be an HTTPS origin (HTTP is allowed on loopback).')
+  }
+  if (options.pairSecret && (!options.devToken || !/^[A-Za-z0-9_-]{24,128}$/.test(options.pairSecret))) {
+    throw new Error('GATEWAY_PAIR_SECRET needs GATEWAY_DEV_TOKEN and 24-128 URL-safe characters.')
+  }
+  const pairBearer = options.pairSecret ? Buffer.from(`Bearer ${PAIR_PREFIX}${options.pairSecret}`) : null
+  const paired = (auth: string) => {
+    if (!pairBearer) return false
+    const given = Buffer.from(auth)
+    return given.length === pairBearer.length && timingSafeEqual(given, pairBearer)
   }
   if (options.devToken && !/^demo-[a-z]+$/.test(options.devToken)) {
     throw new Error('GATEWAY_DEV_TOKEN must be an orchestrator demo token such as demo-all.')
@@ -51,7 +67,7 @@ export function orchestratorGateway(options: Options) {
   ]
   gateway.use('*', bodyLimit({ maxSize: 100_000 }))
   // Tells the app whether it can connect without a token (local dev token on this machine).
-  gateway.get('/dev', c => c.json({ local: !!options.devToken && isLocal(c) }, 200, { 'Cache-Control': 'no-store' }))
+  gateway.get('/dev', c => c.json({ local: !!options.devToken && isLocal(c), pairing: !!pairBearer }, 200, { 'Cache-Control': 'no-store' }))
   gateway.all('*', async c => {
     const path = c.req.path.replace(/^\/api\/backend/, '')
     if (!routes.some(([method, pattern]) => method === c.req.method && pattern.test(path))) return c.json({ error: 'Route unavailable' }, 404)
@@ -59,9 +75,10 @@ export function orchestratorGateway(options: Options) {
     const allowed = [new URL(c.req.url).origin, 'http://localhost:5173', 'http://127.0.0.1:5173', ...(options.origins ?? [])]
     if (origin && !allowed.includes(origin)) return c.json({ error: 'Origin not allowed' }, 403)
     let auth = c.req.header('authorization') ?? ''
-    const devLocal = auth === LOCAL_DEV_BEARER && !!options.devToken && isLocal(c)
+    // Local dev sign-in (this machine), or a phone that scanned this run's pairing QR.
+    const devLocal = (auth === LOCAL_DEV_BEARER && !!options.devToken && isLocal(c)) || paired(auth)
     if (devLocal) auth = `Bearer ${options.devToken}`
-    else if (!/^Bearer [^\s]{1,8192}$/i.test(auth) || /^Bearer (demo-|local-dev$)/i.test(auth)) return c.json({ error: 'Connect with a signed access token.' }, 401)
+    else if (!/^Bearer [^\s]{1,8192}$/i.test(auth) || /^Bearer (demo-|local-dev$|pair-)/i.test(auth)) return c.json({ error: 'Connect with a signed access token.' }, 401)
     const target = new URL(path, base)
     target.search = new URL(c.req.url).search
     try {

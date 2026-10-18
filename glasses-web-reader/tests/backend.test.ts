@@ -96,24 +96,24 @@ test('local dev token is attached only for unforwarded requests on this machine'
   const app = new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001', transport, devToken: 'demo-all', peerAddress: c => c.req.header('x-test-peer') ?? '127.0.0.1' }))
   const local = { Authorization: 'Bearer local-dev' }
 
-  assert.deepEqual(await (await app.request('/api/backend/dev')).json(), { local: true })
+  assert.deepEqual(await (await app.request('/api/backend/dev')).json(), { local: true, pairing: false })
   assert.equal((await app.request('/api/backend/v1/tasks', { headers: local })).status, 200)
   assert.equal(calls[0].headers.get('authorization'), 'Bearer demo-all')
   assert.ok(!calls[0].headers.has('x-forwarded-for'), 'DEMO_AUTH_MODE only trusts unforwarded loopback calls')
 
   // Through a tunnel or proxy: no dev token, and the stand-in itself is refused.
   for (const extra of [{ 'CF-Connecting-IP': '203.0.113.9' }, { 'X-Forwarded-For': '203.0.113.9' }, { 'Cf-Ray': 'abc' }]) {
-    assert.deepEqual(await (await app.request('/api/backend/dev', { headers: extra })).json(), { local: false })
+    assert.deepEqual(await (await app.request('/api/backend/dev', { headers: extra })).json(), { local: false, pairing: false })
     assert.equal((await app.request('/api/backend/v1/tasks', { headers: { ...local, ...extra } })).status, 401)
   }
   // Another device on the Wi-Fi: directly, or through the Vite proxy (which appends its address),
   // even when it forges a loopback X-Forwarded-For or Host.
   for (const extra of [{ 'x-test-peer': '172.26.1.9' }, { 'X-Forwarded-For': '127.0.0.1, 172.26.1.9' }, { 'x-test-peer': '172.26.1.9', Host: 'localhost' }]) {
-    assert.deepEqual(await (await app.request('/api/backend/dev', { headers: extra })).json(), { local: false })
+    assert.deepEqual(await (await app.request('/api/backend/dev', { headers: extra })).json(), { local: false, pairing: false })
     assert.equal((await app.request('/api/backend/v1/tasks', { headers: { ...local, ...extra } })).status, 401)
   }
   // The simulator on this machine through Vite: every hop is loopback.
-  assert.deepEqual(await (await app.request('/api/backend/dev', { headers: { 'X-Forwarded-For': '127.0.0.1' } })).json(), { local: true })
+  assert.deepEqual(await (await app.request('/api/backend/dev', { headers: { 'X-Forwarded-For': '127.0.0.1' } })).json(), { local: true, pairing: false })
   // Callers still can't send demo tokens themselves.
   assert.equal((await app.request('/api/backend/v1/tasks', { headers: { Authorization: 'Bearer demo-all' } })).status, 401)
   assert.equal(calls.length, 1)
@@ -121,7 +121,22 @@ test('local dev token is attached only for unforwarded requests on this machine'
 
 test('without a dev token configured, local-dev is just an invalid bearer', async () => {
   const app = new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001', transport: async () => Response.json([]) }))
-  assert.deepEqual(await (await app.request('/api/backend/dev')).json(), { local: false })
+  assert.deepEqual(await (await app.request('/api/backend/dev')).json(), { local: false, pairing: false })
   assert.equal((await app.request('/api/backend/v1/tasks', { headers: { Authorization: 'Bearer local-dev' } })).status, 401)
   assert.throws(() => orchestratorGateway({ base: 'http://127.0.0.1:8001', devToken: 'real-jwt' }))
+})
+
+test('a phone with this run\'s pairing secret gets the dev token from anywhere; others do not', async () => {
+  const calls: Request[] = []
+  const transport: typeof fetch = async (input, init) => { calls.push(new Request(input, init)); return Response.json([]) }
+  const secret = 'abcdefghijklmnopqrstuvwxyz012345'
+  const app = new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001', transport, devToken: 'demo-all', pairSecret: secret, peerAddress: () => '127.0.0.1' }))
+  const tunnel = { 'CF-Connecting-IP': '203.0.113.9' }
+  assert.deepEqual(await (await app.request('/api/backend/dev', { headers: tunnel })).json(), { local: false, pairing: true })
+  assert.equal((await app.request('/api/backend/v1/tasks', { headers: { ...tunnel, Authorization: `Bearer pair-${secret}` } })).status, 200)
+  assert.equal(calls[0].headers.get('authorization'), 'Bearer demo-all')
+  for (const auth of [`Bearer pair-${secret}x`, 'Bearer pair-wrongwrongwrongwrongwrongwrong', 'Bearer local-dev', 'Bearer demo-all'])
+    assert.equal((await app.request('/api/backend/v1/tasks', { headers: { ...tunnel, Authorization: auth } })).status, 401, auth)
+  assert.equal(calls.length, 1)
+  assert.throws(() => orchestratorGateway({ base: 'http://127.0.0.1:8001', devToken: 'demo-all', pairSecret: 'short' }))
 })

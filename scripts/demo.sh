@@ -2,8 +2,9 @@
 # Focal glasses demo stack on this laptop, as in the "Focal glasses: demo flows and
 # test guide" doc.
 #
-#   scripts/demo.sh start [--sim] [--open URL] [--tunnel]
-#                                              start everything (and the simulator, opened on URL)
+#   scripts/demo.sh start [--sim] [--open URL] [--tunnel] [--pair]
+#                                              start everything (and the simulator, opened on URL);
+#                                              --pair: tunnel + a QR the Even app scans to use real glasses
 #   scripts/demo.sh status                     what is running, with health checks
 #   scripts/demo.sh stop                       stop everything this script started
 #   scripts/demo.sh logs [name]                tail a log (agents, orchestrator, glasses, watcher, sim, tunnel)
@@ -48,11 +49,12 @@ wait_for() { # label, url, seconds
 port_busy() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 
 start() {
-  local sim=0 tunnel=0 open=""
+  local sim=0 tunnel=0 open="" pair=0
   while (( $# )); do
     case $1 in
       --sim) sim=1 ;;
       --tunnel) tunnel=1 ;;
+      --pair) tunnel=1; pair=1 ;;
       --open) shift; open=${1:-}; sim=1 ;;
       *) echo "unknown option $1"; exit 2 ;;
     esac
@@ -69,12 +71,19 @@ start() {
   launch orchestrator uv run --directory "$ROOT/services/orchestrator" laai-orchestrator
   wait_for "orchestrator" "http://127.0.0.1:8001/health" 90
 
+  # The tunnel comes first so the glasses gateway can allow its origin.
+  if (( tunnel )); then start_tunnel; fi
   # The glasses gateway may sign the simulator in on this machine only (never over a
   # tunnel or Wi-Fi); the orchestrator's DEMO_AUTH_MODE accepts demo-* from loopback.
-  local origins="http://localhost:$VITE_PORT,http://127.0.0.1:$VITE_PORT"
+  # With --pair, a phone that scanned this run's QR (secret in the link) is signed in too.
+  local origins="http://localhost:$VITE_PORT,http://127.0.0.1:$VITE_PORT" secret=""
   [[ -f $RUN/tunnel.url ]] && origins="$origins,$(cat "$RUN/tunnel.url")"
+  if (( pair )); then
+    secret=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')
+    echo "$secret" >"$RUN/pair.secret"; chmod 600 "$RUN/pair.secret"
+  fi
   launch glasses env VITE_PORT=$VITE_PORT CONDENSE_PORT=$CONDENSE_PORT \
-    GATEWAY_DEV_TOKEN=demo-all ORCHESTRATOR_ALLOWED_ORIGINS="$origins" \
+    GATEWAY_DEV_TOKEN=demo-all GATEWAY_PAIR_SECRET="$secret" ORCHESTRATOR_ALLOWED_ORIGINS="$origins" \
     npm --prefix "$ROOT/glasses-web-reader" run dev
   wait_for "glasses app" "http://127.0.0.1:$VITE_PORT/api/health" 90
   wait_for "agents" "http://127.0.0.1:8000/" 120 || true
@@ -85,7 +94,7 @@ start() {
     uv run --directory "$ROOT/services/agents" laai-glasses-executor \
     --journal "$HOME/.local/state/laai/watch.json" watch
 
-  if (( tunnel )); then start_tunnel; fi
+  if (( pair )) && [[ -f $RUN/tunnel.url ]]; then pair_qr "$(cat "$RUN/tunnel.url")/?pair=$secret"; fi
   if (( sim )); then
     launch sim npx --prefix "$ROOT/glasses-web-reader" evenhub-simulator --automation-port 9898 \
       --aid coreaudio:BuiltInMicrophoneDevice "http://localhost:$VITE_PORT${open:+/?open=$(urlencode "$open")}"
@@ -118,8 +127,16 @@ start_tunnel() {
   done
   if [[ -z $host ]]; then echo "  ! tunnel did not come up"; return; fi
   echo "https://$host" >"$RUN/tunnel.url"
-  echo "  tunnel: https://$host (restart with: scripts/demo.sh stop && scripts/demo.sh start --tunnel"
-  echo "          so the glasses gateway allows its origin; then scan the QR: npx evenhub qr --url https://$host)"
+  echo "  tunnel: https://$host"
+}
+
+pair_qr() { # url: print it as a QR in the terminal and save it as an image
+  local url=$1
+  (cd "$ROOT/glasses-web-reader" && node -e "require('qr-image').image(process.argv[1],{size:10}).pipe(require('fs').createWriteStream(process.argv[2]))" "$url" "$RUN/pair-qr.png")
+  echo
+  echo "Pair the glasses: in the Even app on your phone, scan this QR (also saved as .runtime/demo/pair-qr.png)."
+  echo "It opens the app through the tunnel and signs it in for this run only."
+  (cd "$ROOT/glasses-web-reader" && npx evenhub qr --url "$url" 2>/dev/null) || true
 }
 
 stop() {
@@ -134,7 +151,7 @@ stop() {
     fi
     rm -f "$f"
   done
-  rm -f "$RUN/tunnel.url"
+  rm -f "$RUN/tunnel.url" "$RUN/pair.secret" "$RUN/pair-qr.png"
 }
 
 status() {
