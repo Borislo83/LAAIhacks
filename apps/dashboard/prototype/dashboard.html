@@ -123,7 +123,8 @@ body[data-density="compact"] .agent{padding:10px}
 .tabs button{font:500 13px var(--sans);border:0;background:none;border-radius:999px;padding:7px 14px;cursor:pointer;color:var(--muted)}
 .tabs button[aria-selected="true"]{background:var(--ink);color:var(--white)}
 .chat{background:var(--white);border:1px solid var(--hair);border-radius:16px;display:flex;flex-direction:column;min-height:520px}
-.thread{flex:1;display:flex;flex-direction:column;gap:18px;padding:20px;overflow-y:auto;max-height:68vh}
+.thread-scroll{flex:1;overflow-y:auto;max-height:68vh;overscroll-behavior:contain;overflow-anchor:none}
+.thread{display:flex;flex-direction:column;gap:18px;padding:20px}
 .msg{max-width:88%;font-size:15px;line-height:23px}
 .msg.user{align-self:flex-end;background:var(--ink);color:var(--white);padding:10px 14px;border-radius:14px 14px 4px 14px}
 .msg.bot{align-self:flex-start;display:flex;gap:12px;align-items:flex-start;width:88%}
@@ -256,7 +257,7 @@ body[data-density="compact"] .agent{padding:10px}
 
       <section id="pane-chat">
         <div class="chat">
-          <div class="thread" id="thread" aria-live="polite"></div>
+          <div class="thread-scroll" id="thread-scroll"><div class="thread" id="thread" aria-live="polite"></div></div>
           <div class="starters" id="starters"></div>
           <form class="composer" id="chat-form"><input id="chat-input" placeholder="Is the Sony XM5 worth it, or is there something cheaper?" autocomplete="off" required><button class="btn dark" id="send">Send</button></form>
         </div>
@@ -451,7 +452,7 @@ $("#ask").onsubmit=async e=>{
   const ks=KEYS.filter(k=>selected.has(k));
   $("#results").innerHTML=ks.map(cardShell).join("");
   $("#go").disabled=true;
-  await Promise.all(ks.map(async k=>{const progress=makeProgress($("#card-"+k+" .thinking"));const r=await call(k,bodies[k],progress.update);progress.finish(r.ok);record(k,r);fill(k,r);$("#card-"+k).append(progress.el)}));
+  await Promise.all(ks.map(async k=>{const progress=makeProgress($("#card-"+k+" .thinking"));const r=await call(k,bodies[k],progress.update);progress.finish(r.ok);record(k,r);const card=$("#card-"+k);morph(card,()=>{fill(k,r);card.append(progress.el)})}));
   $("#go").disabled=false;
 };
 
@@ -477,11 +478,46 @@ const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'
 $("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
 document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
 
+/* Claude-style scrolling: follow new output only while the reader is at the bottom, so
+   scrolling up to reread is never interrupted. One rAF-throttled jump per frame, no smooth
+   scrolls fighting each other, and the page itself never moves. */
+const scroller=$("#thread-scroll");
+let pinned=true,followQueued=false,lastTop=0;
+const atBottom=()=>scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<48;
+const pin=()=>{pinned=true;lastTop=0};
+scroller.addEventListener("scroll",()=>{pinned=atBottom()},{passive:true});
+function follow(){
+  if(followQueued)return; followQueued=true;
+  requestAnimationFrame(()=>{
+    followQueued=false;
+    // The reader moved up since we last stuck to the bottom, even if no scroll event has arrived yet.
+    if(scroller.scrollTop<lastTop-2)pinned=atBottom();
+    if(pinned)scroller.scrollTop=scroller.scrollHeight;
+    lastTop=scroller.scrollTop;
+  });
+}
+// Content changes call follow() directly; the observer also catches growth from animations.
+new ResizeObserver(follow).observe($("#thread"));
+const reduceMotion=matchMedia("(prefers-reduced-motion: reduce)");
+// Swap content without a jump: the element eases from its old height to its new one.
+function morph(el,change){
+  const from=el.offsetHeight; change(); const to=el.offsetHeight;
+  follow();
+  if(Math.abs(to-from)<2||reduceMotion.matches||document.hidden)return;
+  const duration=Math.min(420,200+Math.abs(to-from)*.3);
+  el.style.overflow="hidden";
+  const anim=el.animate([{height:from+"px"},{height:to+"px"}],{duration,easing:"cubic-bezier(.2,.7,.2,1)"});
+  // If frames stall (a background page), never leave the message clipped.
+  const stall=setTimeout(()=>anim.finish(),duration+200);
+  anim.finished.catch(()=>{}).then(()=>{clearTimeout(stall);el.style.overflow="";follow()});
+}
 function bubble(html,cls){
   const el=document.createElement("div"); el.className="msg "+cls; el.innerHTML=html;
   const thread=$("#thread"); thread.appendChild(el);
   while(thread.children.length>THREAD_MAX)thread.firstElementChild.remove();
-  el.scrollIntoView({block:"end",behavior:"smooth"}); return el;
+  // Sending a message always brings the conversation back to the bottom.
+  if(cls==="user")pin();
+  follow(); return el;
 }
 // Also called with one card for live previews, so `all` may be missing.
 function miniCard(c,i,all=[c]){
@@ -534,6 +570,7 @@ function makeProgress(container){
     row.querySelector(".orb").classList.toggle("idle",done);
     const line=document.createElement("p");line.textContent=`${((performance.now()-started)/1000).toFixed(1)}s · ${key} · ${event.message}`;el.querySelector(".work-history div").append(line);
     if(el.querySelector(".work-history div").children.length>100)el.querySelector(".work-history div").firstChild.remove();
+    follow();
     if(event.result&&AGENTS[key]){let slot=el.querySelector(`[data-partial="${key}"]`);if(!slot){slot=document.createElement("div");slot.dataset.partial=key;el.append(slot)}slot.innerHTML=miniCard({kind:key,result:event.result,error:event.result.error,ms:event.ms||0})}
   }
   function finish(ok){el.querySelector(".work-title").hidden=false;el.querySelector(".work-title").textContent=`${ok?"Request finished":"Request interrupted"} · ${((performance.now()-started)/1000).toFixed(1)}s`;rows.forEach(row=>{if(!row.hasAttribute("data-done")){row.setAttribute("data-done","");row.querySelector(".phase").textContent=ok?`${((performance.now()-row.dataset.t0)/1000).toFixed(1)} s`:"interrupted";row.querySelector(".orb").classList.add("idle")}});el.querySelectorAll("[data-partial]").forEach(slot=>slot.remove())}
@@ -557,16 +594,19 @@ $("#chat-form").onsubmit=async e=>{
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
     const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
-    pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
-    pending.querySelector(".body").append(progress.el);
+    morph(pending,()=>{
+      pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
+      pending.querySelector(".body").append(progress.el);
+    });
   }catch(err){
     convo.pop();
     progress.finish(false);
     const tried=err.retryable&&!isCartRelated(text);
-    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">${esc(err.message)}. ${tried?`Tried ${ATTEMPTS} times; is the orchestrator running?`:"No automatic retry was sent."}</p></div>`;
-    pending.querySelector(".body").append(progress.el);
+    morph(pending,()=>{
+      pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">${esc(err.message)}. ${tried?`Tried ${ATTEMPTS} times; is the orchestrator running?`:"No automatic retry was sent."}</p></div>`;
+      pending.querySelector(".body").append(progress.el);
+    });
   }
-  pending.scrollIntoView({block:"end",behavior:"smooth"});
   $("#send").disabled=false; input.focus();
 };
 
@@ -591,6 +631,7 @@ auth=setupAuth({
     $("#starters").hidden=false;
     $("#chat-input").value="";
     $("#product").value="";
+    pin();
   }
 });
 preferences=setupPreferences({request:(...args)=>auth.request(...args)});
