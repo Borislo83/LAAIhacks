@@ -50,9 +50,13 @@ test('new revision invalidates a confirmation and long descriptions are fully re
   const cards = apiActionCards(i => sent.push(i))
   cards.show({ ...display, actions: [{ ...display.actions[0], description: 'A'.repeat(900) + ' final condition' }] }); cards.setEnabled(true)
   cards.dispatch('tap'); cards.dispatch('tap')
-  let seen = ''
-  for (let n = 0; cards.view().title.includes('Review') && n < 20; n++) { seen += cards.view().lines.join(''); cards.dispatch('tap') }
-  assert.ok(seen.includes(' final condition'))
+  const seen: string[] = []
+  for (let n = 0; cards.view().title.includes('Review') && n < 40; n++) { seen.push(...cards.view().lines); cards.dispatch('tap') }
+  // Every row of the description was on some page, and the last one ends it.
+  const text = seen.join(' ')
+  assert.equal(text.match(/A/g)?.length, 900)
+  assert.match(text, /A final condition Status: needs approval$/)
+  assert.equal(cards.view().title, 'Confirm action')
   cards.show({ ...display, revision: 3 }); cards.dispatch('tap')
   assert.equal(sent.length, 0)
 })

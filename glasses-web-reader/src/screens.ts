@@ -312,7 +312,7 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
       texts.push(counter(ctx.position))
       texts.push(box({ x, y: 0, w: COUNTER_X - 4 - x, h: 62, text: '', pad: 2 }, w => `${line(s.title, w)}\n${line(s.subtitle, w)}`))
       const half = Math.floor((576 - x - 8) / 2)
-      texts.push(box({ x, y: 64, w: half, h: 80, text: '', pad: 6, border: 2, color: BRIGHT, radius: 10 }, w => `PRICE\n${line(s.price, w)}`))
+      texts.push(box({ x, y: 64, w: half, h: 80, text: '', pad: 6, border: 2, color: BRIGHT, radius: 10 }, w => `PRICE\n${line(s.price || 'Not listed', w)}`))
       texts.push(
         box({ x: x + half + 8, y: 64, w: 576 - x - half - 8, h: 80, text: '', pad: 6, border: 1, color: DIM, radius: 10 }, w =>
           `${line(s.rating || 'No rating', w)}\n${line(s.stock || ' ', w)}`,

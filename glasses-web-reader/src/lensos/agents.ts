@@ -3,6 +3,7 @@ import { POPUP_TAP_GRACE_MS } from './action-popup'
 import { BackendError, type BackendClient } from './client'
 import type { AgentCall, ChatReply, MessageSent } from './types'
 import type { PageSpec } from '../screens'
+import { lensText } from './glyphs'
 
 // Voice commands for the Focal agents: the orchestrator's POST /v1/chat picks the
 // agent (news, YouTube, Spotify, shopping, Messenger). Its reply becomes pages of
@@ -33,10 +34,16 @@ export function wrap(text: string, width = CARD_W): string[] {
     let row = ''
     for (let word of paragraph.split(/\s+/).filter(Boolean)) {
       while (getTextWidth(word) > width) {
-        let n = word.length - 1
-        while (n > 1 && getTextWidth(word.slice(0, n)) > width) n--
+        // The longest prefix that fits, by binary search (a long URL is hundreds of characters).
+        const chars = Array.from(word)
+        let lo = 1, hi = chars.length - 1
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1
+          if (getTextWidth(chars.slice(0, mid).join('')) <= width) lo = mid
+          else hi = mid - 1
+        }
         if (row) { rows.push(row); row = '' }
-        rows.push(word.slice(0, n)); word = word.slice(n)
+        rows.push(chars.slice(0, lo).join('')); word = chars.slice(lo).join('')
       }
       const next = row ? `${row} ${word}` : word
       if (row && measureTextWrap(next, width).lineCount > 1) { rows.push(row); row = word }
@@ -62,8 +69,9 @@ export function plain(text: string): string {
 
 /** Pages of `CARD_LINES` rows, each under the title line. */
 export function paginate(title: string, body: string): string[] {
-  const rows = wrap(plain(body))
-  const heading = pxTruncate(title, CARD_W)
+  // Measured as drawn: symbols the G2 font lacks ("⏸", "🔊") are mapped or dropped first.
+  const rows = wrap(lensText(plain(body)))
+  const heading = pxTruncate(lensText(title), CARD_W)
   const pages: string[] = []
   for (let i = 0; i < Math.max(rows.length, 1) && pages.length < MAX_PAGES; i += CARD_LINES) {
     // A paragraph gap doesn't open a page.
@@ -287,10 +295,11 @@ export class AgentCard {
   private get last() { return this.page >= this.count - 1 }
   footer() {
     const n = this.count
+    // Same hint style as every other card: "2/3  Swipe: more | Tap: close".
     const hint = this.answer.kind === 'draft'
-      ? this.sending ? 'Sending...' : this.last ? 'Swipe: choose   Tap: confirm' : 'Tap: next   Double-tap: cancel'
-      : this.last ? 'Tap: close' : 'Swipe: more   Tap: close'
-    return pxTruncate(`${n > 1 ? `${this.page + 1}/${n}   ` : ''}${hint}`, CARD_W)
+      ? this.sending ? 'Sending...' : this.last ? 'Swipe: choose | Tap: confirm | Double: cancel' : 'Tap: next | Double: cancel'
+      : this.last ? 'Tap: close' : 'Swipe: more | Tap: close'
+    return pxTruncate(`${n > 1 ? `${this.page + 1}/${n}  ` : ''}${hint}`, CARD_W)
   }
   gesture(g: CardGesture): CardStep {
     if (this.answer.kind === 'draft') {

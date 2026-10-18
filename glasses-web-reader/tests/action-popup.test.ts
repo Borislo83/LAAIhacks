@@ -65,13 +65,13 @@ test('popups wait while voice, an answer card, a menu, loading or another popup 
   popup.update(display([compare]))
   popup.expect('a-compare')
   assert.equal(popup.update(display([{ ...compare, status: 'completed' }], 3, 'page-one', 'result')), true)
-  assert.deepEqual(popup.labels(), ['View: Compare prices and alternatives', POPUP_DISMISS])
+  assert.deepEqual(popup.labels(), ['View: Compare prices', POPUP_DISMISS])
   // A new page drops it.
   popup.update(display([], 4, 'page-two'))
   assert.equal(popup.view, null)
 })
 
-test('the result of an approved action pops up on its page; the toggle turns popups off', () => {
+test('the result of an approved action pops up on its page', () => {
   const popup = new ActionPopup()
   popup.update(display([compare]))
   popup.dismiss()
@@ -83,10 +83,11 @@ test('the result of an approved action pops up on its page; the toggle turns pop
   popup.update(display([{ ...reviews, status: 'running' }], 5))
   assert.equal(popup.update(display([{ ...reviews, status: 'failed' }], 6, 'page-one', 'error')), true)
   assert.equal(popup.view?.heading, "Focal couldn't finish")
-  const off = new ActionPopup()
-  off.setEnabled(false)
-  assert.equal(off.update(display([compare])), false)
-  assert.equal(off.view, null)
+  // An action nobody approved here finishing is not news on this page.
+  const other = new ActionPopup()
+  other.update(display([compare]))
+  assert.equal(other.update(display([{ ...compare, status: 'completed' }], 3, 'page-one', 'result')), false)
+  assert.equal(other.view, null)
 })
 
 test('result popup cursor stays on its item and Dismiss, and never approves', () => {
