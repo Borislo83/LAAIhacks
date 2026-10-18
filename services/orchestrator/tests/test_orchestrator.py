@@ -543,3 +543,117 @@ def test_budget_and_similar_product_questions_use_the_coordinator(text, coordina
         COORDINATE_WITHOUT_LLM, text, re.IGNORECASE
     )
     assert bool(found) is coordinated
+
+
+def _buyer_backend(seen):
+    def handle(request):
+        body = json.loads(request.content)
+        seen.append((request.url.path, body))
+        status = "cart_added" if request.url.path == "/buy/confirm" else "choose_listing"
+        return httpx.Response(
+            200,
+            json={
+                "product": "Sony WH-1000XM5" if "XM5" in body.get("product", "") else body.get("product", ""),
+                "purchase_enabled": False,
+                "status": status,
+                "summary": "Select an Amazon listing.",
+            },
+        )
+
+    return handle
+
+
+async def test_add_it_to_cart_uses_the_cart_agent_with_the_discussed_product():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    seen = []
+    history = [
+        ChatMessage(role="user", content="Consider Sony XM5 and recommend an alternative under $300."),
+        ChatMessage(role="assistant", content="Candidate under $300: Anker Soundcore Space Q45."),
+        ChatMessage(role="user", content="add it to kart"),
+    ]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_buyer_backend(seen))) as http:
+        reply = await chat.chat(history, config(), http)
+    assert reply.source == "buyer"
+    assert [path for path, _ in seen] == ["/buy/prepare"]
+    assert "Sony XM5" in seen[0][1]["product"]
+    assert reply.reply.startswith("Cart request for Sony WH-1000XM5.")
+
+
+async def test_cart_request_naming_a_product_uses_that_product():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    seen = []
+    history = [
+        ChatMessage(role="user", content="Consider Sony XM5"),
+        ChatMessage(role="user", content="Please add the Nothing Ear (a) to my cart"),
+    ]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_buyer_backend(seen))) as http:
+        await chat.chat(history, config(), http)
+    assert seen[0][0] == "/buy/prepare" and "Nothing Ear (a)" in seen[0][1]["product"]
+
+
+async def test_add_it_to_cart_confirms_a_waiting_cart_approval():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    seen = []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_buyer_backend(seen))) as http:
+        reply = await chat.chat(
+            [ChatMessage(role="user", content="Yes, add it to my cart")],
+            config(),
+            http,
+            purchase_confirmation="a" * 32,
+        )
+    assert [path for path, _ in seen] == ["/buy/confirm"]
+    assert reply.calls[0].result["status"] == "cart_added"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Add more detail to the review", "What does add to my budget mean?", "Sony XM5 price"],
+)
+def test_other_add_sentences_are_not_cart_requests(text):
+    import re
+
+    from laai_orchestrator.chat import CART_REQUEST
+
+    assert not re.search(CART_REQUEST, text, re.IGNORECASE)
+
+
+async def test_show_me_reviews_runs_only_the_reviews_agent():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    seen = []
+
+    def handle(request):
+        seen.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(200, json={"summary": "Experts rate it 4.6/5."})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        reply = await chat.chat(
+            [ChatMessage(role="user", content="Show me the reviews for the Sony XM5?")], config(), http
+        )
+    assert seen == [("/reviews", {"product": "Sony XM5"})]
+    assert reply.reply == "Experts rate it 4.6/5."
+
+
+async def test_coordinator_picks_reach_the_chat_reply():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    pick = {"label": "Best price", "product": "Sony CH-720N", "price": 99.99, "store": "bestbuy.com",
+            "url": "https://www.bestbuy.com/site/1.p", "cart_url": "https://api.bestbuy.com/click/-/1/cart",
+            "rating": 4.1, "reason": "Lowest trusted price"}
+
+    def handle(request):
+        return httpx.Response(200, json={"product": "Sony headphones", "summary": "s", "picks": [pick]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        reply = await chat.chat(
+            [ChatMessage(role="user", content="Are there Sony headphones under $300?")], config(), http
+        )
+    assert reply.source == "coordinator" and reply.picks == [pick]

@@ -51,12 +51,42 @@ async def _candidates(sources, name):
     ]
 
 
+STORE_SOURCES = {"bestbuy_api", "serpapi_amazon", "serpapi_shopping"}
+
+
+async def store_listings(name: str, budget: float | None = None):
+    """Official store listings for `name` within budget, cheapest first."""
+    from .merchants import WRONG_ITEM
+    from .stores import store_offers
+
+    offers = await store_offers(name, budget)
+    # A model-specific name ("Sony WH-1000XM5") must match; a one-word one can't be checked.
+    specific = len(re.findall(r"[a-z0-9]+", name.lower())) >= 2
+    keep = [
+        o
+        for o in offers
+        if not WRONG_ITEM.search(o.product) and (not specific or matches_product(o.product, name))
+    ]
+    if keep:
+        report("store_listings", f"Found {len(keep)} store listings from official sources")
+    return sorted(keep, key=lambda o: o.price)
+
+
 async def compare(req):
     from .merchants import best_offer, rank
 
     name = product_name(req.product)
+    budget = getattr(req, "max_price", None)
+    # Official store listings (when API keys are set) run alongside the web search.
+    listings_task = asyncio.create_task(store_listings(name, budget))
     # Stage 1: every result naming the product is a candidate, from any store.
-    sources, meta = await search(f"{name} price USD")
+    try:
+        sources, meta = await search(f"{name} price USD")
+    except SearchUnavailable:
+        listings = await listings_task
+        if not listings:
+            raise
+        sources, meta = [], {"data_source": "store_api", "sources": [], "notice": None}
     offers = await _candidates(sources, name)
     if not offers:
         # A second, store-focused query widens the pool only when the first found nothing.
@@ -71,8 +101,18 @@ async def compare(req):
     meta["sources"] = sources
     # Stage 2: rank by trust, then price; only clear mismatches were dropped.
     offers = rank(offers)
+    listings = await listings_task
+    if listings:
+        meta["data_source"] = "store_api+" + meta.get("data_source", "web")
+    offers = listings + offers
     best = best_offer(offers)
-    if best is None:
+    if best is not None and best.source in STORE_SOURCES:
+        within = f" under ${budget:.2f}" if budget is not None else ""
+        summary = (
+            f"Best price{within}: {best.product} at ${best.price:.2f} on {best.store} "
+            f"({len(listings)} store listings checked)."
+        )
+    elif best is None:
         summary = (
             f"Found sources for {name}, but none quoted a clear USD price. "
             "Open the sources to check current offers."
@@ -97,6 +137,41 @@ async def compare(req):
     )
 
 
+async def store_alternatives(name, known, max_price):
+    """Other brands in the same category from store listings, best rated first."""
+    from .merchants import WRONG_ITEM
+    from .stores import has_store_keys, store_offers
+
+    if not has_store_keys():
+        return []
+    words = re.findall(r"[A-Za-z0-9]+", name)
+    # "Sony headphones" -> "headphones"; a known product uses its catalog category.
+    query = known.category if known else " ".join(words[1:]) or name
+    brand = (known.name if known else name).split()[0].lower()
+    offers = await store_offers(query, max_price)
+    picked = [
+        o
+        for o in offers
+        if not WRONG_ITEM.search(o.product)
+        and brand not in o.product.lower()
+        and not matches_product(o.product, name)
+    ]
+    picked.sort(key=lambda o: (-(o.rating or 0), -(o.review_count or 0), o.price))
+    return [
+        Alternative(
+            product=o.product,
+            price=o.price,
+            rating=o.rating,
+            url=o.url,
+            store=o.store,
+            cart_url=o.cart_url,
+            reason=(f"{o.rating}★ on {o.store}" if o.rating else f"Listed on {o.store}")
+            + (f", under ${max_price:.2f}" if max_price is not None else ""),
+        )
+        for o in picked[:3]
+    ]
+
+
 async def alternatives(req):
     name = product_name(req.product)
     # Category identity only; prices/reviews never come from the fixture catalog.
@@ -113,11 +188,14 @@ async def alternatives(req):
     ]
     # Known names/category are seeds only. Each candidate needs its own live price evidence.
     results = await asyncio.gather(
-        *(compare(PriceCompareRequest(product=p.name)) for p in candidates[:3]),
+        *(
+            compare(PriceCompareRequest(product=p.name, max_price=req.max_price))
+            for p in candidates[:3]
+        ),
         return_exceptions=True,
     )
     report("comparing", f"Comparing {len(results)} candidates against the budget")
-    priced, unpriced = [], []
+    priced, unpriced = [], await store_alternatives(name, known, req.max_price)
     for product, result in zip(candidates, results):
         best = None if isinstance(result, Exception) else result.best
         if best is None:
@@ -137,12 +215,19 @@ async def alternatives(req):
             Alternative(
                 product=best.product,
                 price=best.price,
+                rating=best.rating,
                 url=best.url,
+                store=best.store,
+                cart_url=best.cart_url,
                 reason=f"{best.trust.capitalize()}-trust price from {best.store}; verify listing",
             )
         )
         sources.extend(result.sources)
-    priced.sort(key=lambda a: a.price)
+    # Store-search alternatives are priced; catalog leads without a price stay last.
+    priced += [a for a in unpriced if a.price is not None]
+    unpriced = [a for a in unpriced if a.price is None]
+    priced = list({a.product.lower(): a for a in reversed(priced)}.values())
+    priced.sort(key=lambda a: (-(a.rating or 0), a.price))
     options = priced + unpriced
     if priced:
         summary = (
