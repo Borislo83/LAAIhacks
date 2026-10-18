@@ -413,6 +413,12 @@ class PageWatcher(GlassesWorkflow):
         if not kinds:
             return None
         pending = state.get("proposal")
+        if (
+            pending
+            and pending["page_id"] == page["page_id"]
+            and pending.get("accepted_revision") == "refused"
+        ):
+            return None  # The API refused this page's proposal; never retry it.
         if not (
             pending
             and pending["page_id"] == page["page_id"]

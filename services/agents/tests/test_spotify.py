@@ -70,8 +70,23 @@ def test_parse(text, action, query, kind):
         assert (req.query, req.kind) == (query, kind)
 
 
+@pytest.mark.parametrize(
+    "text, query",
+    [
+        ("play Kidz Bop volume 3", "Kidz Bop volume 3"),
+        ("turn down for what", "turn down for what"),
+        ("play turn down for what", "turn down for what"),
+        ("louder than bombs", "louder than bombs"),
+    ],
+)
+def test_volume_words_inside_a_title_are_a_play(text, query):
+    req = spotify.parse(text)
+    assert (req.action, req.query, req.volume, req.volume_change) == ("play", query, None, None)
+
+
 def test_parse_volume():
     assert spotify.parse("volume 40%").volume == 40
+    assert spotify.parse("turn the volume down").volume_change == -15
     assert spotify.parse("set volume to 150").volume == 100
     assert spotify.parse("turn it up").volume_change == 15
     assert spotify.parse("a bit quieter please").volume_change == -15
@@ -182,9 +197,42 @@ def test_scripts_take_args_as_argv():
     assert "item 1 of argv" in spotify.SCRIPTS["set_volume"]
 
 
-async def test_agent_builds():
+async def test_agent_builds_rest_only(monkeypatch):
+    monkeypatch.delenv("AGENTVERSE_MAILBOX", raising=False)
     agent = build_spotify_agent()
     assert agent.name == "laai-spotify"
+    # No typed or chat protocol: only the token-gated REST route reaches Spotify.
+    assert agent.protocols == {}
+
+
+async def test_public_seed_is_refused_on_agentverse(monkeypatch):
+    monkeypatch.setenv("AGENTVERSE_MAILBOX", "1")
+    monkeypatch.delenv("SPOTIFY_AGENT_SEED", raising=False)
+    assert build_spotify_agent() is None
+    monkeypatch.setenv("SPOTIFY_AGENT_SEED", "a private test seed for spotify")
+    assert build_spotify_agent() is not None
+
+
+TOKEN = "spotify-test-token"
+
+
+@pytest.mark.parametrize("configured, sent", [("", ""), ("", "x"), (TOKEN, ""), (TOKEN, "wrong")])
+async def test_rest_refuses_without_the_executor_token(app, monkeypatch, configured, sent):
+    calls, queries, _ = app
+    monkeypatch.setenv("SPOTIFY_EXECUTOR_TOKEN", configured)
+    reply = await spotify.control_authorized(
+        spotify.SpotifyControlRequest(action="pause", executor_token=sent)
+    )
+    assert reply.error and calls == [] and queries == []
+
+
+async def test_rest_runs_with_the_executor_token(app, monkeypatch):
+    calls, _, _ = app
+    monkeypatch.setenv("SPOTIFY_EXECUTOR_TOKEN", TOKEN)
+    reply = await spotify.control_authorized(
+        spotify.SpotifyControlRequest(action="pause", executor_token=TOKEN)
+    )
+    assert reply.error is None and ("pause",) in calls
 
 
 async def test_now_playing_while_playing(app):

@@ -54,11 +54,14 @@ def main() -> None:
 
     if args.only:
         agent = BUILDERS[args.only](port=args.port)
+        if agent is None:
+            raise SystemExit(f"{args.only}: refused to start (see the warning above).")
         print(f"{agent.name}: {agent.address}")
         agent.run()
         return
 
-    agents = [build() for build in BUILDERS.values()]
+    # A builder returns None when it refuses to start (e.g. Spotify on a public seed).
+    agents = [agent for build in BUILDERS.values() if (agent := build()) is not None]
     from .coordinator import build_coordinator
 
     agents.append(build_coordinator({a.name: a.address for a in agents}))

@@ -19,6 +19,7 @@ from laai_orchestrator.chat import (
 from laai_orchestrator.models import AgentKind, ChatMessage, SpotifyArgs
 
 TOKEN = "laptop-secret"
+SPOTIFY_TOKEN = "spotify-secret"
 TRACK_URI = "spotify:track:0VjIjW4GlUZAMYd2vXMi3b"
 TRACK_URL = "https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b"
 
@@ -92,11 +93,21 @@ def user(text):
 async def test_rules_route_spotify_requests(text, payload):
     http, seen = agents()
     async with http:
-        reply = await chat_with_rules(user(text), config(), http)
+        reply = await chat_with_rules(user(text), config(spotify_executor_token=SPOTIFY_TOKEN), http)
     expected = {"query": None, "kind": "auto", "volume": None, "volume_change": None, **payload}
-    assert seen == [("/spotify", expected)]
+    assert seen == [("/spotify", {**expected, "executor_token": SPOTIFY_TOKEN})]
     assert reply.calls[0].kind == AgentKind.SPOTIFY
     assert reply.reply == spotify_result()["summary"]
+    # The token goes to the agents process only, never back to the client.
+    assert SPOTIFY_TOKEN not in json.dumps(reply.model_dump())
+
+
+async def test_without_a_spotify_token_nothing_is_sent():
+    http, seen = agents()
+    async with http:
+        reply = await chat_with_rules(user("pause"), config(), http)
+    assert seen == []
+    assert reply.calls[0].error and "isn't set up" in reply.reply
 
 
 @pytest.mark.parametrize(
@@ -171,14 +182,16 @@ async def test_spotify_errors_are_not_retried(monkeypatch):
     http, seen = agents(spotify=spotify_result(error="Spotify only allows playback control with Premium.",
                                                summary="Spotify only allows playback control with Premium."))
     async with http:
-        call = await call_agent(AgentKind.SPOTIFY, SpotifyArgs(action="next"), config(), http)
+        call = await call_agent(
+            AgentKind.SPOTIFY, SpotifyArgs(action="next"), config(spotify_executor_token=SPOTIFY_TOKEN), http
+        )
     assert len(seen) == 1 and "Premium" in call.error
 
 
 # --- ASI:One tool path -------------------------------------------------------------
 
 
-def llm_agents(tool, arguments, final="Done.", opened=None):
+def llm_agents(tool, arguments, final="Done.", opened=None, spotify=None):
     llm, seen = [], []
 
     def handle(request):
@@ -195,7 +208,7 @@ def llm_agents(tool, arguments, final="Done.", opened=None):
         body = json.loads(request.content)
         seen.append((request.url.path, body))
         if request.url.path == "/spotify":
-            return httpx.Response(200, json=spotify_result())
+            return httpx.Response(200, json=spotify or spotify_result())
         if request.url.path == "/youtube/open":
             return httpx.Response(200, json=opened or {"status": "opened", "summary": "Opened.", "url": WATCH})
         return httpx.Response(200, json=youtube_result())
@@ -206,11 +219,12 @@ def llm_agents(tool, arguments, final="Done.", opened=None):
 async def test_llm_can_ask_what_is_playing():
     http, llm, seen = llm_agents("control_spotify", {"action": "now_playing", "query": "x"})
     async with http:
-        await chat_with_llm(user("what song is this"), config(asi_one_api_key="k"), http)
+        await chat_with_llm(user("what song is this"), config(asi_one_api_key="k", spotify_executor_token=SPOTIFY_TOKEN), http)
     tool = next(t for t in llm[0]["tools"] if t["function"]["name"] == "control_spotify")
     assert "now_playing" in tool["function"]["parameters"]["properties"]["action"]["enum"]
     assert seen == [
-        ("/spotify", {"action": "now_playing", "query": None, "kind": "auto", "volume": None, "volume_change": None})
+        ("/spotify", {"action": "now_playing", "query": None, "kind": "auto", "volume": None,
+                      "volume_change": None, "executor_token": SPOTIFY_TOKEN})
     ]
 
 
@@ -219,10 +233,13 @@ async def test_llm_uses_the_spotify_tool():
         "control_spotify", {"action": "play", "query": "Blinding Lights", "kind": "track"}
     )
     async with http:
-        reply = await chat_with_llm(user("play Blinding Lights on Spotify"), config(asi_one_api_key="k"), http)
+        reply = await chat_with_llm(
+            user("play Blinding Lights on Spotify"), config(asi_one_api_key="k", spotify_executor_token=SPOTIFY_TOKEN), http
+        )
     assert "control_spotify" in [t["function"]["name"] for t in llm[0]["tools"]]
     assert seen == [
-        ("/spotify", {"action": "play", "query": "Blinding Lights", "kind": "track", "volume": None, "volume_change": None})
+        ("/spotify", {"action": "play", "query": "Blinding Lights", "kind": "track", "volume": None,
+                      "volume_change": None, "executor_token": SPOTIFY_TOKEN})
     ]
     assert reply.calls[0].kind == AgentKind.SPOTIFY and reply.calls[0].result["uri"] == TRACK_URI
 
@@ -243,7 +260,7 @@ async def test_llm_uses_the_spotify_tool():
 async def test_llm_spotify_args_are_grounded(text, arguments, sent):
     http, llm, seen = llm_agents("control_spotify", arguments)
     async with http:
-        await chat_with_llm(user(text), config(asi_one_api_key="k"), http)
+        await chat_with_llm(user(text), config(asi_one_api_key="k", spotify_executor_token=SPOTIFY_TOKEN), http)
     if sent is None:
         assert seen == [] and "bad arguments" in llm[1]["messages"][-1]["content"]
     else:
@@ -349,3 +366,72 @@ async def test_llm_link_request_does_not_open():
     async with http:
         reply = await chat_with_llm(user("send me a link to never gonna give you up"), config(asi_one_api_key="k", laptop_executor_token=TOKEN), http)
     assert [p for p, _ in seen] == ["/youtube"] and reply.reply == "Here's the link."
+
+
+# --- Only a request that starts with a play verb opens a video -----------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Is the Apple Watch worth it? find a youtube review",
+        "how to start a car youtube",
+        "find a youtube video on how to watch the eclipse safely",
+        "watch band reviews on youtube",
+    ],
+)
+async def test_questions_that_mention_play_words_do_not_open(text):
+    assert not chat.wants_playback(text)
+    http, seen = agents()
+    async with http:
+        await chat_with_rules(user(text), config(laptop_executor_token=TOKEN), http)
+    assert "/youtube/open" not in [p for p, _ in seen]
+
+
+@pytest.mark.parametrize(
+    "text", ["play never gonna give you up", "Can you play bad guy", "watch the apple watch ultra review", "put on lofi beats"]
+)
+def test_play_verbs_at_the_start_open(text):
+    assert chat.wants_playback(text)
+
+
+# --- Honesty: the model can't paraphrase past a failed laptop action --------------------
+
+PARAPHRASE = "Bad Guy is now opening on your MacBook - enjoy!"
+
+
+async def test_llm_paraphrase_of_an_unopened_video_is_replaced():
+    http, _, _ = llm_agents(
+        "find_youtube",
+        {"query": "bad guy"},
+        final=PARAPHRASE,
+        opened={"status": "failed", "summary": "Couldn't open the browser on the laptop."},
+    )
+    async with http:
+        reply = await chat_with_llm(user("play bad guy"), config(asi_one_api_key="k", laptop_executor_token=TOKEN), http)
+    assert "opening on your MacBook" not in reply.reply
+    assert "Not opened on your laptop" in reply.reply and WATCH in reply.reply
+
+
+async def test_llm_paraphrase_of_a_failed_spotify_call_is_replaced():
+    error = "Spotify isn't open on the laptop. Open the Spotify app and try again."
+    http, _, _ = llm_agents(
+        "control_spotify",
+        {"action": "play", "query": "Bad Guy"},
+        final=PARAPHRASE,
+        spotify=spotify_result(error=error, summary=error, title=None, uri=None, url=None),
+    )
+    async with http:
+        reply = await chat_with_llm(
+            user("play Bad Guy on Spotify"), config(asi_one_api_key="k", spotify_executor_token=SPOTIFY_TOKEN), http
+        )
+    assert reply.reply == error
+
+
+async def test_llm_reply_stands_when_spotify_worked():
+    http, _, _ = llm_agents("control_spotify", {"action": "play", "query": "Bad Guy"}, final="Enjoy Bad Guy!")
+    async with http:
+        reply = await chat_with_llm(
+            user("play Bad Guy on Spotify"), config(asi_one_api_key="k", spotify_executor_token=SPOTIFY_TOKEN), http
+        )
+    assert reply.reply == "Enjoy Bad Guy!"

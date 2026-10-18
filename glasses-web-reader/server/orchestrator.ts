@@ -44,7 +44,10 @@ export function orchestratorGateway(options: Options) {
       return new Response(response.body, { status: response.status, headers: {
         'Content-Type': response.headers.get('content-type') ?? 'application/json', 'Cache-Control': 'no-store',
       } })
-    } catch {
+    } catch (e) {
+      // A timeout means the request reached the orchestrator, which may have acted; the
+      // orchestrator's own /v1/chat deadline (80 s) normally answers before this one.
+      if ((e as Error)?.name === 'TimeoutError') return c.json({ error: 'No answer yet. Check the laptop.' }, 504)
       return c.json({ error: 'Orchestrator unavailable. Check its connection and configuration.' }, 502)
     }
   })

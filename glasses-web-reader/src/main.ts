@@ -149,6 +149,13 @@ let wake: WakeListener | null = null
 let handsFree = true
 let micOn = false
 let voiceSeq = 0
+/** Aborted whenever voiceSeq moves on, so a chat for a dropped command stops waiting. */
+let voiceAbort = new AbortController()
+function nextVoice() {
+  voiceAbort.abort()
+  voiceAbort = new AbortController()
+  return ++voiceSeq
+}
 let voiceUi: VoiceUi = { phase: 'idle', text: '' }
 /** The capture in progress came from the wake phrase: the glasses show only the words. */
 let wakeCapture = false
@@ -1239,12 +1246,12 @@ function toggleVoice() {
 function voiceBack() {
   if (recorder) return void stopVoice(false)
   if (agentCard) return agentGesture('back')
-  voiceSeq++ // drops a search still in flight
+  nextVoice() // drops a search or chat still in flight
   void showContent()
 }
 
 async function capture(seed: Uint8Array[], fromWake: boolean) {
-  const seq = ++voiceSeq
+  const seq = nextVoice()
   // A new question replaces an answer or an unsent draft (nothing is sent).
   clearTimeout(agentFade)
   agentCard = null
@@ -1286,7 +1293,8 @@ async function stopVoice(send: boolean) {
   const rec = recorder
   if (!rec) return
   recorder = null
-  const seq = ++voiceSeq
+  const seq = nextVoice()
+  const { signal } = voiceAbort
   // Hands-free keeps the mic on and goes back to waiting for the wake phrase.
   if (handsFree) void armWake()
   else void setMic(false)
@@ -1324,7 +1332,7 @@ async function stopVoice(send: boolean) {
     if (client) {
       void renderThinking(command, 'Asking the agents')
       const asking = loading
-      const answer = await askAgents(client, command)
+      const answer = await askAgents(client, command, signal)
       if (seq !== voiceSeq || loading !== asking) return
       if (answer) {
         voiceUi = { phase: 'done', text: command }

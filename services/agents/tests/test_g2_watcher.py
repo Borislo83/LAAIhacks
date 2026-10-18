@@ -15,7 +15,7 @@ import pytest
 from test_g2_e2e import PRODUCT, base_url, by_type, demo_catalog, events, page_body, raw  # noqa: F401
 
 from laai_agents.g2_sim import G2Client, render
-from laai_agents.integration import GlassesWorkflow, PageWatcher
+from laai_agents.integration import GlassesAPIError, GlassesWorkflow, PageWatcher
 from laai_agents.models import ConsiderRequest
 
 
@@ -292,3 +292,29 @@ async def test_cli_watch_once_proposes_and_refuses_a_propose_journal(api_url, tm
     # A watcher journal cannot be reused for one-session propose/poll.
     code, _, err = await cli(env, "--journal", journal, "poll")
     assert code != 0 and "belongs to a watcher" in err
+
+
+async def test_a_refused_proposal_is_not_retried_for_the_same_page(tmp_path):
+    """No server: the API keeps showing the same page and refuses the proposal (409)."""
+    from datetime import UTC, datetime
+
+    worker = PageWatcher("http://127.0.0.1:9", TOKENS, tmp_path / "watch.json")
+    puts = []
+
+    async def api(role, method, path, body=None, params=None):
+        if method == "GET":
+            return {"page": {"page_id": "page-sony", "kind": "product", "title": "Sony WH-1000XM5"},
+                    "actions": []}
+        puts.append(body)
+        raise GlassesAPIError(method, 409)
+
+    worker.api = api
+    listed = {"session_id": "s1", "revision": 1, "updated_at": datetime.now(UTC).isoformat()}
+    try:
+        workflow = worker.workflow("s1")
+        for _ in range(3):
+            assert await worker.propose_for_page(workflow, listed) is None
+        assert len(puts) == 1
+        assert workflow.state["proposal"]["accepted_revision"] == "refused"
+    finally:
+        await worker.close()
