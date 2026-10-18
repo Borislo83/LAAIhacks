@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8" /><title>Glyph sheet</title></head>
+<body>
+  <!-- Dev only: scripts/gen-glyphs.mts opens this in the simulator, one sheet per launch:
+       ?sheet=N (&prefix=...) glyphs, ?corners=N bordered boxes, ?text=... any lines (by hand). -->
+  <script type="module">
+    import { waitForEvenAppBridge, CreateStartUpPageContainer, TextContainerProperty } from '@evenrealities/even_hub_sdk'
+    import { COLUMN_WIDTH, cornerSheets, sheets } from './glyph-sheet.ts'
+
+    const params = new URLSearchParams(location.search)
+    const box = (n, b) => new TextContainerProperty({
+      xPosition: b.x, yPosition: b.y, width: b.w, height: b.h,
+      borderWidth: b.border ?? 0, borderColor: 15, borderRadius: b.radius ?? 0, paddingLength: 0,
+      containerID: n + 1, containerName: `b${n + 1}`, content: b.text, isEventCapture: n === 0 ? 1 : 0,
+    })
+    let boxes
+    if (params.has('corners')) {
+      boxes = cornerSheets()[Number(params.get('corners'))].map(c => ({ ...c, border: c.b, radius: c.r, text: ' ' }))
+    } else if (params.has('text')) {
+      boxes = [{ x: 0, y: 0, w: 576, h: 288, text: params.get('text') }]
+    } else {
+      const sheet = sheets(params.get('prefix') ?? '')[Number(params.get('sheet') ?? 0)]
+      boxes = sheet.columns.map(col => ({ x: col.x, y: 0, w: COLUMN_WIDTH, h: 288, text: col.text }))
+    }
+    const bridge = await waitForEvenAppBridge()
+    await bridge.createStartUpPageContainer(new CreateStartUpPageContainer({
+      containerTotalNum: boxes.length,
+      textObject: boxes.map((b, n) => box(n, b)),
+    }))
+  </script>
+</body>
+</html>
