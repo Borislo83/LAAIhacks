@@ -89,3 +89,39 @@ test('client refuses cross-session and malformed display responses', async () =>
   const client = new BackendClient('http://localhost:5173/api/backend', 'user-token', '', async () => Response.json({ schema_version: '1.0', session_id: 'other', revision: 2, page: null, actions: [], mode: 'summary', notice: null }))
   await assert.rejects(client.display('session'), /Invalid.*display/)
 })
+
+test('local dev token is attached only for unforwarded requests on this machine', async () => {
+  const calls: Request[] = []
+  const transport: typeof fetch = async (input, init) => { calls.push(new Request(input, init)); return Response.json([]) }
+  const app = new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001', transport, devToken: 'demo-all', peerAddress: c => c.req.header('x-test-peer') ?? '127.0.0.1' }))
+  const local = { Authorization: 'Bearer local-dev' }
+
+  assert.deepEqual(await (await app.request('/api/backend/dev')).json(), { local: true })
+  assert.equal((await app.request('/api/backend/v1/tasks', { headers: local })).status, 200)
+  assert.equal(calls[0].headers.get('authorization'), 'Bearer demo-all')
+  assert.ok(!calls[0].headers.has('x-forwarded-for'), 'DEMO_AUTH_MODE only trusts unforwarded loopback calls')
+
+  // Through a tunnel or proxy: no dev token, and the stand-in itself is refused.
+  for (const extra of [{ 'CF-Connecting-IP': '203.0.113.9' }, { 'X-Forwarded-For': '203.0.113.9' }, { 'Cf-Ray': 'abc' }]) {
+    assert.deepEqual(await (await app.request('/api/backend/dev', { headers: extra })).json(), { local: false })
+    assert.equal((await app.request('/api/backend/v1/tasks', { headers: { ...local, ...extra } })).status, 401)
+  }
+  // Another device on the Wi-Fi: directly, or through the Vite proxy (which appends its address),
+  // even when it forges a loopback X-Forwarded-For or Host.
+  for (const extra of [{ 'x-test-peer': '172.26.1.9' }, { 'X-Forwarded-For': '127.0.0.1, 172.26.1.9' }, { 'x-test-peer': '172.26.1.9', Host: 'localhost' }]) {
+    assert.deepEqual(await (await app.request('/api/backend/dev', { headers: extra })).json(), { local: false })
+    assert.equal((await app.request('/api/backend/v1/tasks', { headers: { ...local, ...extra } })).status, 401)
+  }
+  // The simulator on this machine through Vite: every hop is loopback.
+  assert.deepEqual(await (await app.request('/api/backend/dev', { headers: { 'X-Forwarded-For': '127.0.0.1' } })).json(), { local: true })
+  // Callers still can't send demo tokens themselves.
+  assert.equal((await app.request('/api/backend/v1/tasks', { headers: { Authorization: 'Bearer demo-all' } })).status, 401)
+  assert.equal(calls.length, 1)
+})
+
+test('without a dev token configured, local-dev is just an invalid bearer', async () => {
+  const app = new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001', transport: async () => Response.json([]) }))
+  assert.deepEqual(await (await app.request('/api/backend/dev')).json(), { local: false })
+  assert.equal((await app.request('/api/backend/v1/tasks', { headers: { Authorization: 'Bearer local-dev' } })).status, 401)
+  assert.throws(() => orchestratorGateway({ base: 'http://127.0.0.1:8001', devToken: 'real-jwt' }))
+})

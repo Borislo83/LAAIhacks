@@ -145,6 +145,7 @@ app.route('/api/recommendations', recommendationRoutes())
 app.route('/api/backend', orchestratorGateway({
   base: process.env.ORCHESTRATOR_URL ?? 'http://127.0.0.1:8001',
   origins: (process.env.ORCHESTRATOR_ALLOWED_ORIGINS ?? process.env.CORS_ORIGIN ?? '').split(',').map(s => s.trim()).filter(Boolean),
+  devToken: process.env.GATEWAY_DEV_TOKEN || undefined,
 }))
 
 app.get('/api/health', c => c.json({ ok: true }))
