@@ -59,6 +59,18 @@ links are returned, always as `https://www.youtube.com/watch?v=<11-character id>
 and no URL from the query or the results is fetched. No match gives `url: null` with a
 summary that says so. If every provider fails, `error` is set and no link is guessed.
 
+### Playing a video on the laptop
+
+`POST /youtube/open {url, executor_token}` opens a video in the Mac's default browser. The
+orchestrator calls it after `find_youtube` when the user asks to play or watch something
+(a "send me a link" request only gets the link). It needs `LAPTOP_EXECUTOR_TOKEN`, set to the
+same private value in this `.env` and the orchestrator's (compared in constant time; never
+sent to the browser or glasses). Only an exact `https://www.youtube.com/watch?v=<11 chars>`
+URL is accepted, and it runs `open <url>` as an argv list, with no shell. The reply's `status`
+is `opened`, `dry_run` (`LAPTOP_OPEN_DRY_RUN=1`), `not_configured` (no token), `refused`
+(wrong token or URL) or `failed` (not on macOS, or `open` failed). Chat and agent messages
+can't reach it.
+
 ## Spotify agent
 
 `laai-spotify` plays music on the laptop by driving the Spotify desktop app through
