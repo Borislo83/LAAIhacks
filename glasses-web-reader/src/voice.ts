@@ -12,7 +12,7 @@ const MAX_MS = 10_000
 /** Give up when nothing louder than the noise floor arrives in this long. */
 const NO_SPEECH_MS = 8_000
 /** Quiet this long after speech ends the command (room for a thinking pause). */
-const TRAILING_SILENCE_MS = 1_200
+const TRAILING_SILENCE_MS = 1_500
 /** RMS (of 32768) a frame needs to count as speech in a quiet room. */
 const SPEECH_RMS = 900
 /** In a noisy room speech must be this many times the background level. */

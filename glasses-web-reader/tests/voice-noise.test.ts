@@ -37,7 +37,7 @@ test('in a noisy room a command ends when the wearer stops, not at the cap', () 
   const levels = [...repeat(1500, 2000), ...repeat(7000, 2000), ...repeat(1500, 6000)]
   const at = run(levels, f => rec.push(f), () => stopped !== null)
   assert.equal(stopped, 'silence')
-  assert.ok(at > 4000 && at < 5600, `stopped at ${at} ms`)
+  assert.ok(at > 5300 && at < 5900, `stopped at ${at} ms`)
 })
 
 test('in a quiet room a short pause does not end the command', () => {
