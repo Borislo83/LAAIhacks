@@ -29,3 +29,14 @@ export interface DecisionIntent {
 export type DecisionOutcome = 'success' | 'uncertain' | 'failed'
 export type Gesture = 'tap' | 'up' | 'down' | 'back'
 export interface CardView { title: string; lines: string[]; hint: string }
+/** One agent the orchestrator's chat called (ChatReply.calls[]). */
+export interface AgentCall {
+  kind: string; payload: Record<string, unknown>; result: Record<string, unknown> | null; error: string | null; ms: number
+}
+export interface ChatReply {
+  reply: string; calls: AgentCall[]; source: string; picks?: Record<string, unknown>[]
+  product?: string | null; image?: string | null
+}
+export interface MessageSent {
+  status: 'sent' | 'failed' | 'needs_permission' | 'open_link'; summary: string; dry_run?: boolean; open_url?: string
+}

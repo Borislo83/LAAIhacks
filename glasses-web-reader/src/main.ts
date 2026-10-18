@@ -25,6 +25,8 @@ import { VoiceRecorder, WakeListener, concat } from './voice'
 import { BackendClient } from './lensos/client'
 import { BackendSession, type ActionGroup } from './lensos/session'
 import { apiActionCards } from './lensos/action-cards'
+import { ActionPopup, POPUP_TAP_GRACE_MS, popupAllowed } from './lensos/action-popup'
+import { AgentCard, askAgents, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
 import type { RecommendationBatch } from '../shared/recommendations'
 
@@ -49,6 +51,7 @@ const RECOMMENDATION_LAYOUT_KEY = 'webreader.v2.recommendationLayout'
 const SESSION_KEY = 'webreader.lensos.session'
 const HANDS_FREE_KEY = 'webreader.v1.handsFree'
 const RECOMMENDATIONS_KEY = 'webreader.v1.recommendations'
+const ACTION_POPUPS_KEY = 'webreader.v1.actionPopups'
 /** Must match the server's WAKE_NAME. Not "Hey Even": that wakes the system assistant. */
 const WAKE_PHRASE = 'Hey Search'
 /** The assistant's name on the glasses card and spinner. */
@@ -59,7 +62,7 @@ const MAX_HISTORY = 10
 
 type View =
   | 'reader' | 'deck' | 'manga' | 'menu' | 'contents' | 'links' | 'recent' | 'bookmarks'
-  | 'actions' | 'recommendations' | 'recommendation-layout' | 'voice'
+  | 'actions' | 'recommendations' | 'recommendation-layout' | 'voice' | 'action-popup'
 interface Recent {
   url: string
   title: string
@@ -165,6 +168,13 @@ let recommendationIndex = 0
 let recommendationSelected = false
 let recommendationBase: PageSpec | undefined
 let actionGroup: ActionGroup = 'tasks'
+/** An agent answer or iMessage draft on the lens, paged with swipes. */
+let agentCard: AgentCard | null = null
+let agentFade: ReturnType<typeof setTimeout> | undefined
+/** Proposed session actions (and their results) popping up over the reader. */
+const actionPopup = new ActionPopup()
+let actionPopupAt = 0
+let actionPopupShown: object | null = null
 const actionCards = new Map<ActionGroup, ReturnType<typeof apiActionCards>>()
 const backend = new BackendSession({
   saveSession(id, pageUrl) {
@@ -178,6 +188,9 @@ const backend = new BackendSession({
       cards.show(backend.actionDisplay(group))
       cards.setEnabled(backend.state.connected && backend.state.online)
     }
+    // New proposals pop up now if only the page is on screen, else when it's back.
+    if (actionPopup.update(backend.state.display) && popupFree()) void showActionPopup()
+    else if (view === 'action-popup' && !actionPopup.view) void showContent()
     companion.update()
   },
 })
@@ -251,6 +264,7 @@ if (created !== 0) console.error('createStartUpPageContainer failed:', created)
 function showContent() {
   if (loading && !status) return renderLoading()
   if (glassRecommendations && recommendationsOpen && !status) return renderGlassesRecommendations()
+  if (actionPopup.view && popupFree()) return showActionPopup()
   if (!status && doc && isManga()) return showStrip(mangaPage, mangaStrip)
   if (!status && doc && isDeck()) return renderDeck()
   return renderReader()
@@ -901,6 +915,14 @@ function openMenu() {
     },
   })
   items.push({
+    label: `Action popups: ${actionPopup.enabled ? 'on' : 'off'}`,
+    run: () => {
+      actionPopup.setEnabled(!actionPopup.enabled)
+      void enqueue(() => bridge.setLocalStorage(ACTION_POPUPS_KEY, actionPopup.enabled ? '1' : '0')).catch(() => {})
+      openMenu()
+    },
+  })
+  items.push({
     label: handsFree ? `Hands-free "${WAKE_PHRASE}": on` : `Hands-free "${WAKE_PHRASE}": off`,
     run: () => {
       setHandsFree(!handsFree)
@@ -1023,6 +1045,8 @@ const LISTEN_HINT = 'Listening...   Tap: send   Swipe: cancel'
 const PARTIAL_MS = 1200
 /** A hands-free result stays on the glasses this long, then the page comes back. */
 const WAKE_RESULT_MS = 6000
+/** Agent answers are longer to read; each swipe restarts this. */
+const AGENT_RESULT_MS = 10_000
 const MAX_HEARD = 40
 
 // Voice card, like a system assistant popping up: a name line, a bordered
@@ -1206,6 +1230,7 @@ function startVoice() {
 
 /** Tap on the voice card (or the phone's mic / Select): send what's been said, or listen again. */
 function toggleVoice() {
+  if (agentCard && !recorder) return agentGesture('tap')
   if (recorder) void stopVoice(true)
   else startVoice()
 }
@@ -1213,12 +1238,16 @@ function toggleVoice() {
 /** Swipe on the voice card (or the phone's Back): cancel the capture, or leave the card. */
 function voiceBack() {
   if (recorder) return void stopVoice(false)
+  if (agentCard) return agentGesture('back')
   voiceSeq++ // drops a search still in flight
   void showContent()
 }
 
 async function capture(seed: Uint8Array[], fromWake: boolean) {
   const seq = ++voiceSeq
+  // A new question replaces an answer or an unsent draft (nothing is sent).
+  clearTimeout(agentFade)
+  agentCard = null
   const rec = (recorder = new VoiceRecorder(reason => void stopVoice(reason !== 'no-speech'), seed))
   wakeCapture = fromWake
   voiceUi = { phase: 'listening', text: '' }
@@ -1289,6 +1318,20 @@ async function stopVoice(send: boolean) {
     if (!command) return void fail("Sorry, I didn't catch that.", "Couldn't make that out.")
     logHeard({ text: command, command: true })
     voiceUi = { phase: 'searching', text: command }
+    // Signed in: the Focal agents get the first try. Anything chat can't route,
+    // and any gateway or chat failure, falls through to the web search below.
+    const client = backend.agents
+    if (client) {
+      void renderThinking(command, 'Asking the agents')
+      const asking = loading
+      const answer = await askAgents(client, command)
+      if (seq !== voiceSeq || loading !== asking) return
+      if (answer) {
+        voiceUi = { phase: 'done', text: command }
+        logHeard({ text: answer.title, opened: true })
+        return void showAgentCard(answer, quiet)
+      }
+    }
     void renderThinking(command, 'Searching the web')
     const searching = loading
     const page = await searchPage(command)
@@ -1304,6 +1347,65 @@ async function stopVoice(send: boolean) {
     const detail = err instanceof Error ? err.message : String(err)
     void fail("Sorry, I couldn't find that.", detail)
   }
+}
+
+// Agent answers use the reader layout: a title row, 8 rows of text, then the
+// gestures in the footer. Swipes page through; a draft waits for a tap to send.
+function showAgentCard(answer: AgentAnswer, quiet: boolean) {
+  stopLoading()
+  agentCard = new AgentCard(answer, quiet)
+  armAgentFade()
+  return renderAgentCard()
+}
+
+async function renderAgentCard() {
+  if (!agentCard) return
+  view = 'voice'
+  await showText(agentCard.text, agentCard.footer())
+}
+
+function armAgentFade() {
+  clearTimeout(agentFade)
+  const card = agentCard
+  if (!card?.fades) return
+  agentFade = setTimeout(() => {
+    if (agentCard === card && view === 'voice' && !recorder) closeAgentCard()
+  }, AGENT_RESULT_MS)
+}
+
+function closeAgentCard() {
+  clearTimeout(agentFade)
+  agentCard = null
+  void showContent()
+}
+
+/** A draft's outcome ("Not sent.", "Sent to J•••") replaces it as a plain answer. */
+function agentNote(card: AgentCard, text: string) {
+  if (agentCard !== card) return
+  voiceUi = { phase: 'done', text }
+  void showAgentCard({ kind: 'answer', title: 'Messages', pages: paginate('Messages', text) }, card.quiet)
+}
+
+function agentGesture(gesture: CardGesture) {
+  const card = agentCard
+  if (!card) return
+  const next = card.gesture(gesture)
+  if (next === 'close') return closeAgentCard()
+  if (next === 'cancel') return agentNote(card, 'Cancelled. Nothing was sent.')
+  if (next === 'send') return void confirmDraft(card)
+  if (next === 'render') { armAgentFade(); void renderAgentCard() }
+}
+
+/** Sends the draft exactly as shown, only after the tap on its last page. */
+async function confirmDraft(card: AgentCard) {
+  if (card.answer.kind !== 'draft') return
+  const client = backend.agents
+  void renderAgentCard()
+  const text = client
+    ? await sendDraft(client, card.answer.draft)
+    : 'Signed out, so nothing was sent. Connect your account and ask again.'
+  logHeard({ text })
+  agentNote(card, text)
 }
 
 // ── Loading ─────────────────────────────────────────────────────────────────
@@ -1442,6 +1544,7 @@ async function restore() {
     if (RECOMMENDATION_LAYOUTS.some(layout => layout.id === savedLayout)) recommendationLayout = savedLayout as RecommendationLayout
     if ((await enqueue(() => bridge.getLocalStorage(HANDS_FREE_KEY)).catch(() => '')) === '0') handsFree = false
     if ((await enqueue(() => bridge.getLocalStorage(RECOMMENDATIONS_KEY)).catch(() => '')) === '0') recommendationsOn = false
+    if ((await enqueue(() => bridge.getLocalStorage(ACTION_POPUPS_KEY)).catch(() => '')) === '0') actionPopup.setEnabled(false)
     void armWake()
     companion.update()
     // Deep link: index.html?open=<page> opens straight into a page.
@@ -1483,6 +1586,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   if ([sysType, textType, listType].includes(OsEventTypeList.DOUBLE_CLICK_EVENT)) {
     if (view === 'recommendations') { companion.closeRecommendations(); return }
     if (view === 'actions') { actionBack(); return }
+    if (view === 'action-popup') { actionPopupGesture('back'); return }
     // Don't clean up here: the user may cancel the system dialog.
     bridge.shutDownPageContainer(1)
     return
@@ -1507,8 +1611,21 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   }
 
   if (view === 'voice') {
+    if (agentCard && !recorder) {
+      if (textType === OsEventTypeList.SCROLL_TOP_EVENT) agentGesture('up')
+      else if (textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) agentGesture('down')
+      else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) agentGesture('tap')
+      return
+    }
     if (textType === OsEventTypeList.SCROLL_TOP_EVENT || textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) voiceBack()
     else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) toggleVoice()
+    return
+  }
+
+  if (view === 'action-popup') {
+    if (textType === OsEventTypeList.SCROLL_TOP_EVENT) actionPopupGesture('up')
+    else if (textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) actionPopupGesture('down')
+    else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) actionPopupGesture('tap')
     return
   }
 
@@ -1527,7 +1644,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
 
 /** A native glasses list (menu, contents, links...) is on screen. */
 function isListView() {
-  return !isContentView() && view !== 'actions' && view !== 'recommendations' && view !== 'voice'
+  return !isContentView() && view !== 'actions' && view !== 'recommendations' && view !== 'voice' && view !== 'action-popup'
 }
 
 function cleanup() {
@@ -1567,18 +1684,22 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
   onOpenBookmark: openBookmark,
   onRemoveBookmark: removeBookmark,
   onStep: delta => {
-    if (view === 'voice') voiceBack()
+    if (view === 'action-popup') actionPopupGesture(delta > 0 ? 'down' : 'up')
+    else if (view === 'voice' && agentCard && !recorder) agentGesture(delta > 0 ? 'down' : 'up')
+    else if (view === 'voice') voiceBack()
     else if (view === 'actions' || view === 'recommendations' || isContentView()) step(delta)
     else void showContent()
   },
   onSelect: () => {
-    if (view === 'voice') toggleVoice()
+    if (view === 'action-popup') actionPopupGesture('tap')
+    else if (view === 'voice') toggleVoice()
     else if (isContentView() || view === 'actions' || view === 'recommendations') select()
   },
   onBack: () => {
     if (view === 'voice') voiceBack()
     else if (view === 'recommendations') companion.closeRecommendations()
     else if (view === 'actions') actionBack()
+    else if (view === 'action-popup') actionPopupGesture('back')
     else void showContent()
   },
   onMenu: () => {
@@ -1669,12 +1790,15 @@ async function connectBackend(token: string, g2Token: string) {
   } catch (e) { backend.state.message = e instanceof Error ? e.message : 'Could not connect.'; companion.update() }
 }
 
-function openActions(group: ActionGroup) {
+function openActions(group: ActionGroup, focus?: string) {
   actionGroup = group
   let cards = actionCards.get(group)
   if (!cards) {
     cards = apiActionCards(intent => {
-      void backend.decide(group, intent).then(result => cards!.finish(intent.request_id, result.outcome, result.message))
+      void backend.decide(group, intent).then(result => {
+        if (group === 'session' && intent.operation === 'approve' && result.outcome === 'success') actionPopup.expect(intent.action_id)
+        cards!.finish(intent.request_id, result.outcome, result.message)
+      })
     }, () => { if (view === 'actions' && actionGroup === group) void renderActions() })
     actionCards.set(group, cards)
   }
@@ -1682,7 +1806,50 @@ function openActions(group: ActionGroup) {
   cards.setEnabled(backend.state.connected && backend.state.online)
   view = 'actions'
   cards.open()
+  if (focus) cards.focus(focus)
   void renderActions()
+}
+
+/** Only the page is on screen: no voice, answer card, menu, list, loading or other popup. */
+function popupFree() {
+  // Claude's recommendation strip goes first; the popup follows when it closes.
+  const shown = glassRecommendations && recommendationsOpen ? 'recommendations' : view === 'action-popup' ? 'reader' : view
+  return popupAllowed({ view: shown, loading: !!loading, status: !!status,
+    recording: !!recorder, card: !!agentCard, page: !!doc && backend.state.connected })
+}
+
+async function showActionPopup() {
+  const popup = actionPopup.view
+  if (!popup) return
+  const already = view === 'action-popup'
+  // The page under the strip: the deck screen, or the reader text (a manga page gives way).
+  const base = isDeck() ? currentSpec() : isManga() ? { texts: [], images: [] } : readerSpec(bodyText(), footerText())
+  const spec = glassesRecommendationSpec(base, popup.items.map(i => i.label), actionPopup.cursor, false, 'bottom',
+    { heading: popup.heading, close: 'Dismiss' })
+  view = 'action-popup'
+  // New contents restart the tap grace, so a tap meant for the old list can't pick from the new one.
+  if (!already || actionPopupShown !== popup) { actionPopupShown = popup; actionPopupAt = Date.now() }
+  const previous = mirror
+  if (!already || previous.texts.length !== spec.texts.length) return renderPageSpec(spec).catch(console.error)
+  // Moving the cursor only rewrites the changed cells, like the recommendations strip.
+  mirror = spec
+  companion.update()
+  for (const [index, box] of spec.texts.entries()) {
+    if (previous.texts[index]?.text === box.text) continue
+    const id = index + 2 // Full-screen capture is container 1.
+    await enqueue(() => bridge.textContainerUpgrade(new TextContainerUpgrade({
+      containerID: id, containerName: `t${id}`, content: box.text,
+    }))).catch(console.error)
+  }
+}
+
+function actionPopupGesture(gesture: 'tap' | 'up' | 'down' | 'back') {
+  // A tap right as the popup appears was aimed at the page; it never picks an action.
+  if (gesture === 'tap' && Date.now() - actionPopupAt < POPUP_TAP_GRACE_MS) return
+  const step = actionPopup.gesture(gesture)
+  if (step.kind === 'render') void showActionPopup()
+  else if (step.kind === 'close') void showContent()
+  else if (step.kind === 'review') openActions('session', step.action_id)
 }
 
 function actionBack() {
