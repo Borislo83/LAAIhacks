@@ -41,8 +41,11 @@ test('in a noisy room a command ends when the wearer stops, not at the cap', () 
 })
 
 test('in a quiet room a short pause does not end the command', () => {
+  const realNow = Date.now
+  Date.now = () => 1_000_000
   let stopped: string | null = null
   const rec = new VoiceRecorder(r => { stopped ??= r })
+  Date.now = realNow
   const levels = [...repeat(5000, 1000), ...repeat(100, 600), ...repeat(5000, 1000), ...repeat(100, 2000)]
   const at = run(levels, f => rec.push(f), () => stopped !== null)
   assert.equal(stopped, 'silence')
@@ -55,4 +58,28 @@ test('nonstop chatter is rechecked for the wake phrase every couple of seconds',
   // Chatter just over the quiet-room threshold with no gaps: one long utterance.
   run(repeat(1200, 9000).map((l, i) => (i % 3 ? l : l * 3)), f => listener.push(f), () => false)
   assert.ok(rechecks.length >= 2, `rechecks: ${rechecks.length}`)
+})
+
+test('after "Hey Focal, find..." a pause right as the card appears does not end the command', () => {
+  const realNow = Date.now
+  let now = 1_000_000
+  Date.now = () => now
+  let stopped: string | null = null
+  // Seeded with the wake sentence (speech), then the wearer pauses to read the card.
+  const rec = new VoiceRecorder(r => { stopped ??= r }, [frame(5000)])
+  Date.now = realNow
+  const at = run(repeat(100, 5000), f => rec.push(f), () => stopped !== null)
+  assert.equal(stopped, 'silence')
+  assert.ok(at >= 2900, `stopped at ${at} ms`)
+})
+
+test('a question already said with the wake phrase is not held for the full no-speech wait', () => {
+  const realNow = Date.now
+  Date.now = () => 1_000_000
+  let stopped: string | null = null
+  const rec = new VoiceRecorder(r => { stopped ??= r }, [], undefined, 2000)
+  Date.now = realNow
+  const at = run(repeat(100, 5000), f => rec.push(f), () => stopped !== null)
+  assert.equal(stopped, 'no-speech')
+  assert.ok(at >= 1900 && at < 2100, `stopped at ${at} ms`)
 })

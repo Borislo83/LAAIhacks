@@ -13,6 +13,8 @@ const MAX_MS = 10_000
 const NO_SPEECH_MS = 8_000
 /** Quiet this long after speech ends the command (room for a thinking pause). */
 const TRAILING_SILENCE_MS = 1_500
+/** No pause ends the command this soon after the card appears, so there's time to start talking. */
+const FIRST_PAUSE_MS = 3_000
 /** RMS (of 32768) a frame needs to count as speech in a quiet room. */
 const SPEECH_RMS = 900
 /** In a noisy room speech must be this many times the background level. */
@@ -66,9 +68,10 @@ export class VoiceRecorder {
   /**
    * `onAutoStop` is called when the recorder decides the utterance is over.
    * `seed` is audio already captured (the wake utterance) to start from.
+   * `noSpeechMs` is how long to wait for speech before giving up.
    */
   constructor(private onAutoStop: (reason: StopReason) => void, seed: Uint8Array[] = [],
-    private floor = new NoiseFloor()) {
+    private floor = new NoiseFloor(), private noSpeechMs = NO_SPEECH_MS) {
     for (const c of seed) {
       this.chunks.push(c)
       this.bytes += c.length
@@ -103,8 +106,10 @@ export class VoiceRecorder {
     this.peak *= 0.998
     const elapsed = (this.bytes / BYTES_PER_SEC) * 1000
     if (elapsed >= MAX_MS) this.onAutoStop('max')
-    else if (this.heardSpeech && now - this.lastLoudAt >= TRAILING_SILENCE_MS) this.onAutoStop('silence')
-    else if (!this.heardSpeech && now - this.startedAt >= NO_SPEECH_MS) this.onAutoStop('no-speech')
+    else if (this.heardSpeech && now - this.lastLoudAt >= TRAILING_SILENCE_MS && now - this.startedAt >= FIRST_PAUSE_MS) {
+      this.onAutoStop('silence')
+    }
+    else if (!this.heardSpeech && now - this.startedAt >= this.noSpeechMs) this.onAutoStop('no-speech')
   }
 
   get hasSpeech() {
