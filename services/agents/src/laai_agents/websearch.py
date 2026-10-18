@@ -330,14 +330,33 @@ def source_text(articles: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
+# A measurement: a number and its unit ("30 °F", "86°F", "30 degrees Celsius", "9 mph").
+MEASURE = re.compile(
+    r"(\d[\d,.]*)\s*(?:°\s*|degrees?\s+)?(f(?:ahrenheit)?|c(?:elsius)?|mph|km/h|kph)\b", re.IGNORECASE,
+)
+
+
+def _unit(token: str) -> str:
+    t = token.lower()
+    return {"fahrenheit": "f", "celsius": "c", "kph": "km/h"}.get(t, t)
+
+
+def units_supported(sentence: str, allowed: str) -> bool:
+    """Every measurement in the sentence appears in the sources with the same unit:
+    a model must not relabel 30 °C as 30 °F."""
+    have = {(n.rstrip(".,").replace(",", ""), _unit(u)) for n, u in MEASURE.findall(allowed)}
+    return all((n.rstrip(".,").replace(",", ""), _unit(u)) in have for n, u in MEASURE.findall(sentence))
+
+
 def grounded(answer: str, sources: str, question: str = "") -> str | None:
     """The answer's sentences, minus any that has a number the sources (or the question
-    itself) don't contain; None when nothing is left."""
+    itself) don't contain, or a measurement with a different unit; None when nothing is left."""
     answer = re.sub(r"[*_#`>]+", "", answer or "")
     allowed = f"{sources}\n{question}"
     kept = [
         s for s in news.sentences(answer)
         if not s.startswith(("-", "•")) and news.numbers_supported(s, allowed)
+        and units_supported(s, allowed)
     ]
     return news.fit(kept, ANSWER_LIMIT) if kept else None
 
