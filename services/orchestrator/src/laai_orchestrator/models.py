@@ -106,4 +106,7 @@ class AgentCall(BaseModel):
 class ChatReply(BaseModel):
     reply: str
     calls: list[AgentCall]
+    # Best price / alternative / recommended, each with an Amazon or Best Buy cart link
+    # when the product comes from one of those stores.
+    picks: list[dict[str, Any]] = Field(default_factory=list)
     source: Literal["asi_one", "rules", "coordinator", "buyer"]

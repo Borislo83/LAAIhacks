@@ -340,6 +340,36 @@ async def buyer_call(payload, config, http, emit=None, confirmation=None):
         return AgentCall(kind="buyer", payload=payload, error="Amazon cart agent unavailable", ms=0)
 
 
+# "show me the reviews for the Sony XM5", "what are reviews of AirPods Pro 2 like?"
+REVIEWS_REQUEST = (
+    r"\b(?:show|get|find|give|see|read|pull up|what are|check)\b.{0,25}?\breviews?\b"
+    r"\s+(?:for|of|on|about)\s+(?:the\s+)?(?P<product>[^?.!]{2,})"
+)
+# "add it to cart", "put the Sony XM5 in my kart", "add this to the basket"
+CART_REQUEST = r"\b(?:add|put|place|throw)\b.{0,80}?\b(?:to|in|into)\s+(?:my\s+|the\s+|your\s+)?(?:amazon\s+)?(?:cart|kart|basket)\b"
+# A bare pronoun request, which confirms a cart approval that is already waiting.
+CART_PRONOUN = r"(?:yes |please |ok |okay )*(?:add|put|place) (?:it|this|that|them) (?:to|in|into) (?:my |the )?cart(?: please)?"
+# Words that are part of the request itself, not the product name.
+CART_FILLER = re.compile(
+    r"\b(?:please|can|could|you|would|go|ahead|and|just|now|add|put|place|throw|it|this|that|"
+    r"them|one|item|product|to|in|into|my|the|your|a|an|on|amazon|cart|kart|basket|for|me)\b",
+    re.IGNORECASE,
+)
+
+
+def cart_product(history: list[ChatMessage]) -> str:
+    """The product a cart request means: named in it, or else the one discussed before it."""
+    text = history[-1].content
+    named = re.sub(r"\s+", " ", CART_FILLER.sub(" ", re.sub(r"[^\w\s()'+-]", " ", text))).strip()
+    if len(named) >= 2:
+        return text
+    # "add it to cart": "it" is the product from the user's previous message.
+    for message in reversed(history[:-1]):
+        if message.role == "user" and not re.search(CART_REQUEST, message.content, re.IGNORECASE):
+            return message.content
+    return text
+
+
 async def chat(
     history: list[ChatMessage],
     config: Config,
@@ -349,7 +379,8 @@ async def chat(
     preferences=None,
 ) -> ChatReply:
     text = history[-1].content
-    normalized = re.sub(r"[^a-z ]", "", text.lower()).strip()
+    normalized = re.sub(r"[^a-z ]", "", text.lower()).replace("kart", "cart").strip()
+    normalized = re.sub(r"\s+", " ", normalized)
     confirming = normalized in {
         "yes",
         "confirm buy",
@@ -360,10 +391,12 @@ async def chat(
         "yes confirm add to cart",
         "add to cart",
         "yes add to cart",
-    }
+    } or bool(purchase_confirmation and re.fullmatch(CART_PRONOUN, normalized))
     amazon_url = re.search(r"https://(?:www\.)?amazon\.com/[^\s]+", text, re.IGNORECASE)
+    cart_request = re.search(CART_REQUEST, text, re.IGNORECASE)
     buying = (
         amazon_url
+        or cart_request
         or (
             re.search(r"\b(buy|purchase|order)\b", text, re.IGNORECASE) and "amazon" in text.lower()
         )
@@ -372,17 +405,31 @@ async def chat(
     if buying or confirming and purchase_confirmation:
         quantity = re.search(r"\b(?:quantity|qty)\s*:?\s*(\d+)\b", text, re.IGNORECASE)
         payload = {
-            "product": text[:500],
+            "product": cart_product(history)[:500] if cart_request else text[:500],
             "url": amazon_url[0].rstrip(".,)") if amazon_url else None,
             "quantity": int(quantity[1]) if quantity else 1,
         }
         call = await buyer_call(
             payload, config, http, emit, purchase_confirmation if confirming else None
         )
+        reply = call.result["summary"] if call.result else call.error
+        if cart_request and call.result and not confirming:
+            # Say which product "it" was taken to mean, before anything is approved.
+            reply = f"Cart request for {call.result.get('product', 'this product')}. {reply}"
+        return ChatReply(
+            reply=reply,
+            calls=[call],
+            source="buyer",
+        )
+    reviews_for = re.search(REVIEWS_REQUEST, text, re.IGNORECASE)
+    if reviews_for:
+        # "Show me the reviews for X": only the reviews agent, on that product.
+        args = ToolArgs(product=reviews_for["product"].strip(" ?.!")[:200] or text)
+        call = await call_agent(TaskKind.REVIEWS, args, config, http, emit)
         return ChatReply(
             reply=call.result["summary"] if call.result else call.error,
             calls=[call],
-            source="buyer",
+            source="rules",
         )
     if confirming and normalized != "yes":
         return ChatReply(
@@ -423,7 +470,12 @@ async def chat(
             if preferences:
                 order = preferred_tasks(list(TaskKind), preferences.shopping_priority)
                 calls.sort(key=lambda call: order.index(call.kind))
-            return ChatReply(reply=data["summary"], calls=calls, source="coordinator")
+            return ChatReply(
+                reply=data["summary"],
+                calls=calls,
+                source="coordinator",
+                picks=[p for p in data.get("picks") or [] if isinstance(p, dict)],
+            )
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             return ChatReply(
                 reply="The coordinator is unavailable. Please try again.",

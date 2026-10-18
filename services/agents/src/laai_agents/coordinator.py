@@ -22,6 +22,7 @@ from .models import (
     AlternativesResponse,
     ConsiderRequest,
     ConsiderResponse,
+    Pick,
     PriceCompareRequest,
     PriceCompareResponse,
     ReviewsRequest,
@@ -32,6 +33,28 @@ from .progress import ProgressBatch, ProgressQuery, publish, read
 
 ATTEMPTS = 3
 RETRY_DELAY = 1.0
+
+
+BUDGET = re.compile(
+    r"(?:under|below|less than|up to|at most|max(?:imum)?|budget(?:\s+of)?)\s*\$?\s*\d[\d,]*(?:\.\d{1,2})?"
+    r"(?:\s*(?:dollars|usd|bucks))?",
+    re.IGNORECASE,
+)
+FILLER = re.compile(
+    r"\b(?:consider|evaluate|assess|recommend|suggest|find|show|me|are|is|there|any|some|"
+    r"good|best|cheap|cheaper|a|an|the|and|or|but|alternatives?|options?|please|i|i'm|im|"
+    r"want|need|looking|for|to|buy|get|something|like|similar|what|which|can|could|you|"
+    r"dollars|usd|bucks|in|my|range|price|budget|on|of|with|amazon|best\s*buy)\b",
+    re.IGNORECASE,
+)
+
+
+def search_phrase(text: str) -> str:
+    """The product words of a request, without budget, filler and punctuation."""
+    text = BUDGET.sub(" ", text)
+    text = re.sub(r"\$\s*\d[\d,.]*", " ", text)
+    text = FILLER.sub(" ", re.sub(r"[^\w\s'+()-]", " ", text))
+    return " ".join(text.split())[:120]
 
 
 def budget_from(text: str) -> float | None:
@@ -45,7 +68,13 @@ def budget_from(text: str) -> float | None:
 
 async def parse_request(text: str) -> ConsiderRequest | None:
     known = catalog.find_product(text)
-    product = known.name if known else await llm.extract_product(text)
+    if known:
+        product = known.name
+    elif llm.has_key():
+        product = await llm.extract_product(text)
+    else:
+        # No LLM: "Are there Sony headphones under 300 dollars?" -> "Sony headphones".
+        product = search_phrase(text) or text
     if re.fullmatch(
         r"(?:consider\s+)?(?:this|that)(?:\s+product)?[.!?]?",
         text.strip(),
@@ -70,6 +99,78 @@ def compare_reviews(main: ReviewsResponse, alt: ReviewsResponse) -> str:
     return f"Reviews compared: {line(main)} vs {line(alt)}.{verdict}"
 
 
+TRUST_SCORE = {"high": 1.0, "medium": 0.6, "low": 0.2}
+
+
+def make_picks(values: dict, max_price: float | None) -> list[Pick]:
+    """Best price, an alternative, and a recommended balance of price, rating and trust."""
+    price, alts = values.get("price"), values.get("alternatives")
+    expert = {
+        r.product.lower(): r.rating
+        for r in (values.get("reviews"), values.get("alternative_reviews"))
+        if r is not None and r.rating is not None
+    }
+
+    def in_budget(amount):
+        return amount is not None and (max_price is None or amount < max_price)
+
+    def rating_of(name, own):
+        return own if own is not None else expert.get(name.lower())
+
+    candidates = []
+    for o in price.offers if price else []:
+        if in_budget(o.price):
+            candidates.append(
+                dict(product=o.product, price=o.price, store=o.store, url=o.url,
+                     cart_url=o.cart_url, rating=rating_of(o.product, o.rating), trust=o.trust,
+                     origin="price")
+            )
+    for a in alts.alternatives if alts else []:
+        if in_budget(a.price):
+            candidates.append(
+                dict(product=a.product, price=a.price, store=a.store, url=a.url,
+                     cart_url=a.cart_url, rating=rating_of(a.product, a.rating),
+                     trust="high" if a.cart_url else "medium", origin="alternative")
+            )
+
+    picks = []
+    from_price = [c for c in candidates if c["origin"] == "price"]
+    if from_price:
+        best = min(from_price, key=lambda c: (-TRUST_SCORE[c["trust"]], c["price"]))
+        within = f" under ${max_price:.2f}" if max_price is not None else ""
+        picks.append(_pick("Best price", best, f"Lowest trusted price{within} on {best['store']}"))
+    alternative = next(iter(alts.alternatives), None) if alts else None
+    if alternative is not None:
+        picks.append(
+            Pick(label="Alternative", product=alternative.product, price=alternative.price,
+                 store=alternative.store, url=alternative.url, cart_url=alternative.cart_url,
+                 rating=rating_of(alternative.product, alternative.rating),
+                 reason=alternative.reason)
+        )
+    if candidates:
+        taken = {(p.product, p.price) for p in picks}
+        pool = [c for c in candidates if (c["product"], c["price"]) not in taken] or candidates
+        low = min(c["price"] for c in candidates)
+        high = max(c["price"] for c in candidates)
+
+        def score(c):
+            rating = (c["rating"] or 3.0) / 5
+            value = 1.0 if high == low else 1 - (c["price"] - low) / (high - low)
+            return 0.45 * rating + 0.35 * value + 0.2 * TRUST_SCORE[c["trust"]]
+
+        top = max(pool, key=score)
+        stars = f"{top['rating']}★, " if top["rating"] else ""
+        picks.append(
+            _pick("Recommended", top, f"Best balance: {stars}${top['price']:.2f}, on {top['store']}")
+        )
+    return picks
+
+
+def _pick(label: str, c: dict, reason: str) -> Pick:
+    return Pick(label=label, product=c["product"], price=c["price"], store=c["store"],
+                url=c["url"], cart_url=c["cart_url"], rating=c["rating"], reason=reason)
+
+
 async def consider(
     ctx: Context, addresses: dict[str, str], req: ConsiderRequest
 ) -> ConsiderResponse:
@@ -77,7 +178,9 @@ async def consider(
         (
             "price",
             "laai-price-compare",
-            PriceCompareRequest(product=req.product, progress_id=req.progress_id),
+            PriceCompareRequest(
+                product=req.product, progress_id=req.progress_id, max_price=req.max_price
+            ),
             PriceCompareResponse,
         ),
         (
@@ -163,6 +266,18 @@ async def consider(
     ]
     if "reviews" in values and "alternative_reviews" in values:
         sections.append(compare_reviews(values["reviews"], values["alternative_reviews"]))
+    picks = make_picks(values, req.max_price)
+    if picks:
+        sections.insert(
+            0,
+            "Picks: "
+            + "; ".join(
+                f"{p.label}: {p.product}"
+                + (f" (${p.price:.2f} on {p.store})" if p.price is not None else "")
+                for p in picks
+            )
+            + ".",
+        )
     sections.extend(f"{field}: {error}" for field, error in errors.items())
     if any(result.data_source == "demo_catalog" for result in values.values()):
         sections.insert(
@@ -174,6 +289,7 @@ async def consider(
         errors=errors,
         timings_ms=timings,
         summary="\n\n".join(sections),
+        picks=picks,
         **values,
     )
 

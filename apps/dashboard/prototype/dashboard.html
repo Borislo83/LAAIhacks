@@ -131,6 +131,18 @@ body[data-density="compact"] .agent{padding:10px}
 .msg.bot .body{flex:1;min-width:0;display:flex;flex-direction:column;gap:12px}
 .msg.bot .via{font:11px var(--mono);color:var(--muted)}
 .msg .err{font-size:14px}
+.picks{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.pick{border:1px solid var(--hair);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;background:var(--white)}
+.pick .plabel{font:500 11px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--signal)}
+.pick b{font-weight:500;font-size:14px;line-height:19px}
+.pick .pmeta{font-size:13px;color:var(--muted)}
+.pick .pprice{font-family:var(--mono);color:var(--ink)}
+.pick small{font-size:12px;color:var(--muted);line-height:17px;flex:1}
+.cartbtn,.viewbtn{display:inline-block;text-align:center;border-radius:999px;padding:7px 12px;font-size:13px;text-decoration:none}
+.cartbtn{background:var(--ink);color:var(--white)}
+.cartbtn:hover{background:var(--signal)}
+.viewbtn{border:1px solid var(--hair);color:var(--ink)}
+.viewbtn:hover{border-color:var(--ink)}
 .mini{border:1px solid var(--hair);border-radius:12px;overflow:hidden}
 .mini .hd{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--hair);font-size:13px}
 .mini .hd b{font-weight:500;flex:1}
@@ -480,6 +492,22 @@ function bubble(html,cls){
   const el=document.createElement("div"); el.className="msg "+cls; el.innerHTML=html;
   $("#thread").appendChild(el); el.scrollIntoView({block:"end",behavior:"smooth"}); return el;
 }
+// Cart buttons only for the stores' own add-to-cart links; everything else is "View".
+const CARTS=[["https://www.amazon.com/gp/aws/cart/add.html?","Add to Amazon cart"],["https://api.bestbuy.com/click/-/","Add to Best Buy cart"]];
+const storeName=s=>({"amazon.com":"Amazon","bestbuy.com":"Best Buy"})[s]||s||"store";
+function picksCard(picks){
+  if(!picks?.length)return "";
+  const tiles=picks.map(p=>{
+    const cart=CARTS.find(([prefix])=>String(p.cart_url||"").startsWith(prefix));
+    const link=/^https:\/\//.test(p.url||"")?p.url:null;
+    const action=cart
+      ?`<a class="cartbtn" href="${esc(p.cart_url)}" target="_blank" rel="noopener noreferrer">${cart[1]}</a>`
+      :link?`<a class="viewbtn" href="${esc(link)}" target="_blank" rel="noopener noreferrer">View at ${esc(storeName(p.store))} ↗</a>`:"";
+    return `<div class="pick"><span class="plabel">${esc(p.label)}</span><b>${esc(p.product)}</b>
+      <span class="pmeta">${p.price!=null?`<span class="pprice">${money(p.price)}</span>`:"price not shown"}${p.rating!=null?` · ${Number(p.rating).toFixed(1)}★`:""} · ${esc(storeName(p.store))}</span>
+      <small>${esc(p.reason||"")}</small>${action}</div>`}).join("");
+  return `<div class="picks">${tiles}</div>`;
+}
 // Also called with one card for live previews, so `all` may be missing.
 function miniCard(c,i,all=[c]){
   const a=AGENTS[c.kind];
@@ -549,7 +577,7 @@ $("#chat-form").onsubmit=async e=>{
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
     const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
-    pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
+    pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${picksCard(d.picks)}${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
     pending.querySelector(".body").append(progress.el);
   }catch(err){
     convo.pop();
