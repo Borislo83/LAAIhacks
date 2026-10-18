@@ -98,6 +98,8 @@ class ChatMessage(InputModel):
 class ChatRequest(InputModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=20)
     purchase_confirmation: str | None = Field(default=None, min_length=32, max_length=64)
+    # The glasses: a request naming YouTube, Spotify or an Amazon cart add runs on the laptop.
+    act_on_laptop: bool = False
 
 
 class BuyerPreparation(InputModel):

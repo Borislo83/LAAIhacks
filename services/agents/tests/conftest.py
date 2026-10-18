@@ -31,6 +31,8 @@ def offline_amazon_page(monkeypatch):
 
     # The cart action: dry run, and no listing unless a test supplies one.
     monkeypatch.setenv("AMAZON_CART_DRY_RUN", "1")
+    # Never the live agents on :8000: a closed port, so adds run in-process on the fakes.
+    monkeypatch.setenv("AGENTS_URL", "http://127.0.0.1:9")
     monkeypatch.setattr(cart_action, "_picks", {})
 
     async def no_listing(page, product):

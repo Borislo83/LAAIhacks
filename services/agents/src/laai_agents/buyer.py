@@ -252,6 +252,76 @@ async def confirm(req: BuyConfirmation) -> BuyResponse:
     return result
 
 
+class CartAddRequest(Model):
+    """A spoken "add <product> to my Amazon cart" from the glasses: the command is the approval."""
+
+    product: str = Field(min_length=2, max_length=200)
+    executor_token: SecretStr = SecretStr("")
+
+
+class CartAddResponse(Model):
+    product: str
+    status: str
+    summary: str
+    purchase_enabled: bool = False
+
+
+class CartListingRequest(Model):
+    """The page watcher's approved listing, added here because this process owns the cart browser."""
+
+    listing: dict
+    executor_token: SecretStr = SecretStr("")
+
+
+def _executor_ok(token: SecretStr) -> bool:
+    expected = os.getenv("AMAZON_CART_EXECUTOR_TOKEN", "")
+    return bool(expected) and secrets.compare_digest(expected, token.get_secret_value())
+
+
+async def add_approved_listing(req: CartListingRequest) -> CartAddResponse:
+    from . import cart_action
+
+    listing = req.listing
+    asin = listing.get("asin")
+    title = str(listing.get("title") or "Amazon product")[:200]
+    if not _executor_ok(req.executor_token):
+        return CartAddResponse(product=title, status="not_connected",
+                               summary="The laptop's Amazon cart isn't connected. Nothing was added.")
+    price = listing.get("price")
+    if not (isinstance(asin, str) and re.fullmatch(r"[A-Z0-9]{10}", asin)
+            and listing.get("url") == f"https://www.amazon.com/dp/{asin}"
+            and isinstance(price, (int, float)) and isinstance(listing.get("condition"), str)):
+        return CartAddResponse(product=title, status="refused", summary="Not a valid Amazon listing. Nothing was added.")
+    try:
+        summary = await cart_action.add_listing({**listing, "title": title})
+    except cart_action.CartError as exc:
+        return CartAddResponse(product=title, status="failed", summary=str(exc))
+    return CartAddResponse(product=title, status="cart_added", summary=summary)
+
+
+async def add_product(req: CartAddRequest) -> CartAddResponse:
+    """Picks the one Amazon listing for the product (cart_action.pick_listing, as the page
+    watcher does) and adds it on the laptop. Never starts checkout."""
+    from . import cart_action
+
+    if not _executor_ok(req.executor_token):
+        return CartAddResponse(
+            product=req.product, status="not_connected",
+            summary="The laptop's Amazon cart isn't connected. Nothing was added.",
+        )
+    listing = await cart_action.pick_listing({}, req.product)
+    if not listing:
+        return CartAddResponse(
+            product=req.product, status="not_found",
+            summary=f"Couldn't find {req.product} with a price on Amazon. Nothing was added.",
+        )
+    try:
+        summary = await cart_action.add_listing(listing)
+    except cart_action.CartError as exc:
+        return CartAddResponse(product=listing["title"], status="failed", summary=str(exc))
+    return CartAddResponse(product=listing["title"], status="cart_added", summary=summary)
+
+
 class CartApproval(Model):
     """Agent-to-agent cart approval; accepted only from the coordinator."""
 
@@ -308,6 +378,14 @@ def build_buyer_agent(port=None):
     @agent.on_rest_post("/buy/confirm", BuyConfirmation, BuyResponse)
     async def on_confirm(ctx, req):
         return await confirm(req)
+
+    @agent.on_rest_post("/cart/add", CartAddRequest, CartAddResponse)
+    async def on_cart_add(ctx, req):
+        return await add_product(req)
+
+    @agent.on_rest_post("/cart/add_listing", CartListingRequest, CartAddResponse)
+    async def on_cart_add_listing(ctx, req):
+        return await add_approved_listing(req)
 
     async def answer(ctx, text):
         link = re.search(r"https://[^\s]+", text)

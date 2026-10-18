@@ -248,7 +248,7 @@ class GlassesWorkflow:
         )
         if plan["handler"] == CART:
             # Only the listing journaled at proposal time, never the event or the page.
-            return await cart_action.add_listing(plan["listing"])
+            return await cart_action.add_listing_on_agents(plan["listing"])
         if plan["handler"] == "find_reviews":
             return result_message(
                 [await handlers.get_reviews(ReviewsRequest(product=request.product))]

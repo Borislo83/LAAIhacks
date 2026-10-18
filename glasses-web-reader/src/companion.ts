@@ -234,7 +234,7 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
         <div>
           <label class="lbl" for="url">Page URL</label>
           <div class="url-field">
-            <input id="url" type="url" inputmode="url" autocomplete="url" placeholder="https://example.com/article" required />
+            <input id="url" type="text" inputmode="url" autocapitalize="off" spellcheck="false" autocomplete="url" placeholder="https://example.com/article" required />
             <button class="clear" id="clear" type="button" aria-label="Clear URL" hidden>×</button>
           </div>
         </div>

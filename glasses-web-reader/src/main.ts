@@ -29,7 +29,7 @@ import { guardGlyphs } from './lensos/glyphs'
 import { ActionPopup, POPUP_TAP_GRACE_MS, popupAllowed } from './lensos/action-popup'
 import { AgentCard, askAgents, compareSpec, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
-import { routeFor } from '../shared/routes'
+import { matchRoute } from '../shared/routes'
 import { capabilityCommand, isRecommendationsCommand, STRIP_HEADING, type RecommendationBatch, type RecommendationContext, type RecommendedAction } from '../shared/recommendations'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
@@ -1390,11 +1390,22 @@ async function stopVoice(send: boolean) {
     if (!command) return void fail("Sorry, I didn't catch that.", "Couldn't make that out.")
     logHeard({ text: command, command: true })
     // Hardcoded routes ("open the AirPods page on Apple") go straight to a known page.
-    const routed = routeFor(command)
-    if (routed) {
-      voiceUi = { phase: 'done', text: command, url: routed }
-      logHeard({ text: routed, opened: true })
-      void load(routed, 0, true, true)
+    // YouTube and Spotify open on the laptop; a product page opens there and on the glasses.
+    const route = matchRoute(command)
+    if (route) {
+      voiceUi = { phase: 'done', text: command, url: route.url }
+      logHeard({ text: route.url, opened: true })
+      const laptop = backend.agents?.openOnLaptop(route.url)
+      if (route.on === 'both') {
+        laptop?.catch(console.error)
+        void load(route.url, 0, true, true)
+        return
+      }
+      const hint = quiet ? `Say "${WAKE_PHRASE}" to ask again` : VOICE_HINT
+      if (!laptop) await renderAssistant(`Pair the glasses to open ${route.name} on your laptop.`, hint)
+      else await laptop.then(() => renderAssistant(`Opened ${route.name} on your laptop.`, hint),
+        (err: unknown) => renderAssistant(`Couldn't open ${route.name} on your laptop.`, err instanceof Error ? err.message : hint))
+      fadeLater()
       return
     }
     // "Show recommendations": this page's strip again, not a chat or web search.
@@ -1832,7 +1843,14 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
     wakePhrase: WAKE_PHRASE,
     heard,
   }),
-  onLoad: url => void load(url),
+  // "open the AirPods page on Apple" typed in the box goes to its route, like by voice;
+  // "open YouTube" opens it on the laptop only.
+  onLoad: text => {
+    const route = matchRoute(text)
+    if (route) backend.agents?.openOnLaptop(route.url).catch(console.error)
+    if (route?.on === 'laptop') return
+    void load(route?.url ?? text)
+  },
   onBookmark: toggleBookmark,
   onOpenBookmark: openBookmark,
   onRemoveBookmark: removeBookmark,

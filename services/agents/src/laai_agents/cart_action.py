@@ -292,5 +292,28 @@ async def add_listing(listing: dict) -> str:
     raise CartError(f"Not added to your Amazon cart. {outcome['message']}")
 
 
+AGENTS_URL = "http://127.0.0.1:8000"
+
+
+async def add_listing_on_agents(listing: dict) -> str:
+    """add_listing in the agents process (:8000), which owns the one Amazon cart browser: a
+    second process can't open its locked profile. Falls back to this process when the agents
+    aren't running."""
+    if dry_run():
+        return await add_listing(listing)
+    url = os.getenv("AGENTS_URL", AGENTS_URL).rstrip("/") + "/cart/add_listing"
+    body = {"listing": listing, "executor_token": os.getenv("AMAZON_CART_EXECUTOR_TOKEN", "")}
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(url, json=body, timeout=aiohttp.ClientTimeout(total=150)) as response:
+                response.raise_for_status()
+                result = await response.json()
+    except aiohttp.ClientConnectionError:
+        return await add_listing(listing)
+    if result.get("status") != "cart_added":
+        raise CartError(str(result.get("summary") or "Not added to your Amazon cart."))
+    return str(result["summary"])
+
+
 class CartError(RuntimeError):
     """A cart outcome the user should read as-is (sign-in, verification, blocked)."""

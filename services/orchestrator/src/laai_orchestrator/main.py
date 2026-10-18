@@ -283,6 +283,7 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
                 request.app.state.http,
                 purchase_confirmation=body.purchase_confirmation,
                 preferences=preferences,
+                act_on_laptop=body.act_on_laptop,
             )
 
         try:
@@ -305,6 +306,7 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
                     emit,
                     body.purchase_confirmation,
                     preferences=preferences,
+                    act_on_laptop=body.act_on_laptop,
                 )
             )
         )

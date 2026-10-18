@@ -380,3 +380,24 @@ async def test_dry_run_is_on_unless_explicitly_disabled(executor, monkeypatch):
         assert cart_action.dry_run()
     monkeypatch.setenv("AMAZON_CART_DRY_RUN", "0")
     assert not cart_action.dry_run()
+
+
+async def test_the_agents_cart_endpoint_needs_the_executor_token_and_a_real_listing(monkeypatch, executor):
+    from laai_agents.buyer import CartListingRequest, add_approved_listing
+
+    monkeypatch.setenv("AMAZON_CART_DRY_RUN", "0")
+    monkeypatch.setenv("AMAZON_CART_EXECUTOR_TOKEN", "t" * 32)
+    wrong = await add_approved_listing(CartListingRequest(listing=LISTING, executor_token="nope"))
+    forged = await add_approved_listing(
+        CartListingRequest(listing={**LISTING, "url": "https://evil.example/dp/x"}, executor_token="t" * 32)
+    )
+    assert (wrong.status, forged.status) == ("not_connected", "refused")
+    assert executor.calls == []
+    added = await add_approved_listing(CartListingRequest(listing=LISTING, executor_token="t" * 32))
+    assert added.status == "cart_added" and executor.calls == [(LISTING["url"], 1)]
+
+
+async def test_without_the_agents_running_the_watcher_adds_in_process(monkeypatch, executor):
+    monkeypatch.setenv("AMAZON_CART_DRY_RUN", "0")
+    message = await cart_action.add_listing_on_agents(LISTING)
+    assert message.startswith("Added") and executor.calls == [(LISTING["url"], 1)]
