@@ -5,6 +5,10 @@ Send needs the private IMESSAGE_EXECUTOR_TOKEN and an unexpired, unused draft wh
 matches exactly; each draft is used once. Sending runs `osascript` without a shell and
 passes the handle and text as argv, so message text is never part of the script source.
 Message bodies and handles are not logged.
+
+IMESSAGE_DRY_RUN is on unless explicitly set to 0: every send step runs (token, draft,
+single use, text match, rate limit, the exact osascript argv) but the argv is recorded
+in memory instead of executed.
 """
 
 import asyncio
@@ -36,6 +40,8 @@ SEND_TIMEOUT = 15
 
 _drafts: OrderedDict[str, dict] = OrderedDict()
 _sent_at: deque[float] = deque()
+# Would-be osascript calls in dry-run mode, newest last.
+dry_run_log: deque[dict] = deque(maxlen=20)
 
 # The handle and text arrive as argv; nothing user-supplied is ever part of this source.
 SEND_SCRIPT = """on run argv
@@ -78,6 +84,30 @@ class MessageSendRequest(Model):
 class MessageSendResponse(Model):
     status: Literal["sent", "failed", "needs_permission"]
     summary: str
+    dry_run: bool = False
+
+
+class DryRunLogRequest(Model):
+    executor_token: SecretStr = SecretStr("")
+
+
+class DryRunLogResponse(Model):
+    dry_run: bool
+    calls: list[dict] = Field(default_factory=list)
+    error: str | None = None
+
+
+def dry_run() -> bool:
+    """Real sending needs an explicit IMESSAGE_DRY_RUN=0 (or false/no/off)."""
+    value = os.getenv("IMESSAGE_DRY_RUN", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def authorized(token: SecretStr) -> bool:
+    expected = os.getenv("IMESSAGE_EXECUTOR_TOKEN", "")
+    return bool(expected) and secrets.compare_digest(
+        expected.encode(), token.get_secret_value().encode()
+    )
 
 
 def contacts() -> dict[str, str]:
@@ -237,9 +267,9 @@ def osascript_argv(handle: str, text: str) -> list[str]:
     return ["osascript", "-e", SEND_SCRIPT, handle, text]
 
 
-async def run_osascript(handle: str, text: str) -> tuple[int, str]:
+async def run_osascript(argv: list[str]) -> tuple[int, str]:
     process = await asyncio.create_subprocess_exec(
-        *osascript_argv(handle, text),
+        *argv,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
@@ -258,12 +288,10 @@ def _refused(summary: str) -> MessageSendResponse:
 
 
 async def send(req: MessageSendRequest) -> MessageSendResponse:
-    expected = os.getenv("IMESSAGE_EXECUTOR_TOKEN", "")
-    if not expected or not secrets.compare_digest(
-        expected.encode(), req.executor_token.get_secret_value().encode()
-    ):
+    if not authorized(req.executor_token):
         return _refused("The iMessage sender is not configured or authorized. Nothing was sent.")
-    if sys.platform != "darwin":
+    dry = dry_run()
+    if not dry and sys.platform != "darwin":
         return _refused("iMessage sending needs macOS with the Messages app. Nothing was sent.")
     _prune()
     draft = _drafts.get(req.draft_id)
@@ -278,8 +306,26 @@ async def send(req: MessageSendRequest) -> MessageSendResponse:
     # Single use from here on: an uncertain attempt is never repeated automatically.
     draft["used"] = True
     _sent_at.append(time.monotonic())
+    argv = osascript_argv(draft["handle"], draft["text"])
+    if dry:
+        masked = mask(draft["handle"])
+        dry_run_log.append(
+            {
+                "argv": argv,
+                "recipient": draft["name"],
+                "recipient_masked": masked,
+                "text": draft["text"],
+                "at": datetime.now(UTC).isoformat(),
+            }
+        )
+        log.info("iMessage dry run: would exec osascript for draft %s to %s", req.draft_id, masked)
+        return MessageSendResponse(
+            status="sent",
+            dry_run=True,
+            summary=f"Dry run: would have sent to {draft['name']}. No message was sent.",
+        )
     try:
-        code, stderr = await run_osascript(draft["handle"], draft["text"])
+        code, stderr = await run_osascript(argv)
     except (TimeoutError, OSError):
         log.info("iMessage draft %s: osascript did not finish", req.draft_id)
         return _refused(
@@ -305,3 +351,17 @@ async def send(req: MessageSendRequest) -> MessageSendResponse:
         "Messages could not send this. Check that you are signed in to iMessage "
         "and the contact can receive iMessages."
     )
+
+
+def read_dry_run_log(req: DryRunLogRequest) -> DryRunLogResponse:
+    """Recent would-be sends, with handles masked. Dry-run mode and the token only."""
+    if not dry_run():
+        return DryRunLogResponse(dry_run=False, error="Only available in dry-run mode")
+    if not authorized(req.executor_token):
+        return DryRunLogResponse(dry_run=True, error="Not authorized")
+    calls = []
+    for call in list(dry_run_log)[-5:]:
+        argv = list(call["argv"])
+        argv[3] = call["recipient_masked"]
+        calls.append({k: v for k, v in call.items() if k != "argv"} | {"argv": argv})
+    return DryRunLogResponse(dry_run=True, calls=calls)

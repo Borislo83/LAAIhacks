@@ -159,4 +159,12 @@ def build_messenger_agent(port: int | None = None) -> Agent:
     async def on_send(ctx: Context, req):
         return await imessage.send(req)
 
+    # Dry-run debugging: REST handlers cannot see the caller's address, so this is
+    # gated by the executor token instead of loopback, and is off when sending for real.
+    @agent.on_rest_post(
+        "/imessage/dry-run-log", imessage.DryRunLogRequest, imessage.DryRunLogResponse
+    )
+    async def on_dry_run_log(ctx: Context, req):
+        return imessage.read_dry_run_log(req)
+
     return agent

@@ -19,14 +19,16 @@ def setup(monkeypatch):
         "Jordan Lee=+15552220000,Jordan Park=+15553330000,Bad=not-a-handle",
     )
     monkeypatch.setenv("IMESSAGE_EXECUTOR_TOKEN", TOKEN)
+    monkeypatch.setenv("IMESSAGE_DRY_RUN", "0")  # dry-run tests switch it back on
+    monkeypatch.setattr(imessage, "dry_run_log", imessage.deque(maxlen=20))
     monkeypatch.delenv("ASI_ONE_API_KEY", raising=False)
     monkeypatch.setattr(imessage.sys, "platform", "darwin")
     monkeypatch.setattr(imessage, "_drafts", imessage.OrderedDict())
     monkeypatch.setattr(imessage, "_sent_at", imessage.deque())
     sent = []
 
-    async def fake_osascript(handle, text):
-        sent.append(imessage.osascript_argv(handle, text))
+    async def fake_osascript(argv):
+        sent.append(argv)
         return 0, ""
 
     async def no_exec(*args, **kwargs):
@@ -159,7 +161,7 @@ async def test_real_runner_uses_exec_without_a_shell(monkeypatch):
         return Process()
 
     monkeypatch.setattr(imessage.asyncio, "create_subprocess_exec", exec_)
-    assert await _real_run_osascript("+15551234567", "$(reboot)") == (0, "")
+    assert await _real_run_osascript(imessage.osascript_argv("+15551234567", "$(reboot)")) == (0, "")
     [(args, kwargs)] = calls
     assert args == ("osascript", "-e", imessage.SEND_SCRIPT, "+15551234567", "$(reboot)")
     assert "shell" not in kwargs
@@ -177,7 +179,7 @@ async def test_non_macos_is_refused(setup, monkeypatch):
 
 
 async def test_automation_permission_error_maps_to_needs_permission(monkeypatch):
-    async def denied(handle, text):
+    async def denied(argv):
         return 1, "execution error: Not authorized to send Apple events to Messages. (-1743)"
 
     monkeypatch.setattr(imessage, "run_osascript", denied)
@@ -186,7 +188,7 @@ async def test_automation_permission_error_maps_to_needs_permission(monkeypatch)
 
 
 async def test_timeout_reports_failure(monkeypatch):
-    async def hangs(handle, text):
+    async def hangs(argv):
         raise TimeoutError
 
     monkeypatch.setattr(imessage, "run_osascript", hangs)
@@ -217,3 +219,65 @@ async def test_rest_routes(setup):
         MessageSendRequest(draft_id=result.draft_id, text="hi", executor_token=TOKEN),
     )
     assert response.status == "sent" and setup[0][3] == "sam@icloud.com"
+
+
+def test_dry_run_is_on_unless_explicitly_disabled(monkeypatch):
+    monkeypatch.delenv("IMESSAGE_DRY_RUN")
+    assert imessage.dry_run()
+    for value in ("1", "yes", "", "true"):
+        monkeypatch.setenv("IMESSAGE_DRY_RUN", value)
+        assert imessage.dry_run()
+    for value in ("0", "false", "off", "No"):
+        monkeypatch.setenv("IMESSAGE_DRY_RUN", value)
+        assert not imessage.dry_run()
+
+
+async def test_dry_run_records_the_exact_call_and_never_executes(setup, monkeypatch):
+    monkeypatch.delenv("IMESSAGE_DRY_RUN")
+    monkeypatch.setattr(imessage.sys, "platform", "linux")  # works anywhere
+    hostile = 'hi"; do shell script "rm -rf ~"'
+    result = await draft(f"text Alex {hostile}")
+    response = await send(result)
+    assert (response.status, response.dry_run) == ("sent", True)
+    assert response.summary.startswith("Dry run: would have sent to Alex")
+    assert setup == []  # neither the fake runner nor create_subprocess_exec ran
+    [call] = imessage.dry_run_log
+    assert call["argv"] == imessage.osascript_argv("+15551234567", hostile)
+    # A real send of the same draft would execute exactly this argv.
+    monkeypatch.setenv("IMESSAGE_DRY_RUN", "0")
+    monkeypatch.setattr(imessage.sys, "platform", "darwin")
+    real = await draft(f"text Alex {hostile}")
+    await send(real)
+    assert setup == [call["argv"]]
+
+
+async def test_dry_run_enforces_every_check(setup, monkeypatch):
+    monkeypatch.setenv("IMESSAGE_DRY_RUN", "1")
+    result = await draft()
+    assert (await send(result, token="wrong")).status == "failed"
+    assert (await send(result, text="changed")).status == "failed"
+    assert (await send(result)).dry_run
+    reused = await send(result)
+    assert reused.status == "failed" and "already used" in reused.summary
+    monkeypatch.setattr(imessage, "RATE_LIMIT", 1)
+    assert "Too many" in (await send(await draft())).summary
+    stale = await draft()
+    clock = imessage.time.monotonic() + imessage.DRAFT_SECONDS + 1
+    monkeypatch.setattr(imessage.time, "monotonic", lambda: clock)
+    assert "expired" in (await send(stale)).summary
+    assert len(imessage.dry_run_log) == 1 and setup == []
+
+
+async def test_dry_run_log_route_masks_handles_and_needs_the_token(setup, monkeypatch):
+    monkeypatch.setenv("IMESSAGE_DRY_RUN", "1")
+    await send(await draft("text Alex see you at 7"))
+    route = build_messenger_agent()._rest_handlers[("POST", "/imessage/dry-run-log")]
+    denied = await route(None, imessage.DryRunLogRequest(executor_token="wrong"))
+    assert denied.error and not denied.calls
+    log = await route(None, imessage.DryRunLogRequest(executor_token=TOKEN))
+    [call] = log.calls
+    assert call["argv"][3] == "+1•••••4567" and call["text"] == "see you at 7"
+    assert "5551234567" not in log.json()
+    monkeypatch.setenv("IMESSAGE_DRY_RUN", "0")
+    off = await route(None, imessage.DryRunLogRequest(executor_token=TOKEN))
+    assert off.error and not off.calls
