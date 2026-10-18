@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
@@ -35,6 +36,11 @@ from .preferences import router as preferences_router
 from .progress import event_stream
 from .store import Store
 from .workflow import install_workflow
+
+# POST /v1/chat answers within this many seconds, before the glasses gateway (90 s,
+# glasses-web-reader/server/orchestrator.ts) and the lens client (95 s) give up, so a slow
+# chat ends as an honest 504 here rather than a gateway timeout that looks like "no agent".
+CHAT_DEADLINE = 80
 
 bearer = HTTPBearer(auto_error=False)
 AUTH_CACHE_SECONDS = 30
@@ -268,14 +274,22 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
     ):
         if body.messages[-1].role != "user":
             raise HTTPException(422, "Last message must be from the user")
-        preferences = await read_preferences(request, user) if user else None
-        return await chat(
-            body.messages,
-            config,
-            request.app.state.http,
-            purchase_confirmation=body.purchase_confirmation,
-            preferences=preferences,
-        )
+
+        async def answer():
+            preferences = await read_preferences(request, user) if user else None
+            return await chat(
+                body.messages,
+                config,
+                request.app.state.http,
+                purchase_confirmation=body.purchase_confirmation,
+                preferences=preferences,
+            )
+
+        try:
+            return await asyncio.wait_for(answer(), CHAT_DEADLINE)
+        except TimeoutError:
+            # An action may already have run, so the caller must not retry or search.
+            raise HTTPException(504, "No answer yet. Check the laptop.") from None
 
     @app.post("/v1/chat/stream", response_class=StreamingResponse)
     async def stream_chat(body: ChatRequest, request: Request, user: User):

@@ -1,5 +1,9 @@
 """Spotify on the laptop: play a song, artist, album or playlist, and control playback.
 
+Only POST /spotify reaches this, and only with SPOTIFY_EXECUTOR_TOKEN, a private token
+shared with the orchestrator (never with the browser, glasses or other agents). Unset or
+empty refuses every request. The agent has no chat or agent-message protocol.
+
 Drives the Spotify desktop app on this Mac through AppleScript (`osascript`, run without a
 shell), so it works on a free account and needs no API keys. Spotify IDs come from keyless
 web search restricted to open.spotify.com; only the ID is used, no result page is fetched.
@@ -8,8 +12,12 @@ Automation).
 """
 
 import asyncio
+import os
 import re
+import secrets
 import sys
+
+from pydantic.v1 import SecretStr
 
 from .models import SpotifyRequest, SpotifyResponse
 from .search import SearchUnavailable, search
@@ -36,9 +44,20 @@ CONTROLS = [
     ("next", re.compile(r"^(?:next|skip)(?:\s+(?:this\s+|the\s+)?(?:song|track|one))?$")),
     ("previous", re.compile(r"^(?:previous|prev|back|go\s+back)(?:\s+(?:song|track|one))?$|^last\s+(?:song|track)$")),
 ]
-VOLUME = re.compile(r"\bvolume\b\D*(\d{1,3})\s*%?|\b(\d{1,3})\s*%?\s+volume\b")
-LOUDER = re.compile(r"\b(?:turn\s+(?:it\s+)?up|louder|volume\s+up)\b")
-QUIETER = re.compile(r"\b(?:turn\s+(?:it\s+)?down|quieter|softer|volume\s+down)\b")
+# Volume commands must be the whole message, so "play Kidz Bop volume 3" is a play and
+# "turn down for what" is a song.
+VOLUME = re.compile(
+    r"(?:(?:set|change|put)\s+)?(?:the\s+)?volume\s+(?:to\s+|at\s+)?(\d{1,3})\s*%?"
+    r"|(?:set\s+(?:the\s+)?volume\s+)?(\d{1,3})\s*%?\s+volume"
+)
+LOUDER = re.compile(
+    r"(?:(?:a\s+)?(?:bit|little)\s+)?(?:turn\s+(?:it|this|the\s+(?:music|volume|song))\s+up"
+    r"|turn\s+up\s+(?:the\s+)?(?:music|volume|song)|louder|volume\s+up|(?:raise|increase)\s+(?:the\s+)?volume)"
+)
+QUIETER = re.compile(
+    r"(?:(?:a\s+)?(?:bit|little)\s+)?(?:turn\s+(?:it|this|the\s+(?:music|volume|song))\s+down"
+    r"|turn\s+down\s+(?:the\s+)?(?:music|volume|song)|quieter|softer|volume\s+down|(?:lower|decrease)\s+(?:the\s+)?volume)"
+)
 VOLUME_STEP = 15
 LEADING = re.compile(
     r"^(?:(?:hey|ok|okay|please|pls|can you|could you|would you)\b[\s,]*)*"
@@ -56,12 +75,12 @@ def parse(text: str) -> SpotifyRequest:
     clean = " ".join(text.lower().split()).strip(" ?.!")
     clean = re.sub(r"\s+(?:on|in)\s+spotify$|\s+please$|^(?:please|pls)\s+", "", clean)
     for action, pattern in CONTROLS:
-        if pattern.match(clean):
+        if pattern.fullmatch(clean):
             return SpotifyRequest(action=action, query=text[:300])
-    if match := VOLUME.search(clean):
+    if match := VOLUME.fullmatch(clean):
         return SpotifyRequest(action="volume", volume=min(int(match[1] or match[2]), 100), query=text[:300])
-    if LOUDER.search(clean) or QUIETER.search(clean):
-        step = VOLUME_STEP if LOUDER.search(clean) else -VOLUME_STEP
+    if LOUDER.fullmatch(clean) or QUIETER.fullmatch(clean):
+        step = VOLUME_STEP if LOUDER.fullmatch(clean) else -VOLUME_STEP
         return SpotifyRequest(action="volume", volume_change=step, query=text[:300])
     return SpotifyRequest(action="play", **play_target(text))
 
@@ -205,6 +224,30 @@ async def find(query: str, kind: str) -> tuple[str, str, str]:
 
 
 # --- Handler -------------------------------------------------------------------------
+
+class SpotifyControlRequest(SpotifyRequest):
+    """POST /spotify: a SpotifyRequest plus the orchestrator's executor token."""
+
+    executor_token: SecretStr = SecretStr("")
+
+
+def authorized(token: SecretStr) -> bool:
+    expected = os.getenv("SPOTIFY_EXECUTOR_TOKEN", "")
+    return bool(expected) and secrets.compare_digest(
+        expected.encode(), token.get_secret_value().encode()
+    )
+
+
+async def control_authorized(req: SpotifyControlRequest) -> SpotifyResponse:
+    """The REST entry point: refuses unless the executor token matches."""
+    if not os.getenv("SPOTIFY_EXECUTOR_TOKEN", ""):
+        message = "Spotify control on the laptop isn't set up (SPOTIFY_EXECUTOR_TOKEN is empty)."
+        return SpotifyResponse(action=req.action, summary=message, error=message)
+    if not authorized(req.executor_token):
+        message = "Not authorized to control Spotify on the laptop."
+        return SpotifyResponse(action=req.action, summary=message, error=message)
+    return await control(SpotifyRequest(**req.dict(exclude={"executor_token"})))
+
 
 async def control(req: SpotifyRequest) -> SpotifyResponse:
     reply = SpotifyResponse(action=req.action, query=req.query, device=DEVICE, summary="")

@@ -21,6 +21,8 @@ class Config(BaseSettings):
     imessage_executor_token: SecretStr = SecretStr("")
     # Opens a YouTube video in the laptop's browser for "play X". Empty: link only.
     laptop_executor_token: SecretStr = SecretStr("")
+    # Controls Spotify on the laptop. Empty: Spotify requests are refused. Never sent to clients.
+    spotify_executor_token: SecretStr = SecretStr("")
     # Local development only. Accepts the fixture tokens in DEMO_TOKENS from loopback clients
     # and maps them to DEMO_USER_ID, which must be an existing Supabase Auth user.
     demo_auth_mode: bool = False

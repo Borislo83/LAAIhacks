@@ -2,7 +2,7 @@
 
 ![tag:spotify](https://img.shields.io/badge/spotify-3D8BD3) ![tag:music](https://img.shields.io/badge/music-3D8BD3)
 
-Plays music in the Spotify app on the owner's Mac: a song, an artist, an album or a playlist. It also pauses, resumes, skips, goes back and sets the volume. It controls only that one laptop.
+Plays music in the Spotify app on the owner's Mac: a song, an artist, an album or a playlist. It also pauses, resumes, skips, goes back and sets the volume. It controls only that one laptop, and only for its owner: requests come from the owner's Focal orchestrator with a private token. It doesn't take chat or agent messages.
 
 ## Try it
 - "Play Blinding Lights"

@@ -23,7 +23,7 @@ def build_all():
     from .coordinator import build_coordinator
     from .main import BUILDERS
 
-    agents = [build() for build in BUILDERS.values()]
+    agents = [agent for build in BUILDERS.values() if (agent := build()) is not None]
     agents.append(build_coordinator({a.name: a.address for a in agents}))
     return agents
 

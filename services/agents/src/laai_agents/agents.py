@@ -22,7 +22,6 @@ from .models import (
     PriceCompareResponse,
     ReviewsRequest,
     ReviewsResponse,
-    SpotifyRequest,
     SpotifyResponse,
     YouTubeRequest,
     YouTubeResponse,
@@ -33,7 +32,6 @@ PRICE_SEED = os.getenv("PRICE_AGENT_SEED", "laai price compare agent dev seed")
 ALTERNATIVES_SEED = os.getenv("ALTERNATIVES_AGENT_SEED", "laai alternatives agent dev seed")
 REVIEWS_SEED = os.getenv("REVIEWS_AGENT_SEED", "laai reviews agent dev seed")
 YOUTUBE_SEED = os.getenv("YOUTUBE_AGENT_SEED", "laai youtube agent dev seed")
-SPOTIFY_SEED = os.getenv("SPOTIFY_AGENT_SEED", "laai spotify agent dev seed")
 MESSENGER_SEED = os.getenv("MESSENGER_AGENT_SEED", "laai messenger agent dev seed")
 COORDINATOR_SEED = os.getenv("COORDINATOR_AGENT_SEED", "laai coordinator dev seed")
 
@@ -59,7 +57,7 @@ DESCRIPTIONS = {
     "focal-amazon-buyer-demo": "Finds the Amazon listing and adds it to your cart only after you approve. Checkout is disabled.",
     "laai-messenger": "Drafts an iMessage to an allowlisted friend and sends it only after you approve.",
     "laai-youtube": "Finds a YouTube link for a song or video you ask for.",
-    "laai-spotify": "Plays a song, artist, album or playlist on the laptop's Spotify app, and pauses, skips or changes the volume.",
+    "laai-spotify": "Plays a song, artist, album or playlist on its owner's laptop Spotify app, and pauses, skips or changes the volume. Owner-only: it takes requests from the owner's Focal orchestrator, not from chat.",
     "laai-news": "Short, sourced summary of the latest news on any topic.",
     "laai-amazon-cart": "Turns an Amazon product ID (ASIN) into Amazon's official add-to-cart link. You open it; nothing is bought.",
     "laai-bestbuy-cart": "Turns a Best Buy SKU into Best Buy's official add-to-cart link. You open it; nothing is bought.",
@@ -209,19 +207,45 @@ def build_youtube_agent(port: int | None = None) -> Agent:
     return agent
 
 
-def build_spotify_agent(port: int | None = None) -> Agent:
+DEFAULT_SPOTIFY_SEED = "laai spotify agent dev seed"
+
+
+def spotify_seed_refused() -> bool:
+    """The public default seed must not be put on Agentverse: anyone could derive its key."""
+    return (
+        os.getenv("AGENTVERSE_MAILBOX") == "1"
+        and os.getenv("SPOTIFY_AGENT_SEED", DEFAULT_SPOTIFY_SEED) == DEFAULT_SPOTIFY_SEED
+    )
+
+
+def build_spotify_agent(port: int | None = None) -> Agent | None:
+    """REST only, gated by SPOTIFY_EXECUTOR_TOKEN (shared with the orchestrator).
+
+    No typed or chat protocol: agent messages and ASI:One chat can't reach the laptop's
+    Spotify. Returns None (and logs why) when AGENTVERSE_MAILBOX=1 with the public
+    default seed, so the caller skips the agent.
+
+    uagents binds its REST server to 0.0.0.0 (a module constant in uagents.asgi, with no
+    config option), so /spotify is reachable from the local network; the token is what
+    keeps it closed.
+    """
+    import logging
+
     from . import spotify
 
-    return build_specialist(
-        "laai-spotify",
-        SPOTIFY_SEED,
-        "/spotify",
-        SpotifyRequest,
-        SpotifyResponse,
-        spotify.control,
-        port,
-        chat_request=spotify.parse,
-    )
+    if spotify_seed_refused():
+        logging.getLogger(__name__).warning(
+            "laai-spotify not started: AGENTVERSE_MAILBOX=1 with the public default "
+            "SPOTIFY_AGENT_SEED. Set a private SPOTIFY_AGENT_SEED in services/agents/.env."
+        )
+        return None
+    agent = make_agent("laai-spotify", os.getenv("SPOTIFY_AGENT_SEED", DEFAULT_SPOTIFY_SEED), port)
+
+    @agent.on_rest_post("/spotify", spotify.SpotifyControlRequest, SpotifyResponse)
+    async def on_rest(ctx: Context, req):
+        return await spotify.control_authorized(req)
+
+    return agent
 
 
 def build_news_agent(port: int | None = None) -> Agent:

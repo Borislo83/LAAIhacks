@@ -362,6 +362,16 @@ async def call_agent(
 ) -> AgentCall:
     payload = args.model_dump(include=set(FIELDS[kind]))
     started = time.perf_counter()
+    body, route_emit = payload, emit
+    if kind == AgentKind.SPOTIFY:
+        token = config.spotify_executor_token.get_secret_value()
+        if not token:
+            error = "Spotify control on the laptop isn't set up (SPOTIFY_EXECUTOR_TOKEN is empty)."
+            result = {**safe_spotify({"action": payload.get("action"), "summary": error}), "error": error}
+            return AgentCall(kind=kind, payload=payload, result=result, error=error, ms=0)
+        # The token goes only in the request body, never in the recorded payload, and
+        # without a progress_id, like /youtube/open.
+        body, route_emit = {**payload, "executor_token": token}, None
     if emit:
         emit(
             {
@@ -386,7 +396,7 @@ async def call_agent(
             await asyncio.sleep(RETRY_DELAY * attempt)
         try:
             # Only an enum can select a route. No URL from chat/LLM data is fetched.
-            response = await agent_request(kind.value, payload, config, http, emit, timeout=90)
+            response = await agent_request(kind.value, body, config, http, route_emit, timeout=90)
             response.raise_for_status()
             answer = response.json()
             if not isinstance(answer, dict) or not isinstance(answer.get("summary"), str):
@@ -422,13 +432,20 @@ async def call_agent(
 
 
 # "play/watch X" opens the video on the laptop; "send me a link to X" only returns it.
-PLAY_WORDS = r"\b(?:play|watch|put on|listen to|start)\b"
+# The verb must start the request, so "Is the Apple Watch worth it? find a youtube review"
+# and "how to start a car youtube" only find a video. "Watch band"/"watch face" are products.
+PLAY_WORDS = (
+    r"^(?:(?:hey|ok|okay|please|pls|can\s+you|could\s+you|would\s+you)\b[\s,]*)*"
+    r"(?:play|put\s+on|listen\s+to|"
+    r"watch(?!\s+(?:bands?|faces?|straps?|series|ultra|se|chargers?|cases?)\b))\b"
+)
 LINK_WORDS = r"\b(?:links?|urls?|send me|share)\b"
 
 
 def wants_playback(text: str) -> bool:
     return bool(
-        re.search(PLAY_WORDS, text, re.IGNORECASE) and not re.search(LINK_WORDS, text, re.IGNORECASE)
+        re.search(PLAY_WORDS, text.strip(), re.IGNORECASE)
+        and not re.search(LINK_WORDS, text, re.IGNORECASE)
     )
 
 
@@ -557,16 +574,24 @@ def grounded_spotify(args: SpotifyArgs, user_text: str) -> SpotifyArgs:
 
 
 def laptop_honest(reply: str, calls: list[AgentCall]) -> str:
-    """The reply says a video plays on the laptop exactly when it was opened there."""
+    """The reply says something happened on the laptop only when it did.
+
+    A video that wasn't opened, or a Spotify call that failed, gets the deterministic
+    lines instead of the model's wording, which can paraphrase its way past any keyword
+    check ("Bad Guy is now opening on your MacBook - enjoy!").
+    """
+    def failed(call: AgentCall) -> bool:
+        if call.kind == AgentKind.SPOTIFY:
+            return bool(call.error)
+        laptop = (call.result or {}).get("laptop") if call.kind == AgentKind.YOUTUBE else None
+        return bool(laptop) and laptop["status"] != "opened"
+
+    if any(failed(call) for call in calls):
+        return " ".join(_line(c) if c.result else (c.error or "") for c in calls).strip()
     for call in calls:
         laptop = (call.result or {}).get("laptop") if call.kind == AgentKind.YOUTUBE else None
-        if not laptop:
-            continue
-        opened = laptop["status"] == "opened"
-        if opened and "on your laptop" not in reply.lower():
+        if laptop and "on your laptop" not in reply.lower():
             return _line(call) + (" " + reply if reply else "")
-        if not opened and re.search(r"\bplaying\b|\bon your laptop\b", reply, re.IGNORECASE):
-            return _line(call)
     return reply
 
 

@@ -58,6 +58,15 @@ test('gateway forwards voice chat and confirmed message sends, and nothing else 
   assert.equal((await app.request('/api/backend/v1/messages/send', { method: 'POST', headers: { Authorization: 'Bearer demo-all' }, body: '{}' })).status, 401)
 })
 
+test('gateway answers 504 when the orchestrator times out and 502 when it is unreachable', async () => {
+  const gateway = (error: Error) => new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001',
+    transport: async () => { throw error } }))
+  const chat = (app: Hono) => app.request('/api/backend/v1/chat', { method: 'POST',
+    headers: { Authorization: 'Bearer user-token', 'Content-Type': 'application/json' }, body: '{}' })
+  assert.equal((await chat(gateway(new DOMException('slow', 'TimeoutError')))).status, 504)
+  assert.equal((await chat(gateway(new TypeError('fetch failed')))).status, 502)
+})
+
 test('gateway rejects insecure remote upstreams and public demo tokens', async () => {
   assert.throws(() => orchestratorGateway({ base: 'http://remote.example' }), /HTTPS/)
   const app = new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001' }))

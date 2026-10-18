@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { BackendClient } from '../src/lensos/client'
-import { AgentCard, CARD_LINES, askAgents, answerFor, paginate, sendDraft, type AgentAnswer } from '../src/lensos/agents'
+import { AgentCard, CARD_LINES, DRAFT_TAP_GRACE_MS, NO_ANSWER, askAgents, answerFor, paginate, sendDraft, type AgentAnswer } from '../src/lensos/agents'
 import type { AgentCall, ChatReply } from '../src/lensos/types'
 
 const call = (kind: string, result: Record<string, unknown> | null, error: string | null = null): AgentCall =>
@@ -43,8 +43,37 @@ test('no agent, signed out, chat errors and failed agents all fall back to web s
   assert.equal(answerFor(reply([call('news', null, 'Agent unavailable')])), null)
 })
 
+test('a chat that timed out or failed upstream says so instead of searching the web', async () => {
+  for (const status of [500, 503, 504, 408]) {
+    const answer = await askAgents(harness(() => Response.json({ detail: 'No answer yet.' }, { status })).client, 'play bad guy')
+    assert.equal(lens(answer), `Focal\n${NO_ANSWER}`, String(status))
+  }
+  // The client's own timer gave up after the request went out.
+  const timedOut = await askAgents(harness(() => { throw new DOMException('aborted', 'AbortError') }).client, 'play bad guy')
+  assert.equal(lens(timedOut), `Focal\n${NO_ANSWER}`)
+  // The caller's own abort (a newer voice command) still throws.
+  const controller = new AbortController(); controller.abort()
+  const aborting = harness(req => { if (req.signal.aborted) throw new DOMException('aborted', 'AbortError'); return Response.json(reply([news])) })
+  await assert.rejects(askAgents(aborting.client, 'news', controller.signal))
+})
+
+test('Spotify and laptop errors are the answer, never a web search', () => {
+  const failed = answerFor(reply([call('spotify', { summary: "Spotify isn't open on the laptop.", error: "Spotify isn't open on the laptop." }, "Spotify isn't open on the laptop.")]))
+  assert.equal(lens(failed), "Spotify\nSpotify isn't open on the laptop.")
+  assert.equal(lens(answerFor(reply([call('spotify', null, 'Agent unavailable or returned an invalid response')]))),
+    'Spotify\nAgent unavailable or returned an invalid response')
+  // safe_laptop's shape: result.laptop = {status, summary}.
+  const notOpened = answerFor(reply([call('youtube', { title: 'Bad Guy', url: 'https://www.youtube.com/watch?v=DyDfgMOUjCI', summary: 's',
+    laptop: { status: 'failed', summary: "Couldn't open the browser on the laptop." } }, 'Agent error')]))
+  assert.match(lens(notOpened), /Bad Guy\nhttps:\/\/www\.youtube\.com\/watch\?v=DyDfgMOUjCI\nNot opened on your laptop: Couldn't open the browser/)
+  assert.doesNotMatch(lens(notOpened), /Playing/)
+})
+
 test('YouTube, Spotify and shopping replies fit the lens', () => {
-  assert.match(lens(answerFor(reply([call('youtube', { title: 'Blinding Lights', url: 'https://youtu.be/4NRXx6U8ABQ', summary: 's', opened: true })]))), /Playing Blinding Lights/)
+  assert.match(lens(answerFor(reply([call('youtube', { title: 'Blinding Lights', url: 'https://www.youtube.com/watch?v=4NRXx6U8ABQ', summary: 's',
+    laptop: { status: 'opened', summary: 'Opened the video on the laptop.' } })]))), /Playing Blinding Lights on your laptop/)
+  // Old field names the orchestrator never sends don't count as playing.
+  assert.doesNotMatch(lens(answerFor(reply([call('youtube', { title: 'Blinding Lights', url: 'https://youtu.be/4NRXx6U8ABQ', summary: 's', opened: true })]))), /Playing/)
   assert.match(lens(answerFor(reply([call('youtube', { title: 'Blinding Lights', url: 'https://youtu.be/4NRXx6U8ABQ', summary: 's' })]))), /youtu\.be\/4NRXx6U8ABQ/)
   assert.equal(lens(answerFor(reply([call('spotify', { summary: 'Playing Levitating on MacBook.' })]))), 'Spotify\nPlaying Levitating on MacBook.')
   const shop = answerFor(reply([call('price', { summary: 'p' }), call('reviews', { summary: 'r' })], { reply: 'Best price $199 at Best Buy.', product: 'AirPods Pro', source: 'coordinator' }))
@@ -64,9 +93,14 @@ test('a message draft waits for a tap on its last page and sends exactly the dra
   const answer = answerFor(reply([draftCall]))!
   assert.equal(answer.kind, 'draft')
   assert.match(lens(answer), /Send to J•••\?\n"Running ten minutes late"/)
-  const card = new AgentCard(answer, true)
+  let now = 1000
+  const card = new AgentCard(answer, true, () => now)
   assert.equal(card.fades, false)
   assert.equal(card.footer(), 'Tap: send   Swipe: cancel')
+  // A tap right as the draft appears was meant for the screen before it.
+  assert.equal(card.gesture('tap'), 'none')
+  assert.equal(card.sending, false)
+  now += DRAFT_TAP_GRACE_MS
   assert.equal(card.gesture('tap'), 'send')
   assert.equal(card.gesture('tap'), 'none')
   assert.equal(card.footer(), 'Sending...')
@@ -76,7 +110,9 @@ test('a message draft waits for a tap on its last page and sends exactly the dra
   assert.deepEqual(await requests[0].json(), { draft_id: 'draft-1', text: 'Running ten minutes late' })
   // A long draft is read page by page before the send tap.
   const long = answerFor(reply([call('message', { ...draftCall.result, text: 'long words '.repeat(80) })]))!
-  const paged = new AgentCard(long, false)
+  let later = 0
+  const paged = new AgentCard(long, false, () => later)
+  later = DRAFT_TAP_GRACE_MS
   assert.ok(long.pages.length > 1)
   assert.equal(paged.gesture('tap'), 'render')
   assert.match(paged.footer(), /^2\/\d+   /)

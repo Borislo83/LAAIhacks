@@ -159,9 +159,10 @@ the agents. It works in two steps, like the Amazon cart agent:
    `{"draft_id":"…","text":"<the exact draft text>","executor_token":"…"}`.
 
 Recipients come only from `IMESSAGE_CONTACTS`, for example
-`Alex=+15551234567,Sam=sam@icloud.com`. Names match case-insensitively. A name that
-matches more than one contact returns `ambiguous` with the candidates, and an unknown
-name returns `unknown_contact`; neither creates a draft.
+`Alex=+15551234567,Sam=sam@icloud.com,Legend Yang=+15551234567`. Names match
+case-insensitively, and a first name alone finds a multi-word contact ("text Legend hi"
+drafts to Legend Yang). A name that matches more than one contact returns `ambiguous`
+with the candidates, and an unknown name returns `unknown_contact`; neither creates a draft.
 
 Sending requires `IMESSAGE_EXECUTOR_TOKEN` (compared in constant time; set it in the
 agents and orchestrator `.env` files and never send it to the browser), an unexpired
@@ -172,8 +173,11 @@ at most 10 are sent per minute. Sending only works on macOS.
 The agent runs `osascript` directly (no shell) with a 15-second timeout. The script is
 fixed; the handle and the message are passed as arguments, never written into the script.
 The first send asks macOS for permission to control Messages. If it was denied, the result
-is `needs_permission`: allow it under System Settings > Privacy & Security > Automation.
-Results are `sent`, `failed` or `needs_permission`. Message text and phone numbers are not
+is `needs_permission` (AppleScript errors -1743 and -1744): allow it under System
+Settings > Privacy & Security > Automation. Other Messages errors return `failed` with a
+hint for the error code (-1728 contact not on iMessage, -600 Messages not running, -10000
+iMessage not signed in) and Messages' own error text, with the handle masked and the
+message body removed. Results are `sent`, `failed` or `needs_permission`. Message text and phone numbers are not
 written to info-level logs.
 
 **Dry run is the default.** Unless `IMESSAGE_DRY_RUN=0` is set explicitly, `/imessage/send`

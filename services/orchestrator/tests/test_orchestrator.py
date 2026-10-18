@@ -937,3 +937,23 @@ async def test_shopping_asks_are_not_messages(text):
     from laai_orchestrator.chat import _is_message_request
 
     assert not _is_message_request(text)
+
+
+def test_slow_chat_answers_504_before_the_gateway_gives_up(monkeypatch):
+    import asyncio
+
+    from laai_orchestrator import main
+
+    # The gateway waits 90 s and the lens 95 s; the orchestrator must answer first.
+    assert main.CHAT_DEADLINE < 90
+    monkeypatch.setattr(main, "CHAT_DEADLINE", 0.05)
+
+    async def slow(request):
+        await asyncio.sleep(2)
+        return httpx.Response(200, json={"summary": "late"})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(slow))
+    with TestClient(create_app(config(chat_auth_required=False), http)) as client:
+        response = client.post("/v1/chat", json={"messages": [{"role": "user", "content": "AirPods Pro price"}]})
+    assert response.status_code == 504
+    assert "Check the laptop" in response.json()["detail"]

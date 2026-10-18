@@ -1,10 +1,13 @@
 import { getTextWidth, measureTextWrap, pxTruncate } from '@evenrealities/pretext'
+import { POPUP_TAP_GRACE_MS } from './action-popup'
 import { BackendError, type BackendClient } from './client'
 import type { AgentCall, ChatReply, MessageSent } from './types'
 
 // Voice commands for the Focal agents: the orchestrator's POST /v1/chat picks the
 // agent (news, YouTube, Spotify, shopping, Messenger). Its reply becomes pages of
-// lens text; anything chat can't route falls back to web search in main.ts.
+// lens text; anything chat can't route falls back to web search in main.ts. A laptop
+// action (Spotify, or a video asked to play) is never replaced by a search, and neither is
+// a chat that may have run but didn't answer in time.
 
 /** Text width inside the reader body (576 minus its 4px padding). */
 export const CARD_W = 568
@@ -68,11 +71,20 @@ function newsText(r: Record<string, unknown>) {
 
 function youtubeText(r: Record<string, unknown>) {
   const title = str(r.title)
-  // The laptop opens the video when the agent says so; otherwise the link is the answer.
-  const opened = r.opened === true || r.played === true || r.playing === true
-  if (opened && title) return { title: 'YouTube', body: `Playing ${title}${str(r.channel) ? `\n${str(r.channel)}` : ''}` }
-  return { title: 'YouTube', body: [title, str(r.channel), str(r.url)].filter(Boolean).join('\n') || str(r.summary) }
+  // The orchestrator adds result.laptop {status, summary} when it was asked to play the
+  // video; only status "opened" means it plays. Otherwise the link is the answer.
+  const laptop = r.laptop && typeof r.laptop === 'object' ? r.laptop as Record<string, unknown> : null
+  if (laptop?.status === 'opened') return { title: 'YouTube', body: `Playing ${title || 'the video'} on your laptop${str(r.channel) ? `\n${str(r.channel)}` : ''}` }
+  const found = [title, str(r.channel), str(r.url)].filter(Boolean).join('\n') || str(r.summary)
+  if (laptop) return { title: 'YouTube', body: [found, `Not opened on your laptop: ${str(laptop.summary) || 'it did not open.'}`].filter(Boolean).join('\n') }
+  return { title: 'YouTube', body: found }
 }
+
+/** A call that may have changed something on the laptop: it is always shown, error or not. */
+const laptopCall = (c: AgentCall) => c.kind === 'spotify' || (c.kind === 'youtube' && !!c.result?.laptop)
+
+/** Shown when chat may still be running (or ran) an action but didn't answer in time. */
+export const NO_ANSWER = 'No answer yet. Check the laptop.'
 
 const SHOPPING = new Set(['price', 'alternatives', 'reviews', 'buyer'])
 
@@ -95,22 +107,26 @@ function messageAnswer(call: AgentCall): AgentAnswer {
 export function answerFor(reply: ChatReply): AgentAnswer | null {
   const message = reply.calls.find(c => c.kind === 'message')
   if (message) return messageAnswer(message)
-  const done = reply.calls.filter(c => c.result && !c.error)
+  // A Spotify or laptop error is the answer: a web search would hide what happened.
+  const done = reply.calls.filter(c => (c.result && !c.error) || laptopCall(c))
   if (!done.length) return null
   if (done.some(c => SHOPPING.has(c.kind))) {
     const title = str(reply.product) || 'Shopping'
-    return { kind: 'answer', title, pages: paginate(title, str(reply.reply) || done.map(c => str(c.result!.summary)).join('\n\n')) }
+    return { kind: 'answer', title, pages: paginate(title, str(reply.reply) || done.map(c => str(c.result?.summary)).join('\n\n')) }
   }
   const parts = done.map(c => c.kind === 'news' ? newsText(c.result!)
     : c.kind === 'youtube' ? youtubeText(c.result!)
-    : { title: c.kind === 'spotify' ? 'Spotify' : c.kind[0].toUpperCase() + c.kind.slice(1), body: str(c.result!.summary) })
+    : c.kind === 'spotify' ? { title: 'Spotify', body: str(c.result?.summary) || str(c.error) || "Spotify didn't answer." }
+    : { title: c.kind[0].toUpperCase() + c.kind.slice(1), body: str(c.result!.summary) })
   const title = parts[0].title
   return { kind: 'answer', title, pages: paginate(title, parts.map(p => p === parts[0] ? p.body : `${p.title}\n${p.body}`).join('\n\n')) }
 }
 
 /**
- * Sends one voice command to chat when signed in. Signed out, no agent, or any
- * gateway/chat failure returns null: the caller searches the web instead.
+ * Sends one voice command to chat when signed in. Signed out, no agent, or a failure
+ * before chat could run (network, 502 from the gateway, 4xx) returns null: the caller
+ * searches the web instead. A timeout or another 5xx means chat may have acted, so the
+ * lens says so instead of searching.
  */
 export async function askAgents(client: BackendClient | undefined, command: string, signal?: AbortSignal): Promise<AgentAnswer | null> {
   if (!client) return null
@@ -120,6 +136,11 @@ export async function askAgents(client: BackendClient | undefined, command: stri
     return answerFor(reply)
   } catch (e) {
     if (signal?.aborted) throw e
+    const timedOut = (e as Error)?.name === 'AbortError' || (e as Error)?.name === 'TimeoutError'
+    const status = e instanceof BackendError ? e.status : 0
+    if (timedOut || status === 408 || (status >= 500 && status !== 502)) {
+      return { kind: 'answer', title: 'Focal', pages: paginate('Focal', NO_ANSWER) }
+    }
     return null
   }
 }
@@ -149,11 +170,17 @@ export type CardGesture = 'tap' | 'up' | 'down' | 'back'
 /** What a gesture on the card asks main.ts to do. Only 'send' sends, and only from a tap. */
 export type CardStep = 'render' | 'close' | 'send' | 'cancel' | 'none'
 
+/** A tap this soon after a draft appears was meant for what was on screen before it. */
+export const DRAFT_TAP_GRACE_MS = POPUP_TAP_GRACE_MS
+
 /** An answer or draft on the lens: which page shows, its footer, and what each gesture does. */
 export class AgentCard {
   page = 0
   sending = false
-  constructor(readonly answer: AgentAnswer, readonly quiet: boolean) {}
+  private readonly shownAt: number
+  constructor(readonly answer: AgentAnswer, readonly quiet: boolean, private readonly now: () => number = Date.now) {
+    this.shownAt = now()
+  }
   /** Hands-free answers fade back to the page; a draft never does, it waits for a tap. */
   get fades() { return this.quiet && this.answer.kind !== 'draft' }
   get text() { return this.answer.pages[this.page] }
@@ -169,6 +196,7 @@ export class AgentCard {
     if (this.answer.kind === 'draft') {
       if (this.sending) return 'none'
       if (g !== 'tap') return 'cancel'
+      if (this.now() - this.shownAt < DRAFT_TAP_GRACE_MS) return 'none'
       // The whole draft is read before the tap that sends it.
       if (!this.last) { this.page++; return 'render' }
       this.sending = true
