@@ -62,7 +62,6 @@ def article(url, title, lead="", publisher="Example", hours_old=None, **extra):
 def world(monkeypatch):
     """Fake search and pages: no network. `pages` maps URL -> HTML (missing = unreadable)."""
     monkeypatch.setattr(news.llm, "has_key", lambda: False)
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     state = {"ddgs": [], "web": [], "pages": {}, "fetched": [], "queries": []}
 
     def provider(name):
