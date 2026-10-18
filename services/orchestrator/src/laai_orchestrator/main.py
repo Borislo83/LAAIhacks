@@ -31,7 +31,7 @@ from .models import (
     agent_payload,
 )
 from .predictor import predict
-from .preferences import read_preferences
+from .preferences import effective_preferences
 from .preferences import router as preferences_router
 from .progress import event_stream
 from .store import Store
@@ -222,7 +222,7 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
     async def context(page: PageContext, request: Request, user: User):
         store = request.app.state.store
         settings = await store.settings(user)
-        preferences = await read_preferences(request, user)
+        preferences = await effective_preferences(request, user)
         prediction, source = await predict(page, config, request.app.state.http, preferences)
         tasks = [
             {"kind": kind, "payload": agent_payload(kind, prediction.product, page)}
@@ -276,7 +276,7 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
             raise HTTPException(422, "Last message must be from the user")
 
         async def answer():
-            preferences = await read_preferences(request, user) if user else None
+            preferences = await effective_preferences(request, user) if user else None
             return await chat(
                 body.messages,
                 config,
@@ -296,7 +296,7 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
     async def stream_chat(body: ChatRequest, request: Request, user: User):
         if body.messages[-1].role != "user":
             raise HTTPException(422, "Last message must be from the user")
-        preferences = await read_preferences(request, user)
+        preferences = await effective_preferences(request, user)
         return sse(
             event_stream(
                 lambda emit: chat(

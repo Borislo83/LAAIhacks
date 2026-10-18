@@ -5,6 +5,40 @@ export function setupPreferences({request}) {
     el('preferences-status').textContent = text;
     el('preferences-status').className = error ? 'err' : 'muted';
   }
+  const LABEL = {price: 'Find the best value', quality: 'Prioritize quality', balanced: 'Balanced'};
+  function showLearned(learned) {
+    const box = el('learned-priority');
+    if (!learned) { box.hidden = true; return; }
+    const title = learned.source === 'learned'
+      ? `Learned priority in use: ${LABEL[learned.priority]}`
+      : learned.source === 'setting' && learned.priority !== 'balanced' && learned.priority !== learned.effective
+        ? `Learned: ${LABEL[learned.priority]} — your saved setting wins`
+        : learned.priority !== 'balanced'
+          ? `Learned: ${LABEL[learned.priority]}`
+          : 'No learned priority yet';
+    el('learned-title').textContent = title;
+    el('learned-reason').textContent = learned.reason;
+    box.hidden = false;
+  }
+  async function loadLearned(path = '/v1/preferences/learned', options) {
+    const started = generation;
+    try {
+      const response = await request(path, options);
+      if (!response.ok) throw new Error();
+      const learned = await response.json();
+      if (started === generation && userId) showLearned(learned);
+      return true;
+    } catch {
+      if (started === generation && userId && !options) showLearned(null);
+      return false;
+    }
+  }
+  el('learned-reset').onclick = async () => {
+    if (!loaded || !userId) return;
+    status('Resetting learning…');
+    const ok = await loadLearned('/v1/preferences/learned/reset', {method: 'POST'});
+    status(ok ? 'Learning reset. Focal starts again from your next choices.' : 'Could not reset learning. Please try again.', !ok);
+  };
   function populate(values) {
     el('display-density').value = values.display_density || 'comfortable';
     el('shopping-priority').value = values.shopping_priority || 'balanced';
@@ -27,6 +61,7 @@ export function setupPreferences({request}) {
       loaded = true;
       el('preferences-fields').disabled = false;
       status('Preferences loaded.');
+      loadLearned();
     } catch (error) {
       if (started !== generation || !userId) return;
       status(error.message || 'Could not load preferences.', true);
@@ -53,6 +88,7 @@ export function setupPreferences({request}) {
       if (started !== generation || !userId) return;
       populate(values);
       status('Saved to your account.');
+      loadLearned();
     } catch (error) {
       if (started !== generation || !userId) return;
       status(error.message || 'Could not save. Please try again.', true);
@@ -70,6 +106,7 @@ export function setupPreferences({request}) {
       loaded = false;
       saving = false;
       populate({});
+      showLearned(null);
       el('preferences-fields').disabled = true;
       el('preferences-retry').hidden = true;
       if (id) {
