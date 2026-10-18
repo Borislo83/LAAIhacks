@@ -365,3 +365,12 @@ def test_chat_reply_lists_answer_and_sources():
     result = SearchResponse(query="q", headline="Q?", summary="A.", sources=[
         news.NewsSource(title="t", url=DINING, publisher="UCLA Dining")])  # fmt: skip
     assert websearch.chat_reply(result) == f"Q?\nA.\nUCLA Dining: {DINING}"
+
+
+def test_a_temperature_relabeled_to_another_unit_is_dropped():
+    sources = "Los Angeles forecast: high 30 °C (86 °F) today; average 26.6°C for October."
+    bad = "The forecast high is 30 °F. Average is 26.6 °F."
+    assert websearch.grounded(bad, sources) is None
+    good = "The forecast high is 30 °C (86 °F)."
+    assert websearch.grounded(good, sources) == good
+    assert websearch.grounded("Winds reach 9 mph.", "wind 9 mph") == "Winds reach 9 mph."
