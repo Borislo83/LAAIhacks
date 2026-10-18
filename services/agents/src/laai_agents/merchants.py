@@ -203,10 +203,25 @@ def parse_offers(page: str, url: str, product: str) -> list[Offer]:
     return result
 
 
+# Brand, search and category pages list many products; a price there may be any of them.
+LISTING_PATH = re.compile(
+    r"/(?:brand|brands|search|browse|category|categories|cp|b|s|c|sch|deals?)(?:/|$)",
+    re.IGNORECASE,
+)
+
+
+def listing_page(url: str) -> bool:
+    parts = urlsplit(url)
+    return bool(
+        LISTING_PATH.search(parts.path)
+        or re.search(r"(?:^|&)(?:q|query|k|_nkw|searchTerm|st)=", parts.query)
+    )
+
+
 def snippet_offer(source: Source, product: str) -> Offer | None:
     """A search snippet quoting exactly one plain dollar price becomes a lead."""
     text = source.snippet
-    if not fetchable(source.url) or RANGE.search(text):
+    if not fetchable(source.url) or RANGE.search(text) or listing_page(source.url):
         return None
     prices = {
         price
@@ -235,6 +250,15 @@ def rank(offers: list[Offer]) -> list[Offer]:
     otherwise all candidates do (with at least three, so one stray can't skew it).
     """
     unique = list({(o.store, o.price): o for o in offers}.values())
+    # Search engines sometimes merge results, so a snippet can carry another site's
+    # price. A snippet price identical to one read from a different site's page is a copy.
+    read = {(o.price, o.store) for o in unique if o.source != "search_snippet"}
+    unique = [
+        o
+        for o in unique
+        if o.source != "search_snippet"
+        or not any(price == o.price and store != o.store for price, store in read)
+    ]
     page = [o.price for o in unique if o.source != "search_snippet"]
     anchor = page or ([o.price for o in unique] if len(unique) >= 3 else [])
     if anchor:
@@ -252,14 +276,15 @@ def best_offer(offers: list[Offer]) -> Offer | None:
     return None
 
 
-async def fetch_offers(url: str, product: str) -> list[Offer]:
+async def fetch_page(url: str) -> str | None:
+    """Read one public HTML page, re-checking every redirect; None if not readable."""
     try:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=7), headers=HEADERS
         ) as session:
             for _ in range(MAX_REDIRECTS + 1):
                 if not fetchable(url) or not await public_host(urlsplit(url).hostname):
-                    return []
+                    return None
                 async with session.get(url, allow_redirects=False) as response:
                     if response.status in {301, 302, 303, 307, 308}:
                         url = urljoin(url, response.headers.get("Location", ""))
@@ -267,15 +292,23 @@ async def fetch_offers(url: str, product: str) -> list[Offer]:
                     if response.status != 200 or "text/html" not in response.headers.get(
                         "Content-Type", ""
                     ):
-                        return []
+                        return None
                     chunks, size = [], 0
                     async for chunk in response.content.iter_chunked(65536):
                         size += len(chunk)
                         if size > LIMIT:
-                            return []
+                            return None
                         chunks.append(chunk)
                     page = b"".join(chunks).decode("utf-8", errors="replace")
-                    return parse_offers(page, url, product) if page.strip() else []
-            return []
+                    return page if page.strip() else None
+            return None
     except (TimeoutError, aiohttp.ClientError, ValueError):
+        return None
+
+
+async def fetch_offers(url: str, product: str) -> list[Offer]:
+    page = await fetch_page(url)
+    try:
+        return parse_offers(page, url, product) if page else []
+    except ValueError:  # malformed markup
         return []
