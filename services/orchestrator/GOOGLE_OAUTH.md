@@ -14,9 +14,12 @@ remains available under “Use email instead”. Client credentials live only in
 - Saved dashboard redirects: `http://localhost:5173/dashboard.html` and
   `http://127.0.0.1:5173/dashboard.html`.
 - Nonce checking remains enabled; email is required. Identity scopes only.
-- Google audience is External, **Testing**. `borislo830@gmail.com` is an allowed test user.
-  Add teammates under Google Auth Platform → Audience → Test users. Complete the Branding
-  requirements and publish the Google app when broader access is needed.
+- Google audience is External, **In production**. Test-user allowlisting is no longer required.
+  Verified in Google Auth Platform → Audience after confirming “Push to production”.
+- Temporary public homepage: `https://focal-laaihacks-info.primepin4.chatgpt.site/`.
+- Temporary public privacy policy: `https://focal-laaihacks-info.primepin4.chatgpt.site/privacy.html`.
+- Authorized information-page domain: `primepin4.chatgpt.site`. These URLs were accepted and
+  saved on the Branding page before publication. Replace them with final product URLs later.
 - Add the exact hosted dashboard URL to Supabase before deploying; preserve PKCE callback origin.
 
 ## Verification
