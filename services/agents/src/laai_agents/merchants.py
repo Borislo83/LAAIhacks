@@ -99,6 +99,16 @@ def is_accessory(title: str, product: str) -> bool:
     from .live import GENERIC_WORDS, matches_product
 
     words = [w for w in re.findall(r"[a-z0-9]+", product.lower()) if w not in GENERIC_WORDS]
+    # "CASETiFY AirPods Pro 3 Case", "Galaxy Watch 7 Band": the product's name followed
+    # by an accessory noun. "AirPods Pro 3 with MagSafe Charging Case" is the product.
+    if words and re.search(
+        rf"\b{re.escape(words[-1])}\b(?:\s+[\w-]+){{0,3}}?\s+(?<!charging\s)"
+        r"(?:cases?|covers?|skins?|sleeves?|bands?|straps?|stands?|holders?|mounts?|docks?|"
+        r"ear\s*tips|tips|hooks?|grips?|shells?)\b",
+        title,
+        re.IGNORECASE,
+    ):
+        return True
     for word in words[:3]:
         made_for = re.search(
             rf"\b(?:for|compatible\s+with|fits|designed\s+for|made\s+for)\s+"
@@ -399,9 +409,18 @@ def rank(offers: list[Offer]) -> list[Offer]:
     )
 
 
+MODEL_UNCONFIRMED = "Model not confirmed: the listing doesn't say which generation"
+
+
+def unconfirmed(offer: Offer) -> Offer:
+    """A listing that may be another generation: shown, never verified or best."""
+    trust = "low" if offer.trust == "low" else "medium"
+    return offer.copy(update={"trust": trust, "note": MODEL_UNCONFIRMED, "verified": False})
+
+
 def labeled(offer: Offer) -> Offer:
     """Mark whether the price is verified, and say why not when it isn't."""
-    verified = offer.trust == "high" and offer.condition == "new"
+    verified = offer.trust == "high" and offer.condition == "new" and offer.note != MODEL_UNCONFIRMED
     note = None if verified else offer.note
     if BUNDLE.search(offer.product):
         note = "Bundle: includes extras, so it isn't a like-for-like price"
@@ -420,7 +439,10 @@ def labeled(offer: Offer) -> Offer:
 def best_offer(offers: list[Offer]) -> Offer | None:
     """Cheapest new offer from the most trusted tier that has one."""
     for tier in TRUST_ORDER:
-        tiered = [o for o in offers if o.trust == tier and o.condition == "new"]
+        tiered = [
+            o for o in offers
+            if o.trust == tier and o.condition == "new" and o.note != MODEL_UNCONFIRMED
+        ]  # fmt: skip
         if tiered:
             return min(tiered, key=lambda o: o.price)
     return None

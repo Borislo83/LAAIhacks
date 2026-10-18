@@ -6,7 +6,7 @@ import time
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from functools import lru_cache
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 
 from . import catalog
 from .models import (
@@ -68,11 +68,14 @@ GENERIC_WORDS = {
 
 
 def names_product(title: str, product: str) -> bool:
-    """Looser than matches_product, for review pages: the product's distinctive words."""
+    """Looser than matches_product, for review pages: the product's distinctive words.
+    Another generation or model is never this product ("AirPods Pro 2" for "Pro 3")."""
     if matches_product(title, product):
         return True
-    wanted = set(re.findall(r"[a-z0-9]+", product.lower())) - GENERIC_WORDS
-    found = set(re.findall(r"[a-z0-9]+", title.lower()))
+    if _other_model(title, product) or _model_inside(title, product):
+        return False
+    wanted = set(_tokens(product)) - GENERIC_WORDS
+    found = set(_tokens(title))
     said = sum(has_word(w, found) for w in wanted)
     return bool(wanted) and said / len(wanted) >= 0.67
 
@@ -102,6 +105,31 @@ def has_word(word: str, tokens: set[str]) -> bool:
     )
 
 
+ORDINAL = re.compile(r"^(\d+)(?:st|nd|rd|th)$")
+GEN_WORDS = {"gen", "generation"}
+SPELLED = {"first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5"}
+
+
+def _tokens(text: str) -> list[str]:
+    """Lowercase words, with every way of writing a generation as its number: "2nd
+    generation", "(2nd gen)", "Gen 2", "second generation" and "2" are all "2"."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    out = []
+    for i, word in enumerate(words):
+        nxt = words[i + 1] if i + 1 < len(words) else ""
+        if (m := ORDINAL.match(word)) and nxt in GEN_WORDS:
+            out.append(m[1])
+        elif word in SPELLED and nxt in GEN_WORDS:
+            out.append(SPELLED[word])
+        elif word in GEN_WORDS:
+            continue
+        elif m := ORDINAL.match(word):
+            out.append(m[1])
+        else:
+            out.append(word)
+    return out
+
+
 @lru_cache(maxsize=512)
 def _name_words(product: str) -> tuple[frozenset[str], ...]:
     """Word sets for the product and its catalog names, ignoring one-word names."""
@@ -110,7 +138,7 @@ def _name_words(product: str) -> tuple[frozenset[str], ...]:
     return tuple(
         frozenset(words)
         for name in names
-        if len(words := re.findall(r"[a-z0-9]+", name.lower())) >= 2
+        if len(words := _tokens(name)) >= 2
     )
 
 
@@ -130,7 +158,7 @@ def _glued(tokens: set[str], words) -> set[str]:
 
 
 def matches_product(title: str, product: str) -> bool:
-    tokens = set(re.findall(r"[a-z0-9]+", title.lower()))
+    tokens = set(_tokens(title))
     known = catalog.find_product(product)
     for name in [product, *([known.name, *known.aliases] if known else [])]:
         tokens |= _glued(tokens, re.findall(r"[a-z0-9]+", name.lower()))
@@ -141,13 +169,42 @@ def matches_product(title: str, product: str) -> bool:
     )
 
 
+TIERS = r"pro|max|lite|oled|mini|plus|ultra|se|fe"
+
+
+def _generations(product: str) -> set[str]:
+    """The generation numbers a name states: "AirPods Pro 3" -> {"3"}, "(2nd gen)" -> {"2"}."""
+    words = _tokens(product)
+    return {b for a, b in zip(words, words[1:]) if a.isalpha() and b.isdigit()}
+
+
 def _other_model(title: str, product: str) -> bool:
     """Another number after the same name is another generation: "AirPods Pro 3" is not
-    the "AirPods Pro 2", even though the catalog alias "AirPods Pro" fits both."""
+    the "AirPods Pro 2", even though the catalog alias "AirPods Pro" fits both. A
+    generation stated anywhere ("... with MagSafe Case (2nd generation)") counts too."""
     names = [product, *([known.name] if (known := catalog.find_product(product)) else [])]
     low = title.lower()
+    wanted = _generations(product)
+    stated = {
+        m[1] or m[2] or SPELLED[m[3]]
+        for m in re.finditer(
+            r"\b(\d+)(?:st|nd|rd|th)?\s*gen(?:eration)?\b|\bgen(?:eration)?\s*(\d+)\b"
+            r"|\b(first|second|third|fourth|fifth)\s+gen(?:eration)?\b",
+            low,
+        )
+    }
+    if len(wanted) == 1 and stated and not stated & wanted:
+        return True
+    # Another tier right after the name: "AirPods Pro" is not the "AirPods 4", and the
+    # "Switch OLED" or "Switch Lite" is not the "Switch 2".
+    own = set(_tokens(product))
+    for word in own:
+        if word.isalpha() and word not in GENERIC_WORDS and any(
+            m[1] not in own for m in re.finditer(rf"\b{re.escape(word)}\s+({TIERS})\b", low)
+        ):
+            return True
     for name in names:
-        words = re.findall(r"[a-z0-9]+", name.lower())
+        words = _tokens(name)
         for a, b in zip(words, words[1:]):
             # "Pro 3", or a generation spelled out: "Pro (1st Generation)", "Pro 2nd Gen".
             if a.isalpha() and b.isdigit() and any(
@@ -167,6 +224,36 @@ def _model_inside(title: str, product: str) -> bool:
         if a.isalpha() and b.isalpha() and re.search(rf"\b{a}\s*\d+[a-z]*\s+{b}\b", low):
             return True
     return False
+
+
+def unconfirmed_model(title: str, product: str) -> bool:
+    """The listing names the product line but no generation ("Apple AirPods Pro with
+    MagSafe Case" for "AirPods Pro 3"): it may be this model or another one."""
+    wanted = _generations(product)
+    if not wanted or matches_product(title, product) or _other_model(title, product):
+        return False
+    if _model_inside(title, product):
+        return False
+    tokens = set(_tokens(re.sub(r"\$\s?[\d,]+(?:\.\d+)?", " ", title)))
+    if any(t.isdigit() and len(t) <= 2 for t in tokens):
+        return False  # some other number is stated; don't guess
+    base = [w for w in _tokens(product) if w not in wanted]
+    return len(base) >= 1 and all(has_word(w, tokens) for w in base)
+
+
+def other_generation(candidate: str, product: str) -> str | None:
+    """"older model" / "newer model" when `candidate` is the same line as `product` in
+    another generation ("AirPods Pro 2" for "AirPods Pro 3"), else None."""
+    mine, theirs = _generations(product), _generations(candidate)
+    if len(mine) != 1 or len(theirs) != 1 or mine == theirs:
+        return None
+    def line(text):
+        return {w for w in _tokens(text) if not w.isdigit()} - GENERIC_WORDS - {"apple", "the"}
+    # The same line exactly: "AirPods 5" is another tier, not a newer "AirPods Pro".
+    a, b = line(product), line(candidate)
+    if not a or a != b:
+        return None
+    return "older model" if int(next(iter(theirs))) < int(next(iter(mine))) else "newer model"
 
 
 # Price lookups answer by a deadline with what has arrived; stragglers are dropped and
@@ -189,6 +276,13 @@ async def _candidates(sources, name, found: list | None = None):
     found = [] if found is None else found
     leads = [s for s in sources if matches_product(f"{s.title} {s.snippet}", name)]
     found.extend(offer for s in leads if (offer := snippet_offer(s, name)))
+    # A result naming the line but no generation is a labeled lead; its page isn't read.
+    found.extend(
+        merchants.unconfirmed(offer)
+        for s in sources
+        if s not in leads and unconfirmed_model(f"{s.title} {s.snippet}", name)
+        and (offer := snippet_offer(s, name))
+    )
     urls = [u for u in dict.fromkeys(s.url for s in leads) if not merchants.blocked(u)]
     urls = urls[:MAX_PAGES]
     report("validating", f"Checking offers on {len(urls)} merchant pages and ranking evidence")
@@ -268,7 +362,7 @@ def price_summary(name: str, offers, best, budget=None) -> str:
 
 async def store_listings(name: str, budget: float | None = None):
     """Official store listings for `name` within budget, cheapest first."""
-    from .merchants import is_accessory
+    from .merchants import is_accessory, unconfirmed
     from .stores import store_offers
 
     offers = await store_offers(name, budget)
@@ -278,6 +372,14 @@ async def store_listings(name: str, budget: float | None = None):
         o
         for o in offers
         if not is_accessory(o.product, name) and (not specific or matches_product(o.product, name))
+    ]
+    # No generation stated ("Apple AirPods Pro" for "AirPods Pro 3"): kept, labeled.
+    keep += [
+        unconfirmed(o)
+        for o in offers
+        if specific and not is_accessory(o.product, name) and unconfirmed_model(o.product, name)
+        # The listing's address can still name the generation ("...-1st-Generation").
+        and not _other_model(" ".join(re.split(r"[/_-]+", urlsplit(o.url).path)), name)
     ]
     if keep:
         report("store_listings", f"Found {len(keep)} store listings from official sources")
@@ -746,6 +848,9 @@ async def compared_alternatives(name: str, max_price: float | None, until: float
     priced, unpriced = [], []
     for (rival, count), result in zip(rivals, results):
         why = f"Often compared with {name}" + (f" ({count} comparisons)" if count > 1 else "")
+        if generation := other_generation(rival, name):
+            # The product's own older or newer model is not a rival; say which it is.
+            why = f"{generation.capitalize()} of {name}, not a rival"
         best = None if isinstance(result, BaseException) else result.best
         if best is None:
             unpriced.append(Alternative(product=rival, price=None, url=_research_url(rival),
