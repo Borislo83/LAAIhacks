@@ -7,7 +7,9 @@ No checkout/payment/order controls are used.
 
 import asyncio
 import os
+import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .progress import report
 
@@ -66,7 +68,8 @@ async def add_to_cart(url: str, quantity: int):
                 "Checking whether the selected item is already in the cart",
             )
             await page.goto(cart_url, wait_until="domcontentloaded", timeout=45000)
-            if "/ap/signin" in page.url:
+            # Amazon's sign-in lives at /ap/signin or, in its newer flow, /ax/claim/...
+            if re.search(r"/(?:ap/signin|ax/claim)", urlsplit(page.url).path):
                 return dict(NEEDS_SIGN_IN)
             try:
                 await page.wait_for_selector(
@@ -87,7 +90,8 @@ async def add_to_cart(url: str, quantity: int):
                 }
             report("opening_listing", "Opening the exact approved Amazon listing")
             await page.goto(canonical, wait_until="domcontentloaded", timeout=45000)
-            if "/ap/signin" in page.url:
+            # Amazon's sign-in lives at /ap/signin or, in its newer flow, /ax/claim/...
+            if re.search(r"/(?:ap/signin|ax/claim)", urlsplit(page.url).path):
                 return dict(NEEDS_SIGN_IN)
             if await page.locator(
                 '#captchacharacters, form[action*="validateCaptcha"]'
@@ -96,10 +100,19 @@ async def add_to_cart(url: str, quantity: int):
                     "status": "needs_attention",
                     "message": "Complete Amazon's verification in the opened browser. No cart addition was attempted.",
                 }
+            if urlsplit(page.url).path.startswith("/checkpoint"):
+                # Amazon's security checkpoint; a person must complete it.
+                return {
+                    "status": "needs_attention",
+                    "message": "Complete Amazon's security checkpoint in the opened browser, then prepare and approve again. No cart addition was attempted.",
+                }
             if amazon_listing(page.url) != canonical:
+                # Host and path only: the query string can carry session data.
+                landed = urlsplit(page.url)
                 return {
                     "status": "blocked",
-                    "message": "Amazon redirected away from the approved product. No cart change was attempted.",
+                    "message": "Amazon redirected away from the approved product "
+                    f"(to {landed.hostname}{landed.path[:80]}). No cart change was attempted.",
                 }
             report(
                 "verifying_listing",
