@@ -75,10 +75,10 @@ main{position:relative;z-index:3;pointer-events:none}
 section{min-height:130vh;display:flex;align-items:center;padding:0 0 0 clamp(28px,6vw,96px)}
 section:first-child{min-height:100vh}
 .copy{max-width:31ch;pointer-events:auto}
-.copy .sheetno{font:12px var(--mono);color:var(--muted);margin:0 0 14px}
+.copy .tagline{font:400 clamp(22px,2vw,28px)/1.2 var(--serif);color:var(--ink);opacity:.82;margin:0 0 14px;max-width:24ch}
 .copy h2{font:400 clamp(38px,4.6vw,64px)/1.02 var(--serif);margin:0 0 18px;letter-spacing:-.01em}
 .copy p{margin:0;color:#c3c8c0;font-size:17px;max-width:34ch}
-.hero h1{font:400 clamp(56px,8vw,118px)/.95 var(--serif);margin:0 0 20px;letter-spacing:-.02em}
+.hero h1{font:400 clamp(46px,5.4vw,80px)/1 var(--serif);margin:0 0 18px;letter-spacing:-.015em}
 .hero p{font-size:18px}
 .copy .hint{margin-top:34px;font:12px var(--mono);color:var(--muted)}
 .end h2{font-size:clamp(48px,6vw,88px)}
@@ -106,58 +106,58 @@ section:first-child{min-height:100vh}
 <main>
   <section class="hero" data-sheet="1">
     <div class="copy">
-      <p class="sheetno">The glasses</p>
-      <h1>Focal</h1>
-      <p>A team of AI agents behind your glasses. Glance at a product and they tell you whether it's the right price, the right product, and worth buying.</p>
+      <h1>The glasses</h1>
+      <p class="tagline">Focal: a team of AI agents behind your glasses.</p>
+      <p>Glance at a product and they tell you if it's the right price, the right product, and worth buying.</p>
       <p class="hint">Scroll to build it</p>
     </div>
   </section>
   <section data-sheet="2">
     <div class="copy">
-      <p class="sheetno">The lens</p>
-      <h2>One glance, one answer.</h2>
-      <p>Look at a product page. Focal puts one line on your Even Realities G2: the best price it can source and what you'd save. Then it gets out of the way.</p>
+      <h2>The lens</h2>
+      <p class="tagline">One glance, one answer.</p>
+      <p>One line on your G2: the best sourced price and what you'd save. Then it clears.</p>
     </div>
   </section>
   <section data-sheet="3">
     <div class="copy">
-      <p class="sheetno">The architecture</p>
-      <h2>Simple to wear, not simple inside.</h2>
-      <p>The glasses hand the page to Focal's orchestrator. It works out what you need, checks what you've allowed, and keeps track of every approval.</p>
+      <h2>The architecture</h2>
+      <p class="tagline">Simple to wear, not simple inside.</p>
+      <p>The orchestrator works out what you need, checks what you've allowed and tracks every approval.</p>
     </div>
   </section>
   <section data-sheet="4">
     <div class="copy">
-      <p class="sheetno">The Agentverse</p>
-      <h2>Three specialists, at the same time.</h2>
-      <p>The Focal coordinator on Fetch.ai Agentverse sends the price, alternatives and reviews agents out in parallel. Each one fails on its own, so one slow site never blocks the answer.</p>
+      <h2>The Agentverse</h2>
+      <p class="tagline">Three specialists, at the same time.</p>
+      <p>The Focal coordinator sends price, alternatives and reviews agents out in parallel. One slow site never blocks the answer.</p>
     </div>
   </section>
   <section data-sheet="5">
     <div class="copy">
-      <p class="sheetno">The sources</p>
-      <h2>No source, no number.</h2>
-      <p>Every price comes back with where it was found and how far to trust it. If a number can't be backed up, Focal doesn't show it.</p>
+      <h2>The sources</h2>
+      <p class="tagline">No source, no number.</p>
+      <p>Every price shows where it was found and how far to trust it.</p>
     </div>
   </section>
   <section data-sheet="6">
     <div class="copy">
-      <p class="sheetno">The approval gate</p>
-      <h2>Nothing happens without your OK.</h2>
-      <p>Ask Focal to add something to your Amazon cart and it shows you the exact listing first. You approve, it adds it and checks it's there. Checkout works the same way: Focal asks, you approve, and payment runs through Stripe on Fetch.ai's Payment Protocol. Messages to friends too: you see the draft, you send it.</p>
+      <h2>The approval gate</h2>
+      <p class="tagline">Nothing happens without your OK.</p>
+      <p>Cart adds, checkout through Stripe on Fetch.ai's Payment Protocol, and messages all wait for your approval.</p>
     </div>
   </section>
   <section data-sheet="7">
     <div class="copy">
-      <p class="sheetno">The Studio</p>
-      <h2>A team that remembers you.</h2>
-      <p>Tell Focal Studio what matters once: price, quality or balanced. Every agent works to it, and your choices carry across the glasses and the Studio.</p>
+      <h2>The Studio</h2>
+      <p class="tagline">A team that remembers you.</p>
+      <p>Pick price, quality or balanced once. Every agent works to it, across the glasses and the Studio.</p>
     </div>
   </section>
   <section class="end" data-sheet="7">
     <div class="copy">
       <h2>Your team, one glance away.</h2>
-      <p>Chase your goals. Keep your peace.</p>
+      <p class="tagline">Chase your goals. Keep your peace.</p>
     </div>
   </section>
 </main>
@@ -460,7 +460,7 @@ const K = [
   {az:-0.14, el:0.12, focus:[g(-0.2,-0.55,0.05), g(1.66,0.55,0.05), L.display, L.touch, L.lens]},
   {az:-0.4, el:0.45, focus:[glasses, W.down.line, N.orch, N.memory, N.discs, L.orch, L.memory]},
   {az:-0.4, el:0.6, focus:[N.floor, N.coord, N.price, N.alts, N.reviews, N.youtube, N.msg, L.coord, L.price, L.alts, L.reviews, L.youtube, L.msg]},
-  {az:-0.4, el:0.66, focus:[N.price, N.alts, N.reviews, N.bestbuy, N.amazon, N.others, L.bestbuy, L.amazon, L.others, L.reviewers]},
+  {az:-0.4, el:0.66, focus:[N.coord, N.price, N.alts, N.reviews, N.bestbuy, N.amazon, N.others, L.coord, L.bestbuy, L.amazon, L.others, L.reviewers]},
   {az:-0.4, el:0.5, focus:[N.orch, gate, N.cart, N.checkout, L.approval, L.cart, L.checkout]},
   {az:-0.4, el:0.58, focus:[glasses, N.memory, N.floor, gate, N.checkout, N.others, studio, L.orch, L.studio]},
 ];
