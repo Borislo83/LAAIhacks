@@ -103,7 +103,8 @@ async function readPage(url: string): Promise<Extracted> {
   try {
     const doc = await safeFetch(url)
     fast = extract(doc.body, doc.finalUrl, doc.contentType)
-    if (fast.wordCount >= THIN_WORDS) return fast
+    // A browser can't do better on a PDF, however short.
+    if (fast.wordCount >= THIN_WORDS || doc.pdf) return fast
   } catch (err) {
     // 502 = the site refused or failed us; anything else (bad URL, private
     // address, not HTML) a browser will not fix.
