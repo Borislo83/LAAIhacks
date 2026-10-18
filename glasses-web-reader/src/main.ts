@@ -2059,7 +2059,11 @@ async function connectLocalDev() {
   try {
     const api = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
     const res = await fetch(`${api}/api/backend/dev`, { cache: 'no-store' })
-    const { local } = (await res.json()) as { local?: boolean }
-    if (local && !backend.state.connected) await connectBackend('local-dev', '')
+    const { local, pairing } = (await res.json()) as { local?: boolean; pairing?: boolean }
+    // A phone that scanned this run's pairing QR carries ?pair=<secret> in its URL.
+    const pair = new URLSearchParams(location.search).get('pair')
+    if (backend.state.connected) return
+    if (local) await connectBackend('local-dev', '')
+    else if (pairing && pair && /^[A-Za-z0-9_-]{24,128}$/.test(pair)) await connectBackend(`pair-${pair}`, '')
   } catch { /* no dev gateway: the Account panel still works */ }
 }
