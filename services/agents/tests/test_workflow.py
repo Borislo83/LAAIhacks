@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 from laai_agents import coordinator, handlers, live
-from laai_agents.integration import GlassesWorkflow
+from laai_agents.integration import GlassesAPIError, GlassesWorkflow
 from laai_agents.models import (
     AlternativesResponse,
     ConsiderRequest,
@@ -326,6 +326,9 @@ class ContractFixture(GlassesWorkflow):
         super().__init__("http://localhost:8002", {}, journal)
         self.requests, self.events, self.executions = [], [], 0
         self.fail_result = False
+        # Action IDs the API has invalidated (a page change hides them from display).
+        self.invalidated = set()
+        self.invalidate_during_execution = False
 
     async def api(self, role, method, path, body=None, params=None):
         self.requests.append((role, method, path, body, params))
@@ -337,8 +340,11 @@ class ContractFixture(GlassesWorkflow):
                 "actions": [
                     {"action_id": action_id, "status": "approved"}
                     for action_id in self.state["actions"]
+                    if action_id not in self.invalidated
                 ],
             }
+        if path.endswith("/result") and path.split("/")[-2] in self.invalidated:
+            raise GlassesAPIError("POST", 409)
         if (
             path.endswith("/result")
             and body["status"] == "completed"
@@ -349,6 +355,8 @@ class ContractFixture(GlassesWorkflow):
 
     async def execute(self, plan):
         self.executions += 1
+        if self.invalidate_during_execution:
+            self.invalidated.update(self.state["actions"])
         return "Comparison ready"
 
 
@@ -524,3 +532,68 @@ async def test_reviews_count_each_site_once(monkeypatch):
     result = await live.reviews(ReviewsRequest(product="Space Q45"))
     assert [r.source for r in result.ratings] == ["soundguys.com", "pcmag.com"]
     assert result.review_count == 2 and result.rating == 3.8  # (3.6 + 4.0) / 2
+
+
+def approved_event(workflow, event_id="evt-1", cursor="000001", index=0):
+    return {
+        "event_id": event_id,
+        "cursor": cursor,
+        "type": "action.approved",
+        "session_id": "session-1",
+        "page_id": "page-sony",
+        "action_id": list(workflow.state["actions"])[index],
+    }
+
+
+async def test_invalidated_action_is_recorded_and_does_not_block_later_events(tmp_path):
+    workflow = ContractFixture(tmp_path / "journal.json")
+    await workflow.propose(PAGE, ConsiderRequest(product="Sony XM5"))
+    stale, fresh = approved_event(workflow), approved_event(workflow, "evt-2", "000002", 1)
+    workflow.invalidated.add(stale["action_id"])
+    workflow.events = [stale, fresh]
+    assert await workflow.poll_once() == 2
+    # The invalidated action never runs or posts a result, but the cursor moves past it.
+    assert workflow.executions == 1 and workflow.state["cursor"] == "000002"
+    assert workflow.state["invalidated"]["evt-1"]["action_id"] == stale["action_id"]
+    results = [r[2] for r in workflow.requests if r[2].endswith("/result")]
+    assert results and all(stale["action_id"] not in path for path in results)
+    # A restart replaying the same events does not reprocess either one.
+    restarted = ContractFixture(workflow.journal)
+    restarted.events = [stale, fresh]
+    await restarted.poll_once()
+    assert restarted.executions == 0
+    assert not [r for r in restarted.requests if r[2].endswith("/display")]
+
+
+async def test_action_invalidated_during_execution_advances_cursor(tmp_path):
+    workflow = ContractFixture(tmp_path / "journal.json")
+    await workflow.propose(PAGE, ConsiderRequest(product="Sony XM5"))
+    event = approved_event(workflow)
+    workflow.events = [event]
+    workflow.invalidate_during_execution = True
+    await workflow.poll_once()
+    assert workflow.executions == 1 and workflow.state["cursor"] == "000001"
+    assert workflow.state["invalidated"]["evt-1"]["action_id"] == event["action_id"]
+
+
+async def test_result_conflict_for_still_approved_action_keeps_blocking(tmp_path):
+    workflow = ContractFixture(tmp_path / "journal.json")
+    await workflow.propose(PAGE, ConsiderRequest(product="Sony XM5"))
+    workflow.events = [approved_event(workflow)]
+
+    async def conflict(*args, **kwargs):
+        raise GlassesAPIError("POST", 409)
+
+    original = workflow.api
+
+    async def api(role, method, path, body=None, params=None):
+        if path.endswith("/result") and body["status"] == "completed":
+            await conflict()
+        return await original(role, method, path, body, params)
+
+    workflow.api = api
+    with pytest.raises(GlassesAPIError):
+        await workflow.poll_once()
+    assert workflow.state["cursor"] == "" and "evt-1" not in workflow.state.get(
+        "invalidated", {}
+    )

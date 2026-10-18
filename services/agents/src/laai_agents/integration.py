@@ -40,6 +40,13 @@ def result_message(results):
     return "\n".join(lines)
 
 
+class GlassesAPIError(RuntimeError):
+    def __init__(self, method, status):
+        # Do not echo upstream bodies, credentials or headers.
+        super().__init__(f"Glasses API {method} failed: HTTP {status}")
+        self.status = status
+
+
 class GlassesWorkflow:
     def __init__(self, base_url: str, tokens: dict[str, str], journal: Path):
         parsed = urlsplit(base_url)
@@ -88,10 +95,7 @@ class GlassesWorkflow:
             if response.status == 204:
                 return None
             if response.status >= 300:
-                # Do not echo upstream bodies, credentials or headers.
-                raise RuntimeError(
-                    f"Glasses API {method} failed: HTTP {response.status}"
-                )
+                raise GlassesAPIError(method, response.status)
             return await response.json()
 
     def path(self):
@@ -189,6 +193,80 @@ class GlassesWorkflow:
             return result_message([price, alternatives])
         raise ValueError("No approved registered handler")
 
+    async def still_approved(self, action_id, plan):
+        display = await self.api("web", "GET", self.path() + "/display")
+        current = next(
+            (a for a in display.get("actions", []) if a["action_id"] == action_id),
+            None,
+        )
+        return bool(
+            display.get("page")
+            and display["page"]["page_id"] == plan["page_id"]
+            and current
+            and current["status"] in {"approved", "running"}
+        )
+
+    def record_invalidated(self, event):
+        # The API invalidated this approval (page or proposal changed). Nothing may run
+        # for it, and the API rejects its results, so record it and move past it.
+        self.state.setdefault("invalidated", {})[event["event_id"]] = {
+            "action_id": event["action_id"],
+            "recorded_at": datetime.now(UTC).isoformat(),
+        }
+        self.save()
+
+    async def post_result(self, event, plan, path, body):
+        try:
+            await self.api("executor", "POST", path, body)
+        except GlassesAPIError as exc:
+            # A 409 can mean the action was invalidated mid-run; only skip if so.
+            if exc.status != 409 or await self.still_approved(event["action_id"], plan):
+                raise
+            self.record_invalidated(event)
+            return False
+        return True
+
+    async def handle_approved(self, event, plan):
+        event_id, action_id = event["event_id"], event["action_id"]
+        if event_id in self.state.get("invalidated", {}):
+            return
+        path = self.path() + "/actions/" + quote(action_id, safe="") + "/result"
+        if event_id not in self.state["outcomes"]:
+            if not await self.still_approved(action_id, plan):
+                self.record_invalidated(event)
+                return
+            # Authenticated event carries the approval; product/handler/budget
+            # come from the journal, never from event/webpage instructions.
+            if datetime.fromisoformat(plan["expires_at"]) <= datetime.now(UTC):
+                outcome = {
+                    "status": "failed",
+                    "message": "Action expired before execution",
+                }
+            else:
+                running = {
+                    "request_id": event_id + ":running",
+                    "status": "running",
+                    "message": "Researching approved product",
+                }
+                if not await self.post_result(event, plan, path, running):
+                    return
+                try:
+                    outcome = {
+                        "status": "completed",
+                        "message": await self.execute(plan),
+                    }
+                except Exception:  # noqa: BLE001 -- persist a safe failure result for the API
+                    outcome = {
+                        "status": "failed",
+                        "message": "Live research unavailable",
+                    }
+            self.state["outcomes"][event_id] = {
+                "request_id": event_id + ":outcome",
+                **outcome,
+            }
+            self.save()
+        await self.post_result(event, plan, path, self.state["outcomes"][event_id])
+
     async def poll_once(self):
         payload = await self.api(
             "executor",
@@ -200,71 +278,15 @@ class GlassesWorkflow:
         for event in events:
             if event["session_id"] != self.state["session_id"]:
                 raise ValueError("Cross-session event rejected")
-            action_id = event["action_id"]
-            plan = self.state["actions"].get(action_id)
+            plan = self.state["actions"].get(event["action_id"])
             if event["type"] == "action.approved":
                 if not plan or event["page_id"] != plan["page_id"]:
                     raise ValueError(
                         "Unknown or cross-page approved action; cursor not advanced"
                     )
-                event_id = event["event_id"]
-                path = self.path() + "/actions/" + quote(action_id, safe="") + "/result"
-                if event_id not in self.state["outcomes"]:
-                    display = await self.api("web", "GET", self.path() + "/display")
-                    current = next(
-                        (
-                            a
-                            for a in display.get("actions", [])
-                            if a["action_id"] == action_id
-                        ),
-                        None,
-                    )
-                    if (
-                        not display.get("page")
-                        or display["page"]["page_id"] != plan["page_id"]
-                        or not current
-                        or current["status"] not in {"approved", "running"}
-                    ):
-                        raise ValueError(
-                            "Action is no longer approved in the active page context"
-                        )
-                    # Authenticated event carries the approval; product/handler/budget
-                    # come from the journal, never from event/webpage instructions.
-                    if datetime.fromisoformat(plan["expires_at"]) <= datetime.now(UTC):
-                        outcome = {
-                            "status": "failed",
-                            "message": "Action expired before execution",
-                        }
-                    else:
-                        await self.api(
-                            "executor",
-                            "POST",
-                            path,
-                            {
-                                "request_id": event_id + ":running",
-                                "status": "running",
-                                "message": "Researching approved product",
-                            },
-                        )
-                        try:
-                            outcome = {
-                                "status": "completed",
-                                "message": await self.execute(plan),
-                            }
-                        except Exception:  # noqa: BLE001 -- persist a safe failure result for the API
-                            outcome = {
-                                "status": "failed",
-                                "message": "Live research unavailable",
-                            }
-                    self.state["outcomes"][event_id] = {
-                        "request_id": event_id + ":outcome",
-                        **outcome,
-                    }
-                    self.save()
-                await self.api(
-                    "executor", "POST", path, self.state["outcomes"][event_id]
-                )
-            # Never advance until the result is accepted. API retries use the same IDs.
+                await self.handle_approved(event, plan)
+            # Never advance until the result is accepted or the approval is recorded as
+            # invalidated. API retries use the same IDs.
             self.state["cursor"] = event["cursor"]
             self.save()
         return len(events)

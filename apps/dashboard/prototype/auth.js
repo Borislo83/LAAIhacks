@@ -21,6 +21,8 @@ export function setupAuth({endpoint, onUserChange}) {
     el('workspace').hidden = !signedIn;
     el('workspace').inert = !signedIn;
     el('auth-form').hidden = signedIn;
+    el('google-auth').hidden = signedIn;
+    el('email-auth').hidden = signedIn;
     el('sign-out').hidden = !signedIn;
     endpoint.readOnly = signedIn;
     el('account-status').textContent = signedIn
@@ -29,6 +31,8 @@ export function setupAuth({endpoint, onUserChange}) {
   async function connect() {
     el('auth-retry').hidden = true;
     el('auth-form').hidden = true;
+    el('google-auth').hidden = true;
+    el('email-auth').hidden = true;
     el('account-status').textContent = 'Connecting…';
     message('');
     try {
@@ -46,7 +50,7 @@ export function setupAuth({endpoint, onUserChange}) {
       const config = await response.json();
       const {createClient} = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/+esm');
       client = createClient(config.supabase_url, config.supabase_publishable_key, {
-        auth: {persistSession: true, autoRefreshToken: true, detectSessionInUrl: true},
+        auth: {flowType: 'pkce', persistSession: true, autoRefreshToken: true, detectSessionInUrl: true},
       });
       client.auth.onAuthStateChange((_event, session) => render(session));
       const {data, error} = await client.auth.getSession();
@@ -62,6 +66,20 @@ export function setupAuth({endpoint, onUserChange}) {
   // Reload before using another backend so credentials never follow a changed URL.
   const saveEndpoint = endpoint.onchange;
   endpoint.onchange = () => {saveEndpoint?.(); location.reload();};
+  el('sign-in-google').onclick = async () => {
+    if (!client) return;
+    el('sign-in-google').disabled = true;
+    message('Connecting to Google…');
+    try {
+      const {error} = await client.auth.signInWithOAuth({
+        provider: 'google',
+        options: {redirectTo: location.origin + location.pathname},
+      });
+      if (error) throw error;
+    } catch (error) {
+      message(error.message || 'Could not start Google sign-in. Please try again.', true);
+    } finally {el('sign-in-google').disabled = false;}
+  };
   el('auth-form').onsubmit = async event => {
     event.preventDefault();
     const signup = event.submitter?.id === 'sign-up';

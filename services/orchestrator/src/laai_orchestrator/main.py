@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .chat import buyer_call, call_agent, chat
-from .config import Config
+from .config import DEMO_TOKENS, LOOPBACK_CLIENTS, PROXY_HEADERS, Config
 from .models import (
     BuyerPreparation,
     ChatReply,
@@ -39,6 +39,14 @@ async def current_user(
     if not credentials:
         raise HTTPException(401, "Supabase access token required")
     config = request.app.state.config
+    if config.demo_auth_mode and credentials.credentials in DEMO_TOKENS:
+        # Proxied requests carry forwarding headers; never trust fixtures through them.
+        local = request.client and request.client.host in LOOPBACK_CLIENTS
+        proxied = PROXY_HEADERS.intersection(request.headers.keys())
+        if not local or proxied:
+            raise HTTPException(401, "Demo tokens are accepted only from this machine")
+        request.state.actor_roles = set(DEMO_TOKENS[credentials.credentials])
+        return config.demo_user_id
     try:
         response = await request.app.state.http.get(
             str(config.supabase_url).rstrip("/") + "/auth/v1/user",

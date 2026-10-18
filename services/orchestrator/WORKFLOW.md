@@ -1,4 +1,4 @@
-# Shared glasses workflow v1.0
+# Shared glasses workflow v1.0 (+ DB v1.1)
 
 Apply `supabase/migrations/202610170002_shared_workflow.sql` after the original orchestrator
 migration. This adds the shared session API without replacing the existing task/history API.
@@ -15,13 +15,15 @@ A trusted administrator can set `app_metadata.laai_roles` to a list containing `
 `user_metadata`, accept roles from request headers, or grant roles from the dashboard.
 Integration callers need roles and ownership for the same user's sessions; unrelated service
 accounts cannot access them. Token issuance/delegation belongs to the trusted Auth backend.
-No anonymous demo mode is enabled for this API.
+For local development only, `DEMO_AUTH_MODE=true` with `DEMO_USER_ID` set to an existing
+Auth user accepts fixture tokens (`demo-web`, `demo-g2`, `demo-agent`, `demo-executor`,
+`demo-all`) from loopback clients without forwarding headers. Never enable it when hosted.
 
 The role mapping matches the shared contract. Owners can also read
 `GET /v1/sessions/{id}` for session status. `/healthz` is public process liveness.
 Use the configured CORS allowlist and HTTPS when hosting; keep the upstream Bureau private.
 A database-backed bucket limits shared workflow operations to 600 per user per minute across
-API instances. A deployment gateway can enforce a stricter IP limit before authentication.
+API instances; from migration 004, failed requests count too. A deployment gateway can enforce a stricter IP limit before authentication.
 
 ## Durable state
 
@@ -37,8 +39,11 @@ Other contract type names are recognized but rejected until a reviewed handler i
 Cursors are 19-digit strings. Reads never consume events. Terminal result acceptance marks the
 corresponding event consumed in the same transaction as the saved result and display revision.
 Events remain replayable with the original cursor until session retention deletes them;
-clients advance their durable cursor **only after** the result is accepted. There is no
-separate acknowledgment endpoint. A result retry must reuse its original request ID.
+clients advance their durable cursor **only after** the result is accepted. A result retry
+must reuse its original request ID. With migration 004, executors can also acknowledge an
+event with `POST .../events/{event_id}/ack` (idempotent, no revision change), events include
+the action's current `action_status`, and invalidating an approved action marks its event
+consumed so it never needs delivery. See [the DB team handoff](../../supabase/HANDOFF.md).
 
 This gives at-least-once delivery; it does not promise exactly-once external execution.
 The existing executor journal protects result retries; a crash during research can repeat

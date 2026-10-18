@@ -1,0 +1,131 @@
+# DB team handoff (shared integration contract v1.0)
+
+The DB team owns the Supabase Postgres schema and migrations for the shared session workflow.
+This page explains what each team gets and how to plug in. Contract terms follow
+`TEAM_CONTRACT.md` v1.0.
+
+## Status
+
+| Migration | What it adds | Live project `hjdogsjwgnbdlxcspkaf` |
+|---|---|---|
+| `202610170001_orchestrator.sql` | Settings, contexts, tasks (dashboard) | Applied |
+| `202610170002_shared_workflow.sql` | Contract tables, `laai_workflow` RPC | Applied (do not rerun) |
+| `202610170003_user_preferences.sql` | `user_preferences` + private notes | Applied (do not rerun) |
+| `202610170004_workflow_v1_1.sql` | Event ack, invalidation outbox, devices, rate-limit fix | Applied 2026-10-17 |
+
+004 only uses `create or replace` / `if not exists`, so applying it twice is harmless. Apply it
+in the Supabase SQL editor, then run `python check_supabase.py` in `services/orchestrator`
+(read-only; it reports whether 004 is live).
+
+## Contract tables → Supabase
+
+| Contract table | Supabase | Notes |
+|---|---|---|
+| `users` | `auth.users` | Supabase Auth is the user registry; no second users table. |
+| `devices` | `laai_devices` | Register with the `device` operation (004). |
+| `sessions` | `laai_sessions` | 24 h expiry; `revision` bumps on every state change. |
+| `pages` | `laai_pages` | Keyed `(session_id, id)`; `summary_json`, `facts_json`. |
+| `actions` | `laai_actions` | Status `proposed→approved/rejected→running→completed/failed`, or `invalidated`. |
+| `approval_events` | `laai_approval_events` | Transactional outbox; `cursor` is an identity column. |
+| `idempotency_keys` | `laai_idempotency_keys` | Unique `(session_id, request_id, operation)`; stores request + response. |
+| `user_preferences` | `laai_user_preferences` | Plus `notes` (≤10,000 chars, never sent to models). |
+
+The contract's indexes all exist (session+revision, actions session+page+status, events cursor,
+idempotency composite). Every query is scoped to the verified user. Direct client access is
+revoked; only the service role can call the functions. Retention: expired sessions are kept 30
+days and then removed by `laai_purge_expired_sessions()` (schedule it with Supabase Cron).
+Deleting an Auth user cascades all their data.
+
+## Glasses team: repository adapter
+
+The persistence entry point is one Postgres function, called with the service-role key through
+PostgREST (`POST /rest/v1/rpc/laai_workflow`) or any Postgres driver:
+
+```
+laai_workflow(p_user_id uuid, p_operation text, p_session_id uuid, p_payload jsonb) → jsonb
+```
+
+Pass the **verified** caller's user ID. Never take it from a request body. Each call is one
+transaction: state, revision, idempotency record and outbox event commit together or not at all.
+On failure it returns `{"error": {"code", "message"}, "status": <HTTP status>}` and writes
+nothing except the rate-limit counter.
+
+| `p_operation` | Session? | Payload | Returns |
+|---|---|---|---|
+| `device` | no | `{}` or `{"device_id"}` | `{device_id, last_seen_at}` |
+| `create` | no | `{}` or `{"device_id"}` | `{schema_version, session_id, revision}` |
+| `status` | yes | `{}` | `{session_id, revision, active_page_id, expires_at}` |
+| `page` | yes | contract `PageSubmission` | `{schema_version, session_id, revision}` |
+| `actions` | yes | contract actions submission | `{schema_version, session_id, revision}` |
+| `display` | yes | `{"after_revision"}` | contract `DisplayState`, or `{"unchanged": true}` → 204 |
+| `approve` / `reject` | yes | `{request_id, expected_revision, action_id}` | `{action_id, status, event_id}` |
+| `events` | yes | `{"after": cursor}` | `{"events": [...]}` (max 100, cursor order) |
+| `ack` | yes | `{"event_id"}` | `{event_id, cursor, consumed_at}` |
+| `result` | yes | `{request_id, action_id, status, message, result_url?}` | `{action_id, status}` |
+
+`page`, `actions`, `approve`, `reject` and `result` need a `request_id`. A retry with the same
+input returns the stored response; the same `request_id` with different input returns `CONFLICT`.
+
+Rules enforced in the database, so your adapter does not have to:
+- Approvals are rejected for unknown (`ACTION_NOT_FOUND`), stale (`STALE_REVISION`), expired
+  (`ACTION_EXPIRED`), already-decided or old-page (`CONFLICT`) and other-session actions.
+- A new page snapshot, even with the same `page_id`, invalidates all earlier actions, and from
+  004 also closes their unconsumed events.
+- Action IDs can't be reused. Proposals that are already expired are rejected.
+- Results are accepted only for approved/running actions. `completed`/`failed` mark the event consumed.
+- 600 operations per user per minute across all API instances (`RATE_LIMITED`, 429).
+
+Error codes beyond the contract list: `DEVICE_NOT_FOUND` and `EVENT_NOT_FOUND` (404).
+
+`services/orchestrator/src/laai_orchestrator/workflow.py` is a working reference adapter
+(FastAPI). It exposes the contract endpoints plus `POST /v1/devices` (g2) and
+`POST /v1/sessions/{id}/events/{event_id}/ack` (executor). Use it as-is, or port the
+`operate()` call into your own API.
+
+## Web team
+
+- Preferences: `GET`/`PUT /v1/preferences` with a signed-in Supabase token. Fields:
+  `display_density` (`comfortable|compact`), `shopping_priority` (`balanced|price|quality`),
+  `proactive_enabled`, `notes`. Saving a change bumps the revision of the user's active sessions,
+  so G2 sees it on the next display poll. `DisplayState.preferences` includes only `display_density`.
+- Pages: `POST /v1/sessions`, then `PUT .../page` with a fresh `request_id` per snapshot.
+
+## Agent / executor team
+
+- Propose with `PUT .../actions`. This release registers only `compare_prices` and
+  `find_reviews`. `open_url`, `read_article` and `custom` are rejected with `INVALID_PAYLOAD`
+  until a reviewed handler (and, for `open_url`, a destination allowlist) is registered.
+- Poll `GET .../events?after=<cursor>`. From 004 each event carries `action_status`. Skip events
+  whose status is `invalidated`: they will never accept a result, and the DB has already closed
+  them. `services/agents/src/laai_agents/integration.py` skips them (it re-checks `display`
+  before running) and advances its cursor.
+- Delivery is at-least-once. Post results with stable request IDs (`<event_id>:outcome`) and
+  optionally `ack` the event once you are done with it.
+
+## Running locally (all teams)
+
+1. `cd services/orchestrator && cp .env.example .env`, then fill in the Supabase URL and keys.
+2. To skip Google sign-in, set `DEMO_AUTH_MODE=true` and `DEMO_USER_ID=<an existing Auth user id>`
+   (create one under Supabase → Authentication → Users). Requests from this machine can then use:
+
+   | Bearer token | Roles |
+   |---|---|
+   | `demo-web` | web |
+   | `demo-g2` | g2 |
+   | `demo-agent` | agent |
+   | `demo-executor` | executor |
+   | `demo-all` | all four |
+
+   The tokens are public fixtures. They're refused from any non-loopback address, through a
+   proxy (`X-Forwarded-For`/`Forwarded`), or when demo mode is off. Never enable it on a host.
+3. `uv sync && uv run laai-orchestrator` (port 8001)
+
+```bash
+curl -s -X POST localhost:8001/v1/sessions -H 'Authorization: Bearer demo-web'
+```
+
+## Tests
+
+- `cd supabase/tests && npm test`: runs the real migration SQL in embedded Postgres (PGlite).
+- `cd services/orchestrator && uv run pytest -q`: API, roles, error envelope, demo auth.
+- `cd services/agents && uv run pytest -q`: executor journal, retries, invalidated approvals.

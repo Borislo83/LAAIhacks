@@ -197,6 +197,11 @@ body[data-density="compact"] .agent{padding:10px}
       <div><h2 id="account-title">Your <em>account.</em></h2><p class="muted" id="account-status" role="status" style="margin-top:8px">Connecting…</p></div>
       <button type="button" class="btn" id="sign-out" hidden>Sign out</button>
     </div>
+    <div id="google-auth" style="margin-top:18px" hidden>
+      <button class="btn dark" id="sign-in-google" type="button">Continue with Google</button>
+    </div>
+    <details id="email-auth" style="margin-top:16px" hidden>
+      <summary class="muted" style="font-size:13px;cursor:pointer">Use email instead</summary>
     <form id="auth-form" style="margin-top:18px" hidden>
       <div class="row">
         <div class="field"><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></div>
