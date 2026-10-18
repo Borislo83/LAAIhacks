@@ -63,7 +63,7 @@
       ],
       "env": {
         "VITE_PORT": "5180",
-        "ORCHESTRATOR_ALLOWED_ORIGINS": "http://localhost:5180,http://127.0.0.1:5180",
+        "ORCHESTRATOR_ALLOWED_ORIGINS": "http://localhost:5180,http://127.0.0.1:5180,http://172.26.73.253:5180",
         "CONDENSE_PORT": "8797"
       },
       "port": 5180,
