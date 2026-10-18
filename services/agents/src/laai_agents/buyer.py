@@ -393,6 +393,15 @@ def build_buyer_agent(port=None):
     async def on_cart_add(ctx, req):
         return await add_product(req)
 
+    @agent.on_rest_post("/cart/clear", CartShowRequest, CartAddResponse)
+    async def on_cart_clear(ctx, req):
+        if not _executor_ok(req.executor_token):
+            return CartAddResponse(product="Amazon cart", status="not_connected", summary="Not authorized.")
+        from .amazon_cart import clear_cart
+
+        cleared = await clear_cart()
+        return CartAddResponse(product="Amazon cart", status=cleared["status"], summary=cleared["message"])
+
     @agent.on_rest_post("/cart/show", CartShowRequest, CartAddResponse)
     async def on_cart_show(ctx, req):
         if not _executor_ok(req.executor_token):

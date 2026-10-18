@@ -197,6 +197,40 @@ async def _open_page():
         _page = blank[0] if blank else await _browser.new_page()
 
 
+# Amazon's per-item Delete control (an input in the item's quantity row).
+DELETE_ITEM = (
+    'input[value="Delete"], [data-feature-id="item-delete-button"] input, '
+    'span[data-action="delete"] input, [data-action="delete-active"] input'
+)
+
+
+async def clear_cart() -> dict:
+    """Removes every item from the cart window's (guest) cart, for a clean demo. Only this
+    window's own profile is touched; it never signs in or checks out."""
+    from playwright.async_api import Error
+
+    removed = 0
+    async with _lock:
+        try:
+            await _open_page()
+            await _page.goto(CART_URL, wait_until="domcontentloaded", timeout=45000)
+            for _ in range(30):
+                button = _page.locator(DELETE_ITEM).first
+                if not await button.count():
+                    break
+                await button.click()
+                removed += 1
+                await _page.wait_for_timeout(1500)
+            await _page.goto(CART_URL, wait_until="domcontentloaded", timeout=45000)
+            left = await _page.locator(DELETE_ITEM).count()
+        except (Error, OSError) as exc:
+            return {"status": "failed", "message": f"Couldn't clear the cart: {exc}"[:300]}
+    await _show_window()
+    if left:
+        return {"status": "failed", "message": f"Removed {removed}; {left} item(s) are still in the cart."}
+    return {"status": "cleared", "message": f"Cart emptied ({removed} item(s) removed)."}
+
+
 async def show_cart() -> dict:
     """Opens (or raises) the cart window on Amazon's cart page. Adds nothing."""
     from playwright.async_api import Error
