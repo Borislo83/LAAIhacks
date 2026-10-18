@@ -332,3 +332,82 @@ def test_send_name_a_message_phrasing_is_parsed():
     assert extract_by_pattern("shoot Alex a quick text saying I'm running late", book) == (
         "Alex", "I'm running late",
     )
+
+
+async def test_two_word_contact_resolves_from_first_name_or_full_name():
+    book = imessage.contacts() | {"Legend Yang": "+15554445672"}
+    assert imessage.extract_by_pattern("text Legend I'm testing my glasses", book) == (
+        "Legend",
+        "I'm testing my glasses",
+    )
+    assert imessage.extract_by_pattern("text Legend Yang I'm testing my glasses", book) == (
+        "Legend Yang",
+        "I'm testing my glasses",
+    )
+    assert imessage.resolve("Legend", book) == ["Legend Yang"]
+    assert imessage.resolve("legend yang", book) == ["Legend Yang"]
+
+
+async def test_first_name_draft_targets_the_full_contact(setup, monkeypatch):
+    monkeypatch.setenv("IMESSAGE_CONTACTS", "Legend Yang=+1 555 444 5672,Alex=+15551234567")
+    result = await draft("text Legend I'm testing my glasses")
+    assert result.status == "ready" and result.recipient_name == "Legend Yang"
+    assert result.recipient_masked == "+1•••••5672"
+    assert result.text == "I'm testing my glasses."
+    assert (await send(result)).status == "sent"
+    assert setup[-1][3:] == ["+15554445672", "I'm testing my glasses."]
+
+
+async def test_dry_run_records_the_target_handle(setup, monkeypatch):
+    monkeypatch.setenv("IMESSAGE_DRY_RUN", "1")
+    monkeypatch.setenv("IMESSAGE_CONTACTS", "Legend Yang=+15554445672")
+    response = await send(await draft("text Legend I'm testing my glasses"))
+    assert response.status == "sent" and response.dry_run and "Legend Yang" in response.summary
+    assert setup == []  # nothing executed
+    assert imessage.dry_run_log[-1]["argv"][3] == "+15554445672"
+
+
+@pytest.mark.parametrize(
+    "stderr, hint",
+    [
+        (
+            "0:120: execution error: Messages got an error: "
+            "Can’t get participant id \"+15551234567\". (-1728)",
+            "could not find that contact",
+        ),
+        (
+            "12:40: execution error: Messages got an error: AppleEvent handler failed. (-10000)",
+            "iMessage is signed in",
+        ),
+        ("execution error: Messages isn’t running. (-600)", "not running"),
+    ],
+)
+async def test_applescript_errors_are_surfaced_without_the_handle(monkeypatch, stderr, hint):
+    async def fails(argv):
+        return 1, stderr
+
+    monkeypatch.setattr(imessage, "run_osascript", fails)
+    response = await send(await draft())
+    assert response.status == "failed"
+    assert hint in response.summary and "Messages said:" in response.summary
+    assert "5551234567" not in response.summary
+    if "+15551234567" in stderr:
+        assert "+1•••••4567" in response.summary
+
+
+async def test_applescript_error_drops_message_text():
+    code, reason = imessage.applescript_error(
+        "1:2: execution error: Can’t send “secret plan” to +15551234567. (-1708)",
+        "+15551234567",
+        "secret plan",
+    )
+    assert code == "-1708"
+    assert "secret plan" not in reason and "+15551234567" not in reason and "+1•••••4567" in reason
+
+
+async def test_consent_required_maps_to_needs_permission(monkeypatch):
+    async def needs_consent(argv):
+        return 1, "execution error: Not authorized. (-1744)"
+
+    monkeypatch.setattr(imessage, "run_osascript", needs_consent)
+    assert (await send(await draft())).status == "needs_permission"
