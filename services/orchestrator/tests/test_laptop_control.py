@@ -435,3 +435,32 @@ async def test_llm_reply_stands_when_spotify_worked():
             user("play Bad Guy on Spotify"), config(asi_one_api_key="k", spotify_executor_token=SPOTIFY_TOKEN), http
         )
     assert reply.reply == "Enjoy Bad Guy!"
+
+
+async def test_a_spotify_control_that_reached_the_agent_is_never_resent(monkeypatch):
+    # A 500 or an unreadable answer may come after the skip already happened; resending
+    # "next" would skip twice. Only a request that never connected is retried.
+    monkeypatch.setattr(chat, "RETRY_DELAY", 0)
+    for answer in (httpx.Response(500, json={}), httpx.Response(200, text="not json")):
+        seen = []
+
+        def handle(request, answer=answer):
+            seen.append(request.url.path)
+            return answer
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+            call = await call_agent(
+                AgentKind.SPOTIFY, SpotifyArgs(action="next"),
+                config(spotify_executor_token=SPOTIFY_TOKEN), http,
+            )
+        assert seen == ["/spotify"] and call.error
+    attempts = []
+
+    def refuse(request):
+        attempts.append(request.url.path)
+        raise httpx.ConnectError("refused", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(refuse)) as http:
+        await call_agent(AgentKind.SPOTIFY, SpotifyArgs(action="next"),
+                         config(spotify_executor_token=SPOTIFY_TOKEN), http)
+    assert len(attempts) == chat.ATTEMPTS  # never reached the agent: safe to retry

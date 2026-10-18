@@ -31,10 +31,12 @@ CACHE_SECONDS = 600
 _picks: dict[tuple, tuple[float, dict | None]] = {}
 
 PRICE_BOXES = ("corePriceDisplay_desktop_feature_div", "corePrice_feature_div", "corePrice_desktop")
+# Elements naming the seller; the first one with text counts (Amazon repeats the merchant
+# line for its desktop and mobile layouts, so joining every match doubled the name).
 SELLER_PATHS = (
-    '//*[@id="sellerProfileTriggerId"]//text()',
-    '//*[@id="merchantInfoFeature_feature_div"]//*[contains(@class,"offer-display-feature-text-message")]//text()',
-    '//*[@id="tabular-buybox"]//*[contains(@class,"tabular-buybox-text")][last()]//text()',
+    '//*[@id="sellerProfileTriggerId"]',
+    '//*[@id="merchantInfoFeature_feature_div"]//*[contains(@class,"offer-display-feature-text-message")]',
+    '//*[@id="tabular-buybox"]//*[contains(@class,"tabular-buybox-text")][last()]',
 )
 
 
@@ -103,7 +105,9 @@ def parse_listing_page(page: str, asin: str) -> dict | None:
             break
     seller = None
     for path in SELLER_PATHS:
-        text = " ".join(" ".join(doc.xpath(path)).split())
+        text = next(
+            (t for e in doc.xpath(path) if (t := " ".join(e.text_content().split()))), ""
+        )
         if text:
             seller = text[:80]
             break

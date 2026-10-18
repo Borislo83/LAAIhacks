@@ -422,8 +422,6 @@ async def test_stale_approval_refreshes_and_confirms_again(base_url, tmp_path):
         )
         assert approval["status"] == "approved"
         assert confirmations == [stale_revision + 1]
-        # A user who declines on the refreshed screen approves nothing.
-        assert glasses.revision > stale_revision
 
 
 async def test_declining_after_refresh_approves_nothing(base_url, tmp_path):
@@ -486,8 +484,22 @@ async def test_reject_path_emits_no_event(base_url, tmp_path):
         assert [label for _, label in render(after).items] == [
             "Compare prices and alternatives"
         ]
-        # A rejected action can no longer be approved.
-        assert await g2.decide(by_type(after, "compare_prices")["action_id"], "reject")
+        # A rejected action can no longer be approved: the API itself refuses it (the
+        # simulator's decide() wouldn't even send it, as it is no longer listed).
+        from laai_agents.g2_sim import G2Error
+
+        try:
+            await g2.call("POST", f"{g2.path}/actions/{reviews}/approve", {
+                "schema_version": "1.0", "request_id": "g2-reapprove-rejected",
+                "expected_revision": g2.revision,
+            })
+        except G2Error as exc:
+            refused = exc
+        else:
+            refused = None
+        assert refused is not None and refused.status in (404, 409, 410), refused
+        await g2.refresh()
+        assert by_type(g2.display, "find_reviews")["status"] == "rejected"
     assert await events(base_url, session_id) == []
     assert await worker.poll_once() == 0
     await worker.close()

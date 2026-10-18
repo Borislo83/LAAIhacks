@@ -107,3 +107,11 @@ async def test_rest_route(opened):
     route = build_youtube_agent()._rest_handlers[("POST", "/youtube/open")]
     result = await route(None, YouTubeOpenRequest(url=WATCH, executor_token=TOKEN))
     assert result.status == "opened" and opened == [["open", WATCH]]
+
+
+async def test_rest_route_refuses_a_wrong_token(opened):
+    route = build_youtube_agent()._rest_handlers[("POST", "/youtube/open")]
+    for token in ("wrong", ""):
+        result = await route(None, YouTubeOpenRequest(url=WATCH, executor_token=token))
+        assert result.status == "refused"
+    assert opened == []

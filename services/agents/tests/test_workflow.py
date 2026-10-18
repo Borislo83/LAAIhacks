@@ -129,7 +129,7 @@ async def test_alternatives_keep_candidates_when_stores_hide_prices(monkeypatch)
     async def search(query):
         return [], {"sources": [], "data_source": "ddgs", "notice": "n"}
 
-    async def no_price(req):
+    async def no_price(req, deadline=None):
         return PriceCompareResponse(product=req.product, offers=[], summary="none")
 
     monkeypatch.setattr(live, "search", search)

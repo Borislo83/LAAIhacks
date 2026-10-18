@@ -36,3 +36,17 @@ test('007 reruns cleanly',async()=>{
   assert.equal((await rpc('actions',sid,{request_id:'a1',page_id:'page-1',actions:[cart]})).error,undefined);
  }finally{await db.close()}
 });
+
+test('007 ignores a proposal that asks to skip approval: the cart action still needs it',async()=>{
+ const db=await freshDb(CART);
+ try{
+  const rpc=workflow(db);const sid=(await rpc('create')).session_id;
+  await rpc('page',sid,page);
+  const result=await rpc('actions',sid,{request_id:'a1',page_id:'page-1',
+   actions:[{...cart,requires_approval:false}]});
+  assert.equal(result.error,undefined);
+  const shown=(await rpc('display',sid)).actions;
+  assert.deepEqual(shown.map(a=>[a.type,a.requires_approval,a.status]),
+   [['add_to_amazon_cart',true,'proposed']]);
+ }finally{await db.close()}
+});

@@ -367,3 +367,16 @@ async def test_web_search_listings_are_priced_from_their_own_pages(monkeypatch):
     listing = await cart_action.pick_listing({"url": "https://example.com/x"}, PRODUCT)
     assert listing["asin"] == "B09Z2S9FSX" and listing["price"] == 299.0
     assert listing["seller"] == "Amazon.com"
+
+
+async def test_dry_run_is_on_unless_explicitly_disabled(executor, monkeypatch):
+    # conftest sets AMAZON_CART_DRY_RUN=1 for every test; the default itself must be on.
+    monkeypatch.delenv("AMAZON_CART_DRY_RUN")
+    assert cart_action.dry_run()
+    message = await cart_action.add_listing(LISTING)
+    assert message.startswith("Dry run:") and executor.calls == []
+    for value in ("1", "", "true", "yes"):
+        monkeypatch.setenv("AMAZON_CART_DRY_RUN", value)
+        assert cart_action.dry_run()
+    monkeypatch.setenv("AMAZON_CART_DRY_RUN", "0")
+    assert not cart_action.dry_run()

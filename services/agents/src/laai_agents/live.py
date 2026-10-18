@@ -464,7 +464,9 @@ async def browse(req):
     )  # fmt: skip
 
 
-async def compare(req):
+async def compare(req, deadline: float | None = None):
+    """`deadline` (seconds, default PRICE_DEADLINE) lets a caller with less time left get
+    the offers found so far instead of being cancelled with nothing."""
     from .merchants import best_offer, rank
 
     if getattr(req, "browse", False):
@@ -484,7 +486,8 @@ async def compare(req):
     state: dict = {"sources": [], "meta": None}
     web = asyncio.create_task(_web_offers(name, deep, found, state))
     listings_task = asyncio.create_task(store_listings(name, budget))
-    done, pending = await asyncio.wait({web, listings_task}, timeout=PRICE_DEADLINE)
+    limit = PRICE_DEADLINE if deadline is None else min(deadline, PRICE_DEADLINE)
+    done, pending = await asyncio.wait({web, listings_task}, timeout=limit)
     for task in pending:
         task.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
@@ -505,9 +508,9 @@ async def compare(req):
     if listings:
         meta["data_source"] = "store_api+" + (meta["data_source"] if state["meta"] else "web")
     if partial:
-        report("deadline", f"Answering after {PRICE_DEADLINE:g}s with the offers found so far")
+        report("deadline", f"Answering after {limit:.3g}s with the offers found so far")
         meta["notice"] = (meta.get("notice") or "") + (
-            f" Some stores didn't answer within {PRICE_DEADLINE:g} s; results may be incomplete."
+            f" Some stores didn't answer within {limit:.3g} s; results may be incomplete."
         )
         meta["notice"] = meta["notice"].strip()
     # Rank by trust, then price; only clear mismatches were dropped.
@@ -532,7 +535,8 @@ async def compare(req):
         product=name, offers=offers, best=best, savings=None, partial=partial,
         summary=price_summary(name, offers, best, budget), **meta,
     )  # fmt: skip
-    if offers or not partial:
+    # A lookup cut short for a caller with little time left isn't reused for a full one.
+    if (offers or not partial) and not (partial and limit < PRICE_DEADLINE):
         while len(_PRICE_CACHE) >= 256:
             del _PRICE_CACHE[next(iter(_PRICE_CACHE))]
         ttl = PARTIAL_CACHE_SECONDS if partial else CACHE_SECONDS
@@ -658,8 +662,9 @@ async def alternatives(req):
     found = result("search")
     if found is None or isinstance(found, SearchUnavailable):
         # The category search only adds source links; the candidates are checked on their own.
+        why = "didn't finish in time" if found is None else "unavailable"
         found = ([], {"data_source": "unavailable", "sources": [],
-                      "notice": "Category search unavailable; each candidate was checked directly."})
+                      "notice": f"Category search {why}; each candidate was checked directly."})
     elif isinstance(found, BaseException):
         raise found
     sources, meta = found
@@ -693,25 +698,46 @@ async def alternatives(req):
     # Catalog leads without a price stay last.
     priced = list({a.product.lower(): a for a in reversed(priced)}.values())
     priced.sort(key=lambda a: (not a.verified, -(a.rating or 0), a.price))
-    options = (priced + unpriced)[:MAX_ALTERNATIVES]
+    # The product's own older or newer model is not a rival: never the top pick, listed
+    # after the rivals and named as what it is.
+    same_line = [a for a in priced + unpriced if other_generation(a.product, name)]
+    priced = [a for a in priced if not other_generation(a.product, name)]
+    unpriced = [a for a in unpriced if not other_generation(a.product, name)]
+    options = (priced + unpriced + same_line)[:MAX_ALTERNATIVES]
+    within = f" under ${req.max_price:.2f}" if req.max_price is not None else ""
+    late = partial or any("in time" in (a.reason or "") for a in unpriced)
     if priced:
         verified = sum(a.verified for a in priced)
+        count = len(priced) + len(unpriced)
         summary = (
-            f"{len(options)} alternatives, {len(priced)} priced ({verified} verified). "
-            f"Top pick {budget}: {_short(priced[0].product)} at ${priced[0].price:.2f} "
+            f"{count} alternative{'s' if count != 1 else ''}, {len(priced)} priced "
+            f"({verified} verified). "
+            f"Top pick{within}: {_short(priced[0].product)} at ${priced[0].price:.2f} "
             f"({'verified' if priced[0].verified else 'unverified'}). "
             "Check availability and final checkout price at the source."
         )
     elif unpriced:
         summary = (
             f"Alternatives to consider: {', '.join(a.product for a in unpriced)}. "
-            f"Stores didn't share prices with the search, so check each is {budget}."
+            f"No store price for them could be read{' in time' if late else ''}, "
+            "so compare prices yourself"
+            + (f" and check each is{within}." if within else ".")
+        )
+    elif same_line:
+        summary = f"No rival products to {name} were found{' in time' if partial else ''}."
+    elif sources:
+        summary = (
+            f"Found alternative research sources{within}, but no specific product could be "
+            "checked; review the linked sources before choosing."
         )
     else:
         summary = (
-            f"Found alternative research sources {budget}, but no known products in the "
-            "same category; review the linked sources before choosing."
+            f"No alternatives to {name} could be found{' in time' if partial else ''}. "
+            "Try again in a moment."
         )
+    if same_line:
+        labels = "; ".join(_same_line_label(a, name) for a in same_line)
+        summary += f" Same line, other generation: {labels}."
     notice = meta.get("notice")
     if partial:
         notice = ((notice or "") + f" Some lookups didn't finish within {ALT_DEADLINE:g} s; "
@@ -761,6 +787,37 @@ def _same_product(a: str, b: str) -> bool:
     return names_product(a, b) or names_product(b, a) or SequenceMatcher(None, na, nb).ratio() >= 0.7
 
 
+def _same_line_label(a, name: str) -> str:
+    """'AirPods Pro 2 (older model, $189.00 at Amazon)' for the product's own other model."""
+    price = f", ${a.price:.2f} at {a.store}" if a.price is not None else ""
+    price += ", unverified" if a.price is not None and not a.verified else ""
+    return f"{a.product} ({other_generation(a.product, name)}{price})"
+
+
+def _merge_names(ranked: list[list]) -> list[list]:
+    """One entry per product: "AirPods 5 earbuds" is the "AirPods 5", and "Apple AirPods
+    Pro 1" the "AirPods Pro 1" (a category word or a leading brand adds nothing). Counts
+    add up; the most compared spelling is kept."""
+    merged: list[list] = []
+    for label, count in ranked:
+        words = _tokens(label)
+        key = set(words) - GENERIC_WORDS
+        for entry in merged:
+            other = _tokens(entry[0])
+            known = set(other) - GENERIC_WORDS
+            extra = key ^ known
+            if key == known or (
+                len(extra) == 1
+                and (key < known or known < key)
+                and next(iter(extra)) == (words if key > known else other)[0]
+            ):
+                entry[1] += count
+                break
+        else:
+            merged.append([label, count])
+    return sorted(merged, key=lambda e: -e[1])
+
+
 def versus_titles(sources, name: str) -> tuple[str | None, list[tuple[str, int]]]:
     """(the product's real name, [(rival, count)]) from "A vs B" headlines.
 
@@ -789,7 +846,7 @@ def versus_titles(sources, name: str) -> tuple[str | None, list[tuple[str, int]]
             key = re.sub(r"[^a-z0-9]", "", part.lower())
             entry = counts.setdefault(key, [part, 0])
             entry[1] += 1
-    ranked = sorted(counts.values(), key=lambda e: -e[1])
+    ranked = _merge_names(sorted(counts.values(), key=lambda e: -e[1]))
     wanted = re.sub(r"[^a-z0-9]", "", name.lower())
 
     def resembles(label: str) -> bool:
@@ -829,14 +886,24 @@ async def compared_alternatives(name: str, max_price: float | None, until: float
     except SearchUnavailable:
         return [], []
     rivals = compared_products(sources, name)[:5]
+    # Real rivals are priced first (searches run two at a time); the product's own other
+    # generations, shown only as such, queue behind them.
+    rivals.sort(key=lambda r: other_generation(r[0], name) is not None)
     if not rivals:
         return [], []
     report("comparing", f"Checking prices for {', '.join(r for r, _ in rivals)}")
+    wait = None if until is None else max(0.2, until - time.monotonic())
+    # Each rival's lookup answers by the time left with what it found (cancelling it at
+    # `until` would drop the store prices it already had).
     tasks = [
-        asyncio.create_task(compare(PriceCompareRequest(product=r, max_price=max_price)))
+        asyncio.create_task(
+            compare(
+                PriceCompareRequest(product=r, max_price=max_price),
+                deadline=None if wait is None else max(0.1, wait - 0.15),
+            )
+        )
         for r, _ in rivals
     ]
-    wait = None if until is None else max(0.2, until - time.monotonic())
     _, pending = await asyncio.wait(tasks, timeout=wait)
     for task in pending:
         task.cancel()
@@ -853,8 +920,12 @@ async def compared_alternatives(name: str, max_price: float | None, until: float
             why = f"{generation.capitalize()} of {name}, not a rival"
         best = None if isinstance(result, BaseException) else result.best
         if best is None:
-            unpriced.append(Alternative(product=rival, price=None, url=_research_url(rival),
-                                        reason=f"{why}; no store price could be read, check it yourself"))
+            late = isinstance(result, TimeoutError) or getattr(result, "partial", False)
+            unpriced.append(Alternative(
+                product=rival, price=None, url=_research_url(rival),
+                reason=f"{why}; no store price could be read{' in time' if late else ''}, "
+                "check it yourself",
+            ))  # fmt: skip
         elif max_price is None or best.price < max_price:
             priced.append(_priced(best, rival, why))
     return priced, unpriced

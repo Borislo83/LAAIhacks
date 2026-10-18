@@ -8,12 +8,13 @@ export const M={
  preferences:'202610170003_user_preferences.sql',v1_1:'202610170004_workflow_v1_1.sql',perf:'202610170005_workflow_perf.sql',
  sessions:'202610170006_session_list.sql',cart:'202610170007_cart_action.sql',
 };
-// Every behavior test runs against what is live today and against the next migration on top.
+// Every behavior test runs against the oldest stack still in use, 005 on top, and the
+// deployed stack (006 session list, 007 cart action, which replaces laai_workflow_apply).
 export const LIVE=[M.orchestrator,M.shared,M.preferences,M.v1_1];
 export const NEXT=[...LIVE,M.perf];
 export const WATCH=[...NEXT,M.sessions];
 export const CART=[...WATCH,M.cart];
-export const STACKS={'001-004 (live)':LIVE,'001-005':NEXT};
+export const STACKS={'001-004':LIVE,'001-005':NEXT,'001-007 (deployed)':CART};
 
 export const migration=name=>readFile(new URL('../migrations/'+name,import.meta.url),'utf8');
 

@@ -399,7 +399,7 @@ async def test_older_generation_is_labeled_not_listed_as_a_rival(monkeypatch):
         ])]  # fmt: skip
         return sources, {"sources": sources, "data_source": "ddgs", "notice": None}
 
-    async def compare(req):
+    async def compare(req, deadline=None):
         return type("R", (), {"best": None, "sources": []})()
 
     monkeypatch.setattr(live, "search", search)
