@@ -75,7 +75,13 @@ a{color:var(--ink);text-underline-offset:3px}
 @keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.5}30%{transform:translateY(-45%);opacity:1}}
 .orb .s7{animation:read 2.2s ease-in-out infinite;transform-box:fill-box;transform-origin:left center}
 @keyframes read{0%,100%{transform:scaleX(.35);opacity:.45}50%{transform:scaleX(1);opacity:1}}
+.orb .s8{stroke-dasharray:1;animation:tick 2.2s ease-in-out infinite}
+@keyframes tick{0%{stroke-dashoffset:1;opacity:1}45%,80%{stroke-dashoffset:0;opacity:1}100%{stroke-dashoffset:0;opacity:0}}
+.orb .s9{animation:recall 2.1s ease-in-out infinite}
+@keyframes recall{0%,100%{opacity:.2}35%{opacity:1}}
 .orb.idle *{animation-play-state:paused}
+/* an idle verifier shows its finished tick, not the empty first frame */
+.orb.idle .s8{animation:none}
 
 /* what lands on the lens: dark glass, green type */
 .lensbox{background:var(--lens-bg);border:1px solid var(--hair);border-radius:var(--r);padding:14px 16px;font-family:var(--mono);color:var(--lens);font-size:12px;line-height:19px;display:flex;flex-direction:column;gap:2px}

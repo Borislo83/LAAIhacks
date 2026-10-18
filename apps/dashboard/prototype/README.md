@@ -35,7 +35,15 @@ Sign in or complete Amazon verification in that Chrome window if asked. Its cart
 to that browser profile, not automatically to your normal browser. Product-name searches
 need online search; direct listing URLs prepare the review without a search.
 
-- **Chat:** plain-language questions go to the orchestrator's `POST /v1/chat` (:8001), which picks the agents.
+- **Chat:** pick any of the ten agents in the roster to chat with it. The **Focal coordinator**
+  (`focal-shopping-assistant`) is the full chat: questions go to the orchestrator's
+  `POST /v1/chat/stream` (:8001), which picks the agents. Every other agent's chat is scoped:
+  it goes to `POST /v1/agents/<agent-name>/chat/stream` and calls only that agent's route, never
+  another agent. Each agent keeps its own conversation. The **Price verifier** audits offers you
+  paste (store and price each) and never asks the price agent; pasted prices count as medium trust
+  at best. **Memory** saves a message starting with "Remember" and recalls on anything else, keyed
+  by your account. The cart and iMessage chats keep their approval steps: a cart addition needs the
+  review you approved, and a draft sends only from its Approve button.
 - **Direct:** fill in the fields and call the agents' REST routes on the Bureau (:8000) yourself.
 - Usage (calls, average time, errors) is counted in this browser only.
 - Ask "Consider Sony XM5 and recommend an alternative under $300" to delegate to all

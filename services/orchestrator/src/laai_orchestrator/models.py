@@ -144,7 +144,7 @@ class SpotifyArgs(BaseModel):
 
 
 class AgentCall(BaseModel):
-    kind: AgentKind | Literal["buyer", "message"]
+    kind: AgentKind | Literal["buyer", "message", "verifier", "memory"]
     payload: dict[str, Any]
     result: dict[str, Any] | None = None
     error: str | None = None
@@ -157,7 +157,8 @@ class ChatReply(BaseModel):
     # Best price / alternative / recommended, each with an Amazon or Best Buy cart link
     # when the product comes from one of those stores.
     picks: list[dict[str, Any]] = Field(default_factory=list)
-    source: Literal["asi_one", "rules", "coordinator", "buyer"]
+    # "agent": a dashboard chat scoped to one specialist, which calls only that agent.
+    source: Literal["asi_one", "rules", "coordinator", "buyer", "agent"]
     # The product the coordinator researched and its photo, shown above the picks.
     product: str | None = None
     image: str | None = None
