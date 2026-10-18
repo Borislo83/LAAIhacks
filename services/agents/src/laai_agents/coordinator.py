@@ -30,6 +30,10 @@ from .models import (
 from .progress import ProgressBatch, ProgressQuery, publish, read
 
 
+ATTEMPTS = 3
+RETRY_DELAY = 1.0
+
+
 def budget_from(text: str) -> float | None:
     match = re.search(
         r"(?:under|below|up to|at most|budget(?:\s+of)?)\s*\$?\s*(\d[\d,]*(?:\.\d{1,2})?)",
@@ -49,6 +53,17 @@ async def parse_request(text: str) -> ConsiderRequest | None:
     ):
         return None
     return ConsiderRequest(product=product[:500], max_price=budget_from(text))
+
+
+def compare_reviews(main: ReviewsResponse, alt: ReviewsResponse) -> str:
+    def line(r: ReviewsResponse) -> str:
+        if r.error:
+            return f"{r.product}: reviews unavailable right now"
+        if r.rating is not None:
+            return f"{r.product}: {r.rating}/5 from {r.review_count:,} reviews"
+        return f"{r.product}: {len(r.sources)} review sources found"
+
+    return f"Reviews compared: {line(main)} vs {line(alt)}."
 
 
 async def consider(
@@ -85,19 +100,53 @@ async def consider(
         publish(
             req.progress_id, field, "delegated", "Coordinator sent work to specialist"
         )
-        try:
-            result, _ = await ctx.send_and_receive(
-                addresses[name],
-                request,
-                response_type,
-                timeout=90,
-            )
-            return field, result, round((time.perf_counter() - started) * 1000)
-        except Exception:  # noqa: BLE001 -- isolate a failed specialist from the remaining work
-            return field, None, round((time.perf_counter() - started) * 1000)
+        result = None
+        # Retry an unreachable specialist or a failed search; keep the last answer.
+        for attempt in range(ATTEMPTS):
+            if attempt:
+                publish(
+                    req.progress_id,
+                    field,
+                    "retrying",
+                    f"No usable answer yet; retrying ({attempt + 1} of {ATTEMPTS})",
+                )
+                await asyncio.sleep(RETRY_DELAY * attempt)
+            try:
+                answer, _ = await ctx.send_and_receive(
+                    addresses[name],
+                    request,
+                    response_type,
+                    timeout=45,
+                )
+            except Exception:  # noqa: BLE001 -- isolate a failed specialist from the remaining work
+                answer = None
+            if isinstance(answer, response_type):
+                result = answer
+                if not answer.error:
+                    break
+        return field, result, round((time.perf_counter() - started) * 1000)
 
+    async def alternatives_then_reviews():
+        # Reviews for the top alternative start as soon as alternatives are known.
+        first = await delegate(specs[2])
+        top = first[1].alternatives[0].product if first[1] and first[1].alternatives else None
+        if top is None:
+            return [first]
+        second = await delegate(
+            (
+                "alternative_reviews",
+                "laai-reviews",
+                ReviewsRequest(product=top, progress_id=req.progress_id),
+                ReviewsResponse,
+            )
+        )
+        return [first, second]
+
+    *direct, chained = await asyncio.gather(
+        delegate(specs[0]), delegate(specs[1]), alternatives_then_reviews()
+    )
     values, errors, timings = {}, {}, {}
-    for field, result, elapsed in await asyncio.gather(*(delegate(s) for s in specs)):
+    for field, result, elapsed in [*direct, *chained]:
         timings[field] = elapsed
         if result is None:
             errors[field] = "Specialist unavailable; no result was fabricated."
@@ -105,7 +154,11 @@ async def consider(
             values[field] = result
             if result.error:
                 errors[field] = result.error
-    sections = [result.summary for result in values.values()]
+    sections = [
+        result.summary for field, result in values.items() if field != "alternative_reviews"
+    ]
+    if "reviews" in values and "alternative_reviews" in values:
+        sections.append(compare_reviews(values["reviews"], values["alternative_reviews"]))
     sections.extend(f"{field}: {error}" for field, error in errors.items())
     if any(result.data_source == "demo_catalog" for result in values.values()):
         sections.insert(
