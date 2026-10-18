@@ -13,7 +13,7 @@ This page explains what each team gets and how to plug in. Contract terms follow
 | `202610170003_user_preferences.sql` | `user_preferences` + private notes | Applied (do not rerun) |
 | `202610170004_workflow_v1_1.sql` | Event ack, invalidation outbox, devices, rate-limit fix | Applied 2026-10-17 |
 | `202610170005_workflow_perf.sql` | Lock/index/retention fixes (no API change) | Applied 2026-10-17 (pg_cron not installed: daily purge not scheduled) |
-| `202610170006_session_list.sql` | `sessions` read operation for `GET /v1/sessions` (page watcher) | **Not applied** |
+| `202610170006_session_list.sql` | `sessions` read operation for `GET /v1/sessions` (page watcher) | Applied 2026-10-18 (SQL editor) |
 
 004, 005 and 006 only use `create or replace` / `if [not] exists`, so applying any of them
 twice is harmless. 006 replaces only the `laai_workflow` entry point (rate limit unchanged)
