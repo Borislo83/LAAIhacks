@@ -52,7 +52,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "$ref": "#/components/schemas/TaskKind"
+              "$ref": "#/components/schemas/AgentKind"
             }
           }
         ],
@@ -451,7 +451,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "$ref": "#/components/schemas/TaskKind"
+              "$ref": "#/components/schemas/AgentKind"
             }
           }
         ],
@@ -2050,7 +2050,7 @@
           "kind": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/TaskKind"
+                "$ref": "#/components/schemas/AgentKind"
               },
               {
                 "type": "string",
@@ -2099,6 +2099,17 @@
           "ms"
         ],
         "title": "AgentCall"
+      },
+      "AgentKind": {
+        "type": "string",
+        "enum": [
+          "price",
+          "alternatives",
+          "reviews",
+          "youtube"
+        ],
+        "title": "AgentKind",
+        "description": "Every routable specialist. Only the shopping TaskKinds are persisted as tasks."
       },
       "ApprovalResponse": {
         "properties": {
@@ -3266,9 +3277,16 @@
       "ToolArgs": {
         "properties": {
           "product": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Product"
           },
           "current_store": {
@@ -3306,12 +3324,32 @@
               }
             ],
             "title": "Max Price"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "song",
+              "video",
+              "auto"
+            ],
+            "title": "Kind",
+            "default": "auto"
           }
         },
         "type": "object",
-        "required": [
-          "product"
-        ],
         "title": "ToolArgs",
         "description": "Agent arguments chosen by the LLM; validated before any agent call."
       },

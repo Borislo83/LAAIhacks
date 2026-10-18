@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from .asi_one import complete
 from .config import Config
-from .models import FIELDS, AgentCall, ChatMessage, ChatReply, TaskKind, ToolArgs
+from .models import FIELDS, AgentCall, AgentKind, ChatMessage, ChatReply, TaskKind, ToolArgs
 from .preferences import preference_context, preferred_tasks
 from .progress import agent_request
 
@@ -19,6 +19,8 @@ MAX_ROUNDS = 3
 
 SYSTEM = """You are Focal, a shopping assistant on smart glasses. You answer by calling agents.
 Tools:
+- find_youtube: a YouTube link for a song or video. Use it, not the shopping tools, whenever the
+  user wants to play, watch, listen to or find a song, music video or other video.
 - compare_prices: where a product is cheapest. Use for price, deals, "where to buy", savings.
 - find_alternatives: cheaper or better-rated competitors. Use for "something else", "cheaper", "vs".
 - get_reviews: rating, pros and cons. Use for "is it good", "worth it", quality questions.
@@ -59,19 +61,58 @@ TOOLS = [
         ),
         ("get_reviews", "Rating, review count, pros and cons for a product.", {}),
     ]
+] + [
+    {
+        "type": "function",
+        "function": {
+            "name": "find_youtube",
+            "description": "Find a YouTube link for a song or video the user asks for.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Song or video, with the artist"},
+                    "kind": {"type": "string", "enum": ["song", "video", "auto"]},
+                },
+                "required": ["query"],
+            },
+        },
+    }
 ]
 TOOL_KINDS = {
-    "compare_prices": TaskKind.PRICE,
-    "find_alternatives": TaskKind.ALTERNATIVES,
-    "get_reviews": TaskKind.REVIEWS,
+    "compare_prices": AgentKind.PRICE,
+    "find_alternatives": AgentKind.ALTERNATIVES,
+    "get_reviews": AgentKind.REVIEWS,
+    "find_youtube": AgentKind.YOUTUBE,
 }
+# Agent output is untrusted: only canonical watch or short links reach the user.
+YOUTUBE_LINK = re.compile(
+    r"https://(?:www\.youtube\.com/watch\?v=|youtu\.be/)[A-Za-z0-9_-]{11}"
+)
+
+
+def _youtube_link(url: Any) -> str | None:
+    return url if isinstance(url, str) and YOUTUBE_LINK.fullmatch(url) else None
+
+
+def safe_youtube(result: dict[str, Any]) -> dict[str, Any]:
+    """Drop any YouTube agent link that is not a canonical https video URL."""
+    alternatives = result.get("alternatives")
+    return {
+        **result,
+        "url": _youtube_link(result.get("url")),
+        "alternatives": [
+            alternative
+            for alternative in (alternatives if isinstance(alternatives, list) else [])
+            if isinstance(alternative, dict) and _youtube_link(alternative.get("url"))
+        ],
+    }
 # Each agent call is tried up to three times before it counts as failed.
 ATTEMPTS = 3
 RETRY_DELAY = 1.0
 
 
 async def call_agent(
-    kind: TaskKind, args: ToolArgs, config: Config, http: httpx.AsyncClient, emit=None
+    kind: AgentKind, args: ToolArgs, config: Config, http: httpx.AsyncClient, emit=None
 ) -> AgentCall:
     payload = args.model_dump(include=set(FIELDS[kind]))
     started = time.perf_counter()
@@ -104,6 +145,8 @@ async def call_agent(
             answer = response.json()
             if not isinstance(answer, dict) or not isinstance(answer.get("summary"), str):
                 raise TypeError("Invalid agent result")
+            if kind == AgentKind.YOUTUBE:
+                answer = safe_youtube(answer)
         except httpx.TimeoutException:
             break  # Retrying a timed-out request would only multiply the wait.
         except (httpx.HTTPError, ValueError, TypeError):
@@ -187,6 +230,8 @@ async def chat_with_llm(
             kind = TOOL_KINDS.get(name)
             try:
                 args = ToolArgs.model_validate_json(tool_call["function"]["arguments"] or "{}")
+                if kind and not args.suits(kind):
+                    kind = None
             except ValidationError:
                 kind = None
             planned.append((tool_call, name, grounded(args, user_text) if kind else None))
@@ -211,6 +256,7 @@ async def chat_with_llm(
     return rules_reply(calls)
 
 
+MEDIA_WORDS = r"\bsongs?\b|\bvideos?\b|\bplay\b|\bmusic\b|\blisten to\b"
 KEYWORDS = {
     TaskKind.PRICE: r"price|cheap|deal|cost|buy|sale|store|\$",
     TaskKind.ALTERNATIVES: r"alternative|instead|similar|other|cheaper|\bvs\b|versus|compare",
@@ -218,8 +264,14 @@ KEYWORDS = {
 }
 
 
+def _line(call: AgentCall) -> str:
+    link = call.result.get("url") if call.kind == AgentKind.YOUTUBE else None
+    summary = call.result["summary"]
+    return f"{summary} {link}" if link and link not in summary else summary
+
+
 def rules_reply(calls: list[AgentCall]) -> ChatReply:
-    lines = [c.result["summary"] for c in calls if c.result]
+    lines = [_line(c) for c in calls if c.result]
     reply = " ".join(lines) or "The agents are unavailable right now. Try again in a moment."
     return ChatReply(reply=reply, calls=calls, source="rules")
 
@@ -230,6 +282,17 @@ async def chat_with_rules(
     """No LLM: pick agents by keyword and treat the message as the product name."""
     text = history[-1].content
     kinds = [k for k, pattern in KEYWORDS.items() if re.search(pattern, text, re.IGNORECASE)]
+    if re.search(r"youtube", text, re.IGNORECASE) or (
+        not kinds and re.search(MEDIA_WORDS, text, re.IGNORECASE)
+    ):
+        # Media requests go to YouTube alone; "video doorbell reviews" stays shopping.
+        media = (
+            "video" if re.search(r"video", text, re.IGNORECASE)
+            else "song" if re.search(r"\bsongs?\b|\bmusic\b", text, re.IGNORECASE)
+            else "auto"
+        )
+        args = ToolArgs(query=text[:300], kind=media)
+        return rules_reply([await call_agent(AgentKind.YOUTUBE, args, config, http, emit)])
     if kinds and TaskKind.REVIEWS not in kinds:
         # Any shopping question is worth reviews, even without a review word in it.
         kinds.append(TaskKind.REVIEWS)
