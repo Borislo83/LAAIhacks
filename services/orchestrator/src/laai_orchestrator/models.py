@@ -61,13 +61,16 @@ class DispatchRequest(InputModel):
     confirmed: bool = False
 
 
+# The arguments each specialist accepts; shared by chat tool calls and page predictions.
+FIELDS = {
+    TaskKind.PRICE: ("product", "current_store", "current_price"),
+    TaskKind.ALTERNATIVES: ("product", "max_price"),
+    TaskKind.REVIEWS: ("product",),
+}
+
+
 def agent_payload(kind: TaskKind, product: str, page: PageContext) -> dict[str, Any]:
-    payload: dict[str, Any] = {"product": product}
-    if kind == TaskKind.PRICE:
-        payload.update(current_store=page.current_store, current_price=page.current_price)
-    elif kind == TaskKind.ALTERNATIVES:
-        payload["max_price"] = page.max_price
-    return payload
+    return {f: product if f == "product" else getattr(page, f) for f in FIELDS[kind]}
 
 
 class ChatMessage(InputModel):
