@@ -253,6 +253,31 @@ uv run python -m laai_agents.integration --journal /tmp/focal-sony.json propose 
 uv run python -m laai_agents.integration --journal /tmp/focal-sony.json poll
 ```
 
+To propose automatically for every page the glasses open, run the watcher. It combines
+propose and poll for every session of the tokens' user:
+
+```bash
+uv run laai-glasses-executor --journal ~/.local/state/laai/watch.json watch
+```
+
+Each pass lists the user's sessions (`GET /v1/sessions`, migration
+`202610170006_session_list.sql`) and re-reads only the sessions whose revision changed. A
+`product` page with no actions gets `compare_prices` and `find_reviews` for the product its
+title names. The watcher then runs approved actions and posts their results, as `poll` does.
+It does not propose in these cases:
+
+- the page already has actions, from any proposer, including rejected ones;
+- the page was replaced before the proposal landed (the API returns 409 and the watcher
+  does not retry);
+- the session has been idle for 15 minutes;
+- the page kind has no handler (`article` and `generic`, see `PROPOSALS`).
+
+The journal keeps each session's proposal and result request IDs, so a restart resends the
+same IDs instead of proposing twice. `--once` makes a single pass, and `--interval` sets the
+seconds between passes (default 2). A watcher journal cannot be used with `propose`/`poll`,
+and a propose/poll journal cannot be used with `watch`. `tests/test_g2_watcher.py` covers
+the whole path: page PUT, proposal, G2 approval, then the result on the display.
+
 Use `--session SESSION_ID` when the browser has already created the session. Page and
 action request IDs are retained across retries. The client proposes two allowed actions:
 `compare_prices` (explicitly labeled prices AND alternatives) and `find_reviews`.

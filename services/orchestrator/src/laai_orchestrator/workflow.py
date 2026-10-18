@@ -124,6 +124,20 @@ class SessionStatus(SessionRef):
     expires_at: datetime
 
 
+class SessionSummary(Output):
+    session_id: UUID
+    revision: int
+    active_page_id: str | None = None
+    updated_at: datetime
+    expires_at: datetime
+
+
+class SessionList(Output):
+    """The caller's unexpired sessions, newest activity first (at most 100)."""
+
+    sessions: list[SessionSummary]
+
+
 class Device(Output):
     device_id: UUID
     last_seen_at: datetime
@@ -220,6 +234,8 @@ ERRORS = {
 
 ROLES = {
     "create": {"web"},
+    # Agent-side watchers find each session's page PUTs by comparing revisions.
+    "sessions": {"agent", "executor"},
     "page": {"web"},
     "actions": {"agent"},
     "display": {"web", "g2"},
@@ -291,6 +307,10 @@ def router(current_user):
     ):
         payload = body.model_dump(mode="json", exclude_none=True) if body else {}
         return await operate(request, user, "create", body=payload)
+
+    @routes.get("/v1/sessions", **route(SessionList, "sessions"))
+    async def list_sessions(request: Request, user: UUID = user_dependency):
+        return await operate(request, user, "sessions")
 
     @routes.get("/v1/sessions/{session_id}", **route(SessionStatus, "status"))
     async def session_status(session_id: UUID, request: Request, user: UUID = user_dependency):

@@ -81,7 +81,7 @@ revision you rendered, keep showing the current screen on a 204, and poll about 
 ```
 → `{"schema_version":"1.0","session_id":"971abe4d-…","revision":2}`
 
-The executor (`laai_agents.integration`) then PUTs `compare_prices` and `find_reviews`.
+The executor (`laai_agents.integration`, or its `watch` mode on its own) then PUTs `compare_prices` and `find_reviews`.
 The next display poll returns:
 ```json
 {"schema_version":"1.0","session_id":"971abe4d-9839-4a3c-90f0-cb9e6a6e5c13","revision":4,
@@ -288,10 +288,27 @@ Focal actions reach the lens. To connect them:
    and "Links on page"). A tap opens a local confirm screen, and a second tap approves with the
    displayed `revision`. Show `loading`, `result` and `error` with the existing reader
    containers.
-4. **Who proposes actions.** Nothing does this automatically yet. `laai-glasses-executor
-   propose --page page.json --product "…"` is a manual CLI. For the live flow, an agent-side
-   watcher needs to propose actions after each page PUT. That is our side's work, and the
-   glasses app needs no change for it.
+4. **Who proposes actions.** `laai-glasses-executor watch` does it automatically, and the
+   glasses app needs no change for it. It lists the user's sessions (`GET /v1/sessions`,
+   `agent` or `executor` role, added with migration `202610170006_session_list.sql`) and
+   re-reads the display of each session whose revision changed. When the active page is a
+   `product` page with no actions yet, it proposes `compare_prices` and `find_reviews` for
+   the product named in the title. When the user approves one, it runs it and posts the
+   result, like `poll`. It never proposes for a page that has been replaced: the API refuses
+   that with 409, and the watcher does not retry. A new page PUT invalidates the old
+   page's actions, and the watcher then proposes for the new page. It also skips sessions
+   untouched for 15 minutes, and pages that already have actions from any proposer. Its
+   journal keeps proposal and result request IDs, so a restart sends the same proposal again
+   and the API applies it once. `article` and `generic` pages get no actions yet: a
+   news-summary action needs a new registered action type (see `PROPOSALS` in
+   `integration.py`).
+   ```bash
+   cd services/agents && uv run laai-glasses-executor --journal ~/.local/state/laai/watch.json watch
+   ```
+   Set `GLASSES_API_URL` and `GLASSES_{WEB,AGENT,EXECUTOR}_TOKEN` as in §7. `--once`
+   makes one pass and exits, and `--interval` sets the seconds between passes (default 2).
+   Each pass costs 1 request, plus about 3 for each session that changed, from the same
+   600-per-minute budget the G2 uses.
 5. **Network path and auth (blocker for real glasses).** The app runs in the phone's Even
    WebView and reaches the server over Wi-Fi or a tunnel. Demo tokens are refused from any
    address that is not loopback. The orchestrator's CORS allowlist (`CORS_ORIGINS`) holds only
@@ -336,3 +353,6 @@ run was not done. To run it:
    ```
    For the executor commands, set `GLASSES_API_URL=http://127.0.0.1:8001` and
    `GLASSES_{WEB,AGENT,EXECUTOR}_TOKEN=demo-{web,agent,executor}` in their environment.
+4. For the automatic flow, apply `202610170006_session_list.sql` too. Then run
+   `uv run laai-glasses-executor --journal /tmp/g2-watch.json watch` in place of the
+   propose and poll commands, and PUT pages from the web role or glasses-web-reader.
