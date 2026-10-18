@@ -186,9 +186,10 @@ def build_reviews_agent(port: int | None = None) -> Agent:
 
 
 def build_youtube_agent(port: int | None = None) -> Agent:
+    from . import laptop
     from .youtube import find_video
 
-    return build_specialist(
+    agent = build_specialist(
         "laai-youtube",
         YOUTUBE_SEED,
         "/youtube",
@@ -198,6 +199,14 @@ def build_youtube_agent(port: int | None = None) -> Agent:
         port,
         chat_request=lambda text: YouTubeRequest(query=text[:300]),
     )
+
+    # REST only, gated by the orchestrator's executor token: chat and agent messages
+    # can find a link but never open anything on the laptop.
+    @agent.on_rest_post("/youtube/open", laptop.YouTubeOpenRequest, laptop.YouTubeOpenResponse)
+    async def on_open(ctx: Context, req):
+        return await laptop.open_youtube(req)
+
+    return agent
 
 
 def build_spotify_agent(port: int | None = None) -> Agent:
