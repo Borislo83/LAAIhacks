@@ -117,7 +117,7 @@ class ToolArgs(BaseModel):
 
 
 class AgentCall(BaseModel):
-    kind: AgentKind | Literal["buyer"]
+    kind: AgentKind | Literal["buyer", "message"]
     payload: dict[str, Any]
     result: dict[str, Any] | None = None
     error: str | None = None
@@ -128,3 +128,21 @@ class ChatReply(BaseModel):
     reply: str
     calls: list[AgentCall]
     source: Literal["asi_one", "rules", "coordinator", "buyer"]
+
+
+class MessageRequest(BaseModel):
+    """message_friend tool arguments chosen by the LLM."""
+
+    request: str = Field(min_length=1, max_length=1000)
+
+
+class MessageSend(InputModel):
+    """A draft the signed-in user reviewed and confirmed; text may be edited first."""
+
+    draft_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class MessageSent(BaseModel):
+    status: Literal["sent", "failed", "needs_permission"]
+    summary: str = Field(max_length=2000)
