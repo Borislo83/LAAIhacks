@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from pydantic import ConfigDict, Field
 
+from .learning import LearnedPriority, effective_priority, learned_priority
 from .models import InputModel, TaskKind
 
 
@@ -23,6 +24,8 @@ class SavedPreferences(Preferences):
     model_config = ConfigDict(extra="ignore")
 
     updated_at: datetime
+    # Decisions before this reset are ignored when learning a priority (migration 006).
+    learned_since: datetime | None = None
 
 
 async def read_preferences(
@@ -38,6 +41,23 @@ async def read_preferences(
         },
     )
     return SavedPreferences.model_validate(row)
+
+
+async def learned_for(request: Request, user: UUID, saved: SavedPreferences) -> LearnedPriority:
+    learned = await learned_priority(request.app.state.store, user, saved.learned_since)
+    learned.effective, learned.source = effective_priority(
+        saved.shopping_priority, learned.priority
+    )
+    return learned
+
+
+async def effective_preferences(request: Request, user: UUID) -> SavedPreferences:
+    """Saved preferences with the learned priority filled in where the user left "balanced"."""
+    saved = await read_preferences(request, user)
+    if saved.shopping_priority != "balanced":
+        return saved  # The explicit setting wins; no need to read history.
+    learned = await learned_for(request, user, saved)
+    return saved.model_copy(update={"shopping_priority": learned.effective})
 
 
 def preferred_tasks(tasks, priority):
@@ -76,5 +96,16 @@ def router(current_user):
     @routes.put("/v1/preferences", response_model=SavedPreferences)
     async def put_preferences(body: Preferences, request: Request, user: UUID = user_dependency):
         return await read_preferences(request, user, body)
+
+    @routes.get("/v1/preferences/learned", response_model=LearnedPriority)
+    async def get_learned(request: Request, user: UUID = user_dependency):
+        return await learned_for(request, user, await read_preferences(request, user))
+
+    @routes.post("/v1/preferences/learned/reset", response_model=LearnedPriority)
+    async def reset_learned(request: Request, user: UUID = user_dependency):
+        await request.app.state.store.request(
+            "POST", "rpc/laai_reset_learned_priority", json={"p_user_id": str(user)}
+        )
+        return await learned_for(request, user, await read_preferences(request, user))
 
     return routes

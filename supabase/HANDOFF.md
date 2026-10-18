@@ -15,6 +15,7 @@ This page explains what each team gets and how to plug in. Contract terms follow
 | `202610170005_workflow_perf.sql` | Lock/index/retention fixes (no API change) | Applied 2026-10-17 (pg_cron not installed: daily purge not scheduled) |
 | `202610170006_session_list.sql` | `sessions` read operation for `GET /v1/sessions` (page watcher) | Applied 2026-10-18 (SQL editor) |
 | `202610170007_cart_action.sql` | Registers the `add_to_amazon_cart` action type; display's page carries `url` | Applied 2026-10-18 (SQL editor) |
+| `202610170008_learned_priority.sql` | `learned_since` + `laai_reset_learned_priority` (learned shopping priority reset) | Applied 2026-10-17 |
 
 004, 005 and 006 only use `create or replace` / `if [not] exists`, so applying any of them
 twice is harmless. 006 replaces only the `laai_workflow` entry point (rate limit unchanged)

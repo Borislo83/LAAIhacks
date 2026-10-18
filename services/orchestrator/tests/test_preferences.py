@@ -55,7 +55,7 @@ def test_preferences_notes_survive_application_restart_and_are_user_scoped():
         assert client.get("/v1/preferences").status_code == 401
         assert client.put("/v1/preferences", json=saved).status_code == 401
         client.headers["Authorization"] = "Bearer alice"
-        assert client.get("/v1/preferences").json() == DEFAULTS
+        assert client.get("/v1/preferences").json() == DEFAULTS | {"learned_since": None}
         assert client.put("/v1/preferences", json=saved).json()["notes"] == saved["notes"]
         for bad in (
             {**saved, "user_id": BOB},

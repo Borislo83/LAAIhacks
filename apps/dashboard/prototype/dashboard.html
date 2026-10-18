@@ -83,6 +83,8 @@ input[type="checkbox"]{accent-color:var(--lens);width:15px;height:15px}
 body[data-density="compact"] .thread{gap:12px;padding:14px}
 body[data-density="compact"] .card .bd{padding:12px}
 body[data-density="compact"] .agent{padding:8px 10px}
+.learned{border:1px solid var(--hair);border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.45;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.learned p{margin:0}
 .field.big{flex:3;min-width:240px}
 .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .chips span{font:11px var(--mono);color:var(--muted)}
@@ -341,6 +343,7 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
             <legend>Saved account preferences</legend>
             <div class="field"><label for="display-density">Display density</label><select id="display-density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></div>
             <div class="field"><label for="shopping-priority">Shopping priority</label><select id="shopping-priority"><option value="balanced">Balance price and quality</option><option value="price">Find the best value</option><option value="quality">Prioritize quality</option></select></div>
+            <div id="learned-priority" class="learned" aria-live="polite" hidden><p><strong id="learned-title"></strong><br><span id="learned-reason" class="muted"></span></p><button type="button" id="learned-reset" class="linkbtn">Reset learning</button></div>
             <label class="preference-toggle"><input id="proactive-enabled" type="checkbox">Suggest tasks from page content</label>
             <div class="field"><label for="user-notes">Private notes</label><textarea id="user-notes" rows="4" maxlength="10000" placeholder="Anything you want to keep for later"></textarea><small class="muted">Saved to your account. Notes stay out of agent prompts.</small></div>
             <button type="submit" class="btn dark" id="save-preferences">Save preferences</button>
