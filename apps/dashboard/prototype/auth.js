@@ -60,7 +60,10 @@ export function setupAuth({endpoint, onUserChange}) {
       render(data.session);
     } catch (error) {
       el('account-status').textContent = 'Sign-in unavailable';
-      message(error.message || 'Could not connect. Check the backend and try again.', true);
+      // fetch() reports an unreachable server or a CORS refusal only as "Failed to fetch".
+      message(error instanceof TypeError
+        ? `Couldn't reach the orchestrator at ${endpoint.value.trim()}. Check that it's running and allows ${location.origin}.`
+        : error.message || 'Could not connect. Check the backend and try again.', true);
       el('auth-retry').hidden = false;
     }
   }
