@@ -1,6 +1,9 @@
 """News summary: a short, sourced overview of recent coverage for a topic.
 
-Search is keyless DDGS news first, then the shared web search. The top results are read
+Search is Tavily news search when TAVILY_API_KEY is set: its results carry the article
+text and images, so pages are only fetched when that text is thin or no result has a
+usable image. Without a key, or when Tavily fails or finds nothing, search is keyless
+DDGS news, then the shared web search. The top results are read
 concurrently (HTTPS only, public hosts only, 8 s and 1.5 MB per page, redirects
 re-checked), ranked by how well their title and lead match the query plus recency, and
 near-duplicate syndicated copies are dropped. The summary comes from ASI:One when a key
@@ -11,6 +14,7 @@ discarded for the extractive one. Nothing is guessed when nothing is found.
 
 import asyncio
 import ipaddress
+import os
 import re
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -180,12 +184,17 @@ async def web_news(query: str) -> list[dict]:
 
 
 PROVIDERS = (("ddgs_news", ddgs_news), ("web_search", web_news))
+PROVIDER_LABELS = {"ddgs_news": "DDGS", "web_search": "web search"}
 
 
 async def find_hits(query: str) -> list[dict] | None:
     """Hits from the first provider that answers with results; None if none answered."""
     answered = False
-    for _, run in PROVIDERS:
+    for name, run in PROVIDERS:
+        report(
+            "searching",
+            f"Searching news ({PROVIDER_LABELS.get(name, name)}) for {query}",
+        )
         try:
             found = await run(query)
         except (SearchUnavailable, aiohttp.ClientError, TimeoutError, ValueError):
@@ -194,6 +203,120 @@ async def find_hits(query: str) -> list[dict] | None:
         if found:
             return found
     return [] if answered else None
+
+
+# --- Tavily -----------------------------------------------------------------------------
+
+TAVILY_URL = "https://api.tavily.com/search"
+TAVILY_TIMEOUT = aiohttp.ClientTimeout(total=15)
+# Tavily text at least this long is enough to rank and summarize without the page.
+ENOUGH_TEXT = 600
+
+
+class TavilyUnavailable(RuntimeError):
+    pass
+
+
+def tavily_key() -> str:
+    return os.getenv("TAVILY_API_KEY", "").strip()
+
+
+def tavily_payload(query: str, max_results: int) -> dict:
+    return {
+        "query": query,
+        "topic": "news",
+        "time_range": "week",
+        "max_results": max_results,
+        # basic costs one credit; advanced costs two and has not been shown to read better.
+        "search_depth": "basic",
+        "include_raw_content": "text",
+        "include_images": True,
+        "include_image_descriptions": True,
+        "include_answer": False,
+    }
+
+
+def _image(value) -> tuple[str | None, str | None]:
+    """Tavily images are objects {url, description}; older responses used plain strings."""
+    if isinstance(value, dict):
+        return value.get("url"), value.get("description")
+    return (value, None) if isinstance(value, str) else (None, None)
+
+
+def tavily_article(result: dict) -> dict | None:
+    hit = _hit(
+        result.get("url"),
+        result.get("title"),
+        result.get("content"),
+        None,
+        result.get("published_date"),
+    )
+    if not hit:
+        return None
+    raw = " ".join(str(result.get("raw_content") or "").split())
+    content = " ".join(str(result.get("content") or "").split())
+    image, alt = None, None
+    for item in result.get("images") or []:
+        url, description = _image(item)
+        if valid_image(url):
+            image, alt = (
+                url,
+                " ".join(str(description).split())[:200] if description else None,
+            )
+            break
+    return {
+        **hit,
+        "text": raw if len(raw) > len(content) else content,
+        "image": image,
+        "image_alt": alt,
+        "image_width": None,
+        "image_height": None,
+    }
+
+
+async def tavily_news(query: str, max_results: int) -> list[dict]:
+    key = tavily_key()
+    if not key:
+        raise TavilyUnavailable("Tavily API key is not configured")
+    async with net.session().post(
+        TAVILY_URL,
+        json=tavily_payload(query, max_results),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        timeout=TAVILY_TIMEOUT,
+    ) as response:
+        if response.status != 200:
+            # Never echo the response or request: either can carry the key.
+            raise TavilyUnavailable(f"Tavily returned HTTP {response.status}")
+        data = await response.json()
+    if not isinstance(data, dict):
+        raise TavilyUnavailable("Tavily returned an unexpected response")
+    return [
+        article
+        for result in data.get("results") or []
+        if isinstance(result, dict) and (article := tavily_article(result))
+    ]
+
+
+TAVILY_FAILURES = (
+    TavilyUnavailable,
+    aiohttp.ClientError,
+    TimeoutError,
+    ValueError,
+    TypeError,
+)
+
+
+async def complete_tavily(articles: list[dict]) -> list[dict]:
+    """Fetch pages only for thin text, or for og:image when no result has an image."""
+    thin = [i for i, a in enumerate(articles) if len(a["text"]) < ENOUGH_TEXT]
+    if not any(a["image"] for a in articles):
+        thin = sorted(set(thin) | set(range(min(3, len(articles)))))
+    if thin:
+        report("reading", f"Reading {len(thin)} articles")
+        read = await asyncio.gather(*(read_article(articles[i]) for i in thin))
+        for i, article in zip(thin, read, strict=True):
+            articles[i] = article
+    return articles
 
 
 # --- Reading pages ----------------------------------------------------------------------
@@ -301,8 +424,8 @@ def extract(page: str, url: str) -> dict:
 
 async def read_article(hit: dict) -> dict:
     """The search hit, filled in from its page when the page can be read."""
-    article = {**hit, "text": "", "image": None, "image_alt": None,
-               "image_width": None, "image_height": None}  # fmt: skip
+    article = {"text": "", "image": None, "image_alt": None,
+               "image_width": None, "image_height": None, **hit}  # fmt: skip
     page = await fetch_page(hit["url"])
     if not page:
         return article
@@ -314,8 +437,11 @@ async def read_article(hit: dict) -> dict:
     article["lead"] = info["description"] or hit["lead"] or info["text"][:400]
     article["publisher"] = info["publisher"] or hit["publisher"]
     article["published_at"] = info["published_at"] or hit["published_at"]
-    for key in ("text", "image", "image_alt", "image_width", "image_height"):
-        article[key] = info[key]
+    if len(info["text"]) > len(article["text"]):
+        article["text"] = info["text"]
+    if info["image"] and not article["image"]:
+        for key in ("image", "image_alt", "image_width", "image_height"):
+            article[key] = info[key]
     return article
 
 
@@ -358,7 +484,9 @@ def rank(articles: list[dict], query: str, now: datetime | None = None) -> list[
     unique, urls = [], set()
     for score, i, article in sorted(scored, key=lambda x: (-x[0], x[1])):
         url = canonical(article["url"])
-        if url not in urls and not any(same_story(article, kept) for _, _, kept in unique):
+        if url not in urls and not any(
+            same_story(article, kept) for _, _, kept in unique
+        ):
             unique.append((score, i, article))
         urls.add(url)
     # Light diversity: each repeat of a publisher costs a little, re-ranked greedily.
@@ -503,6 +631,15 @@ def extractive_summary(articles: list[dict]) -> str:
 # --- Agent ------------------------------------------------------------------------------
 
 
+def unique_urls(hits: list[dict]) -> list[dict]:
+    unique, seen = [], set()
+    for hit in hits:
+        if canonical(hit["url"]) not in seen:
+            seen.add(canonical(hit["url"]))
+            unique.append(hit)
+    return unique
+
+
 def chat_reply(result: NewsResponse) -> str:
     """Plain text: headline, summary, then up to three source links."""
     lines = []
@@ -518,24 +655,38 @@ def chat_reply(result: NewsResponse) -> str:
 @tracked("news")
 async def summarize_news(req: NewsRequest) -> NewsResponse:
     query = parse_query(req.query)
-    report("searching", f"Searching news for {query}")
-    hits = await find_hits(query)
-    if hits is None:
-        return NewsResponse(
-            query=query,
-            error="News search unavailable",
-            summary="News search is unavailable right now; nothing was summarized.",
-        )
-    unique, seen = [], set()
-    for hit in hits:
-        if canonical(hit["url"]) not in seen:
-            seen.add(canonical(hit["url"]))
-            unique.append(hit)
-    if not unique:
-        return NewsResponse(query=query, summary=f"No recent news found for {query}.")
-    picked = unique[: req.max_sources]
-    report("reading", f"Reading {len(picked)} articles")
-    articles = await asyncio.gather(*(read_article(h) for h in picked))
+    articles = []
+    if tavily_key():
+        report("searching", f"Searching news (Tavily) for {query}")
+        try:
+            articles = unique_urls(await tavily_news(query, req.max_sources))[
+                : req.max_sources
+            ]
+        except TAVILY_FAILURES as exc:
+            reason = (
+                str(exc) if isinstance(exc, TavilyUnavailable) else "request failed"
+            )
+            report("fallback", f"Tavily unavailable ({reason}); using free news search")
+        else:
+            if not articles:
+                report("fallback", "Tavily found nothing; using free news search")
+        if articles:
+            articles = await complete_tavily(articles)
+    if not articles:
+        hits = await find_hits(query)
+        if hits is None:
+            return NewsResponse(
+                query=query,
+                error="News search unavailable",
+                summary="News search is unavailable right now; nothing was summarized.",
+            )
+        picked = unique_urls(hits)[: req.max_sources]
+        if not picked:
+            return NewsResponse(
+                query=query, summary=f"No recent news found for {query}."
+            )
+        report("reading", f"Reading {len(picked)} articles")
+        articles = await asyncio.gather(*(read_article(h) for h in picked))
     report("ranking", "Ranking articles by relevance")
     ranked = [a for a in rank(list(articles), query) if a["title"]]
     if not ranked:
