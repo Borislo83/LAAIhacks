@@ -87,9 +87,7 @@ TOOLS = [
                 "required": ["query"],
             },
         },
-    }
-]
-TOOLS.append(
+    },
     {
         "type": "function",
         "function": {
@@ -106,8 +104,8 @@ TOOLS.append(
                 "required": ["request"],
             },
         },
-    }
-)
+    },
+]
 TOOL_KINDS = {
     "compare_prices": AgentKind.PRICE,
     "find_alternatives": AgentKind.ALTERNATIVES,
@@ -136,6 +134,8 @@ def safe_youtube(result: dict[str, Any]) -> dict[str, Any]:
             if isinstance(alternative, dict) and _youtube_link(alternative.get("url"))
         ],
     }
+
+
 # Each agent call is tried up to three times before it counts as failed.
 ATTEMPTS = 3
 RETRY_DELAY = 1.0
@@ -334,7 +334,10 @@ MEDIA_WORDS = r"\bsongs?\b|\bvideos?\b|\bplay\b|\bmusic\b|\blisten to\b"
 # "consider X", "under $100", "like the X", "similar to X", "instead of X".
 COORDINATE = (
     r"\b(?:consider|evaluate|assess)\b"
-    r"|\b(?:under|below|up to|at most|budget(?: of)?)\s*\$?\s*\d"
+    # The same budget phrases the coordinator reads a max_price from.
+    # Bare "max" is often a model name ("Pro Max 256GB"), so it needs a currency.
+    r"|\b(?:under|below|less than|up to|at most|budget(?: of)?)\s*\$?\s*\d"
+    r"|\bmax(?:imum)?(?: of)?\s*(?:\$\s*\d|\d[\d,.]*\s*(?:dollars|usd|bucks)\b)"
     # "I'd like a ..." / "would like a ..." are wishes, not comparisons.
     r"|(?<!'d )(?<!would )\b(?:like|similar to|instead of|alternatives? to)\s+(?:the|my|a|an|this|that)\b"
 )
@@ -365,11 +368,13 @@ def _is_message_request(text: str) -> bool:
     if re.search(r"\bimessage\b", text, re.IGNORECASE):
         return True
     verb = re.match(
-        r"(?:please\s+)?(?:send\s+(?:an?\s+)?(?:text|message)\s+to|text|message|tell)\s+(\S+)",
+        r"(?:(?:hey|hi|ok|okay|yo)[\s,!]+)?(?:please\s+|can you\s+|could you\s+)?"
+        r"(?:(send\s+(?:an?\s+)?(?:text|message)\s+to)|text|message|tell)\s+(\S+)",
         text,
         re.IGNORECASE,
     )
-    return bool(verb and verb[1][:1].isupper())
+    # "send a message to jonathan" is explicit in any case; a bare verb needs a Name.
+    return bool(verb and (verb[1] or verb[2][:1].isupper()))
 
 
 async def chat_with_rules(
@@ -468,7 +473,7 @@ async def buyer_call(payload, config, http, emit=None, confirmation=None):
             response = await agent_request("buy/prepare", payload, config, http, emit, timeout=90)
         response.raise_for_status()
         result = response.json()
-        if result.get("purchase_enabled") is not False:
+        if not isinstance(result, dict) or result.get("purchase_enabled") is not False:
             raise ValueError("Only cart-only results with purchasing disabled are supported")
         return AgentCall(
             kind="buyer",
@@ -520,6 +525,16 @@ async def chat(
     preferences=None,
 ) -> ChatReply:
     text = history[-1].content
+    # Answer to "What would you like to say to Jonathan?": this text is the message.
+    asked = next(
+        (m for m in reversed(history[:-1]) if m.role == "assistant"), None
+    )
+    awaiting = asked and re.fullmatch(
+        r"What would you like to say to (.{1,80})\?", asked.content.strip()
+    )
+    if awaiting and not _is_message_request(text):
+        call = await prepare_message(f"text {awaiting[1]} {text}", config, http, emit)
+        return rules_reply([call])
     normalized = re.sub(r"[^a-z ]", "", text.lower()).replace("kart", "cart").strip()
     normalized = re.sub(r"\s+", " ", normalized)
     confirming = normalized in {
