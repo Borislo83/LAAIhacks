@@ -103,7 +103,7 @@ async function save(wav: Uint8Array) {
 const WAKE_NAME = (process.env.WAKE_NAME ?? 'focal').toLowerCase().replace(/[^a-z]/g, '')
 const DEFAULT_ALIASES: Record<string, string> = {
   // Mishearings of "focal", each only after a greeting ("hey vocal", "hey for cal").
-  focal: 'vocal,focus,fokal,phocal,focall,focul,focle,fockle,forcal,forcall,folkal,folkall,fogal,vocals,focals',
+  focal: 'vocal,focus,fokal,phocal,focall,focul,focle,fockle,forcal,forcall,folkal,folkall,fogal,vocals,focals,foco,foko,fokko,focco,phoco,foca',
   search: 'searches,searched,searching,searcher,serch,sirch,surch,searcha,research',
   searcher: 'search,searchher,researcher,searching,sercher,surcher,searcha,sirsure',
   reader: 'rita,reda,rider,raider,ritter,riter,reeta',
