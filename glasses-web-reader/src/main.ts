@@ -1906,4 +1906,14 @@ async function renderActions() {
 }
 
 companion.update()
-void restore()
+void restore().then(connectLocalDev)
+
+// On the dev machine the gateway can sign in for us (GATEWAY_DEV_TOKEN); never over a tunnel.
+async function connectLocalDev() {
+  try {
+    const api = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
+    const res = await fetch(`${api}/api/backend/dev`, { cache: 'no-store' })
+    const { local } = (await res.json()) as { local?: boolean }
+    if (local && !backend.state.connected) await connectBackend('local-dev', '')
+  } catch { /* no dev gateway: the Account panel still works */ }
+}
