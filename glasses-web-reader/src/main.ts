@@ -29,7 +29,7 @@ import { guardGlyphs } from './lensos/glyphs'
 import { ActionPopup, POPUP_TAP_GRACE_MS, popupAllowed } from './lensos/action-popup'
 import { AgentCard, askAgents, compareSpec, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
-import { capabilityCommand, STRIP_HEADING, type RecommendationBatch, type RecommendationContext, type RecommendedAction } from '../shared/recommendations'
+import { capabilityCommand, isRecommendationsCommand, STRIP_HEADING, type RecommendationBatch, type RecommendationContext, type RecommendedAction } from '../shared/recommendations'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
 // Status:  body 0..252 (9 lines at 27px)  +  footer 252..288 (1 line)
@@ -52,9 +52,11 @@ const SESSION_KEY = 'webreader.lensos.session'
 const HANDS_FREE_KEY = 'webreader.v1.handsFree'
 const RECOMMENDATIONS_KEY = 'webreader.v1.recommendations'
 /** Must match the server's WAKE_NAME. Not "Hey Even": that wakes the system assistant. */
-const WAKE_PHRASE = 'Hey Search'
+const WAKE_PHRASE = 'Hey Focal'
 /** The assistant's name on the glasses card and spinner. */
-const ASSISTANT = 'Search'
+const ASSISTANT = 'Focal'
+/** The recommendation strip pops up no sooner than this long after a page finishes loading. */
+const RECOMMENDATION_DELAY_MS = 10_000
 const MAX_RECENT = 15
 const MAX_BOOKMARKS = 50
 const MAX_HISTORY = 10
@@ -185,6 +187,14 @@ let recommendationLayout: RecommendationLayout = 'bottom'
 let recommendationIndex = 0
 let recommendationSelected = false
 let recommendationBase: PageSpec | undefined
+/** When the current page finished loading (the strip waits RECOMMENDATION_DELAY_MS from here). */
+let pageLoadedAt = 0
+/** Pending pop-up of options that arrived before the delay was up. */
+let recommendationTimer: ReturnType<typeof setTimeout> | undefined
+function cancelRecommendationTimer() {
+  clearTimeout(recommendationTimer)
+  recommendationTimer = undefined
+}
 let actionGroup: ActionGroup = 'tasks'
 /** An agent answer or iMessage draft on the lens, paged with swipes. */
 let agentCard: AgentCard | null = null
@@ -1080,7 +1090,7 @@ function openRecent() {
 
 // ── Voice ───────────────────────────────────────────────────────────────────
 // Hands-free (like "Hey Even"): the mic stays on and the start of each utterance
-// is checked for the wake phrase. "Hey Search" pops up the card, then the next
+// is checked for the wake phrase. "Hey Focal" pops up the card, then the next
 // thing said is the question (two steps, like "Hey Even").
 // Voice search in the menu does the same without the wake phrase.
 // While capturing: tap sends early, swipe cancels, a pause ends it. The server
@@ -1237,7 +1247,7 @@ async function checkWake(utterance: Uint8Array[]) {
  * Audio the question capture starts from. Words in the wake sentence itself are
  * not the question; but the check takes a moment, so anything said since it
  * ended is kept. If the user is still talking in that same breath, the whole
- * sentence is kept and the server strips everything up to "Hey Search".
+ * sentence is kept and the server strips everything up to "Hey Focal".
  */
 function wakeSeed(listener: WakeListener, utterance: Uint8Array[]): Uint8Array[] {
   const live = listener.current
@@ -1378,6 +1388,15 @@ async function stopVoice(send: boolean) {
     report({ voice: rec.durationMs, chars: command.length })
     if (!command) return void fail("Sorry, I didn't catch that.", "Couldn't make that out.")
     logHeard({ text: command, command: true })
+    // "Show recommendations": this page's strip again, not a chat or web search.
+    if (isRecommendationsCommand(command)) {
+      voiceUi = { phase: 'done', text: command }
+      stopLoading()
+      if (companion.reopenRecommendations()) return
+      await renderAssistant('No recommendations for this page yet.', quiet ? `Say "${WAKE_PHRASE}" to ask again` : VOICE_HINT)
+      fadeLater()
+      return
+    }
     voiceUi = { phase: 'searching', text: command }
     // Signed in: the Focal agents get the first try. Anything chat can't route,
     // and any gateway or chat failure, falls through to the web search below.
@@ -1602,6 +1621,7 @@ async function load(url: string, restore = 0, pushHistory = false, fromVoice = f
     }
     scheduleSave()
     if (doc) {
+      pageLoadedAt = Date.now()
       void backend.publish(doc)
       if (!fromVoice && recommendationsOn) companion.recommend(doc)
     }
@@ -1841,11 +1861,23 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
     ready(batch) {
       if (batch.page.url !== doc?.url || cleanedUp) return
       glassRecommendations = batch
-      recommendationsOpen = true
       recommendationIndex = 0
       recommendationSelected = false
       recommendationBase = undefined
-      if (isContentView() && !loading && !status) void renderGlassesRecommendations()
+      // Not straight away: the strip waits until the page has been up a while.
+      cancelRecommendationTimer()
+      const pop = () => {
+        recommendationTimer = undefined
+        // Navigated away or emptied meanwhile (a later batch for this page still counts).
+        if (cleanedUp || batch.page.url !== doc?.url || glassRecommendations?.page.url !== batch.page.url
+          || !glassRecommendations.actions.length) return
+        recommendationsOpen = true
+        // Voice, a card or a menu on screen: it shows when the page comes back.
+        if (isContentView() && !loading && !status) void renderGlassesRecommendations()
+      }
+      const wait = pageLoadedAt + RECOMMENDATION_DELAY_MS - Date.now()
+      if (wait > 0) recommendationTimer = setTimeout(pop, wait)
+      else pop()
     },
     changed(batch) {
       // Session actions arrived, ran or expired: same strip, updated in place.
@@ -1864,14 +1896,16 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
       recommendationSelected = true
       void runSuggestion(selection.action, selection.context)
     },
-    reset() { glassRecommendations = undefined; recommendationBase = undefined; recommendationsOpen = false },
+    reset() { cancelRecommendationTimer(); glassRecommendations = undefined; recommendationBase = undefined; recommendationsOpen = false },
     closed() {
+      cancelRecommendationTimer()
       recommendationsOpen = false
       recommendationBase = undefined
       if (view === 'recommendations') void showContent()
     },
     opened() {
       if (!glassRecommendations || glassRecommendations.page.url !== doc?.url || cleanedUp) return
+      cancelRecommendationTimer()
       recommendationsOpen = true
       recommendationIndex = 0
       // A strip reopened from the menu offers its options again, not "Starting...".
