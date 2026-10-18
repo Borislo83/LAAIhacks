@@ -1,5 +1,6 @@
 import { pxTruncate } from '@evenrealities/pretext'
 import type { PageSpec, TextBox } from './screens'
+import { STRIP_HEADING } from '../shared/recommendations'
 
 const PANEL = { x: 216, y: 132, w: 360, h: 156 }
 export const RECOMMENDATION_LAYOUTS = [
@@ -9,12 +10,14 @@ export const RECOMMENDATION_LAYOUTS = [
 ] as const
 export type RecommendationLayout = typeof RECOMMENDATION_LAYOUTS[number]['id']
 const clean = (text: string) => text.replace(/[\r\n\t\u0000-\u001f]/g, ' ')
-export const recommendationCursor = (index: number, delta: 1 | -1) => Math.max(0, Math.min(3, index + delta))
+/** Moves over `count` options and the close choice after them. */
+export const recommendationCursor = (index: number, delta: 1 | -1, count = 3) =>
+  Math.max(0, Math.min(Math.min(count, 3), index + delta))
 
 /** G2 containers are transparent: clip the underlying text rather than overlap it. */
 export function glassesRecommendationSpec(base: PageSpec, titles: string[], cursor: number, selected = false,
   layout: RecommendationLayout = 'bottom', text: { heading?: string; close?: string } = {}): PageSpec {
-  const heading = text.heading ?? (selected ? 'Selected; not run' : 'Recommended actions')
+  const heading = text.heading ?? (selected ? 'Starting...' : STRIP_HEADING)
   const choices = [...titles.slice(0, 3), text.close ?? 'Close recommendations']
   const row = (title: string, index: number, width: number) =>
     `${index === cursor ? '>' : ' '} ${pxTruncate(clean(title), width - 40)}`

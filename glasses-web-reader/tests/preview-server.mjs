@@ -28,10 +28,10 @@ const server = await createServer({ configFile: false, root: fileURLToPath(new U
       if (url.pathname === '/api/recommendations') {
         let raw = ''; for await (const chunk of req) raw += chunk
         const context = JSON.parse(raw)
+        // Shop pages with one product never reach here (the client offers the shopping capabilities itself).
         return send({ source: 'claude', page: { url: context.url, title: context.title }, actions: [
-          { id: 'preview-prices', title: 'Compare prices', description: 'Find the best offer across trusted stores.', instruction: 'Compare current offers for Model A headphones.' },
-          { id: 'preview-alternatives', title: 'Explore similar headphones', description: 'See how other wireless options compare.', instruction: 'Find similar wireless headphones around $100.' },
-          { id: 'preview-reviews', title: 'Check real-world comfort', description: 'Get the highlights from owner reviews.', instruction: 'Summarize owner reviews of Model A headphones, focusing on comfort.' },
+          { id: 'compare_prices', capability: 'compare_prices', title: 'Compare prices', description: 'Side-by-side prices for Model A headphones.', query: 'Model A headphones' },
+          { id: 'review_summary', capability: 'review_summary', title: 'Review summary', description: 'What reviewers say about Model A headphones.', query: 'Model A headphones' },
         ] })
       }
       if (req.headers.authorization !== 'Bearer browser-fixture') return send({ error: 'Fixture token must be browser-fixture' }, 401)
@@ -42,7 +42,7 @@ const server = await createServer({ configFile: false, root: fileURLToPath(new U
       if (path === '/v1/sessions') return send({ session_id: 'fixture-session', revision })
       if (path.endsWith('/page')) {
         currentPage = body; revision++
-        actions = [{ action_id: `external-${revision}`, label: 'Compare offers', description: 'External agent proposal for this page.', status: 'proposed', requires_approval: true }]
+        actions = [{ action_id: `external-${revision}`, type: 'compare_prices', label: 'Compare prices and alternatives', description: 'External agent proposal for this page.', status: 'proposed', requires_approval: true }]
         return send({ session_id: 'fixture-session', revision })
       }
       if (path.endsWith('/display')) return send({ schema_version: '1.0', session_id: 'fixture-session', revision, page: currentPage, actions, mode: 'summary', notice: null })

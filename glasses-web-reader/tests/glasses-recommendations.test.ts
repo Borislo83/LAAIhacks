@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS } from '../src/glasses-recommendations'
 import type { PageSpec } from '../src/screens'
 
-const labels = ['Compare prices', 'Find alternatives', 'Read reviews']
+const labels = ['Compare prices', 'Add to Amazon cart', 'Review summary']
 const base: PageSpec = { texts: [
   { x: 0, y: 0, w: 576, h: 36, text: 'Current page' },
   { x: 0, y: 40, w: 576, h: 240, text: 'Page content', scroll: true },
@@ -15,8 +15,8 @@ test('glasses panel contains three choices and close in a bounded corner, retain
   assert.ok(popup.w * popup.h < 576 * 288 * 0.35)
   assert.ok(popup.x + popup.w <= 576 && popup.y + popup.h <= 288)
   assert.match(popup.text, /> Compare prices/)
-  assert.match(popup.text, /Find alternatives/)
-  assert.match(popup.text, /Read reviews/)
+  assert.match(popup.text, /Add to Amazon cart/)
+  assert.match(popup.text, /Review summary/)
   assert.match(popup.text, /Close recommendations/)
   assert.ok(spec.texts.some(t => t.text === 'Current page'))
   assert.ok(spec.texts.length <= 7)
@@ -34,14 +34,19 @@ test('swiping reaches the close choice without changing the reader position', ()
   assert.match(glassesRecommendationSpec(base, labels, cursor).texts.at(-1)!.text, /> Close recommendations/)
   for (let i = 0; i < 6; i++) cursor = recommendationCursor(cursor, -1)
   assert.equal(cursor, 0)
+  // Two options (no cart): the close choice is the third.
+  for (let i = 0; i < 6; i++) cursor = recommendationCursor(cursor, 1, 2)
+  assert.equal(cursor, 2)
+  assert.match(glassesRecommendationSpec(base, labels.slice(0, 2), cursor).texts.map(t => t.text).join('\n'), /> Close recommendations/)
 })
 
-test('selection status never claims execution and model line breaks cannot create extra choices', () => {
+test('the strip is headed Focal can help; line breaks cannot create extra choices', () => {
+  assert.match(glassesRecommendationSpec(base, labels, 0, false, 'corner').texts.at(-1)!.text, /^Focal can help/)
   const spec = glassesRecommendationSpec(base, ['Compare\nprices', ...labels.slice(1)], 1, true, 'corner')
   const content = spec.texts.at(-1)!.text
   assert.equal(content.split('\n').length, 5)
-  assert.match(content, /Selected; not run/)
-  assert.match(content, /> Find alternatives/)
+  assert.match(content, /Starting/)
+  assert.match(content, /> Add to Amazon cart/)
 })
 
 test('all offered layouts show three actions and close within G2 limits', () => {
