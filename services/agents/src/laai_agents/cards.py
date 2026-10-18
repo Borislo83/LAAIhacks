@@ -40,7 +40,9 @@ def text(body: str, end_session: bool = False) -> ChatMessage:
     return ChatMessage(timestamp=datetime.now(UTC), msg_id=uuid4(), content=content)
 
 
-def card(narration: str, kind: str, payload: dict, terminal: bool = False) -> ChatMessage:
+def card(
+    narration: str, kind: str, payload: dict, terminal: bool = False, end_session: bool = False
+) -> ChatMessage:
     metadata = {
         "card_protocol_version": "1",
         # Always "true": ASI:One only renders cards that set it; is_terminal disables input.
@@ -57,6 +59,7 @@ def card(narration: str, kind: str, payload: dict, terminal: bool = False) -> Ch
         content=[
             TextContent(type="text", text=narration),
             MetadataContent(type="metadata", metadata=metadata),
+            *([EndSessionContent(type="end-session")] if end_session else []),
         ],
     )
 
@@ -88,6 +91,20 @@ def parse_reply(body: str) -> dict:
             found["priority"] = priority
             break
     return found
+
+
+def budget_in(body: str) -> str | None:
+    """A budget from planner prose: "budget: 350", "$350", or a lone number (not "WH-1000XM5")."""
+    for pattern in (
+        r"budget\D{0,20}?(\d[\d,]*(?:\.\d+)?)",
+        r"\$\s*(\d[\d,]*(?:\.\d+)?)",
+        r"(?<![\w.-])(\d[\d,]*(?:\.\d+)?)(?![\w-])",
+    ):
+        for match in re.finditer(pattern, body, re.IGNORECASE):
+            value = match[1].replace(",", "")
+            if float(value) >= 5:
+                return value
+    return None
 
 
 def money(value: float | None) -> str:

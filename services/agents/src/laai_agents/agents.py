@@ -57,6 +57,8 @@ DESCRIPTIONS = {
     "laai-messenger": "Drafts an iMessage to an allowlisted friend and sends it only after you approve.",
     "laai-youtube": "Finds a YouTube link for a song or video you ask for.",
     "laai-news": "Short, sourced summary of the latest news on any topic.",
+    "laai-amazon-cart": "Turns an Amazon product ID (ASIN) into Amazon's official add-to-cart link. You open it; nothing is bought.",
+    "laai-bestbuy-cart": "Turns a Best Buy SKU into Best Buy's official add-to-cart link. You open it; nothing is bought.",
 }
 
 

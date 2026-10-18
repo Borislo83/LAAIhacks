@@ -39,8 +39,15 @@ from .imessage import (
     MessageDraftResponse,
     MessageSendResponse,
 )
+from .imessage import dry_run as imessage_dry_run
 from .memory import MemoryRequest, MemoryResponse
-from .models import ConsiderRequest, PriceCompareRequest, PriceCompareResponse
+from .models import (
+    CartLink,
+    CartRequest,
+    ConsiderRequest,
+    PriceCompareRequest,
+    PriceCompareResponse,
+)
 from .progress import read
 from .verifier import VerifyRequest, VerifyResponse
 
@@ -59,6 +66,7 @@ AGENTS = {
     "alternative_reviews": ("⭐", "Reviews agent (rival)", "laai-reviews"),
     "verification": ("🛡️", "Verifier agent", VERIFIER),
     "buyer": ("🛒", "Buyer agent", BUYER),
+    "cart_link": ("🔗", "Amazon cart-link agent", "laai-amazon-cart"),
     "messenger": ("💬", "Messenger agent", MESSENGER),
     "watch": ("👀", "Watch (coordinator)", None),
 }
@@ -89,19 +97,53 @@ class Conversation:
         self.ctx, self.sender, self.addresses = ctx, sender, addresses
         self.key = f"focal:{sender}"
         self.state = ctx.storage.get(self.key) or {}
+        # ASI:One shows only an agent's latest message per turn, so every update carries
+        # the whole running log: the bubble grows as each agent reports.
+        self.log: list[str] = []
+        self.last_send = 0.0
+
+    @property
+    def shopper(self) -> str:
+        """Memory belongs to the Focal Studio profile when one is configured: ASI:One may
+        relay messages through its own agent, so the sender address is not stable."""
+        return os.getenv("FOCAL_MEMORY_USER_ID") or self.sender
 
     def save(self):
         self.ctx.storage.set(self.key, self.state)
+        self.ctx.storage.set("focal:last", self.key)
 
     def reset(self):
         self.state = {"team": []}
         self.save()
 
+    def note(self, body: str):
+        """Add to the running log without sending: the card that follows carries it.
+        ASI:One drops a card that closely follows another message from the same step."""
+        self.log.append(body)
+
+    async def pace(self):
+        """ASI:One keeps one of two messages that arrive within moments of each other,
+        so a card or payment request waits a beat after the previous update."""
+        wait = 1.2 - (time.monotonic() - self.last_send)
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+    async def send(self, msg):
+        await self.ctx.send(self.sender, msg)
+        self.last_send = time.monotonic()
+
     async def say(self, body: str, end: bool = False):
-        await self.ctx.send(self.sender, cards.text(body, end_session=end))
+        self.log.append(body)
+        await self.send(cards.text("\n\n".join(self.log), end_session=end))
 
     async def show(self, msg: ChatMessage):
-        await self.ctx.send(self.sender, msg)
+        """Send a card whose narration is the running log; nothing follows it this turn."""
+        for item in msg.content:
+            if isinstance(item, TextContent):
+                self.log.append(item.text)
+                item.text = "\n\n".join(self.log)
+        await self.pace()
+        await self.send(msg)
 
     def credit(self, field: str, did: str, ms: int | None = None):
         self.state.setdefault("team", []).append([field, did, ms])
@@ -125,12 +167,20 @@ class Conversation:
     async def handle(self, body: str):
         reply = parse_reply(body)
         action = reply.get("focal_action")
+        if action and self.state.get("stage") in {None, "done"}:
+            # ASI:One sometimes relays a card click from its own agent, with a new sender
+            # and session: continue the conversation that is waiting for a click.
+            last = self.ctx.storage.get("focal:last")
+            if last and last != self.key and (self.ctx.storage.get(last) or {}).get("stage") not in {None, "done"}:
+                self.key, self.state = last, self.ctx.storage.get(last)
         stage = self.state.get("stage")
+        # Only the form itself or a short budget-only reply answers the brief; anything
+        # else (a new product question) starts over.
         if stage == "brief" and (
-            action == "focal_submit_brief" or reply.get("budget") or re.search(r"\d", body)
+            action == "focal_submit_brief" or (len(body) <= 40 and cards.budget_in(body))
         ):
-            if not reply.get("budget") and (number := re.search(r"\d[\d,]*(?:\.\d+)?", body)):
-                reply["budget"] = number[0]
+            if not reply.get("budget"):
+                reply["budget"] = cards.budget_in(body)
             return await self.on_brief(reply, body)
         if action in {"focal_buy_main", "focal_buy_alt"} and stage == "decide":
             return await self.on_buy(action == "focal_buy_alt")
@@ -144,9 +194,10 @@ class Conversation:
             return await self.on_watch()
         if action == "focal_finish":
             return await self.finish()
-        if stage and re.fullmatch(r"\s*(yes|yep|sure|ok(ay)?|approve|confirm)[.!]?\s*", body, re.IGNORECASE):
+        active = stage not in {None, "done", "researching"}
+        if active and re.match(r"\s*(yes|yep|yeah|sure|ok(ay)?|approve|confirm|go ahead|do it|start|send)\b", body, re.IGNORECASE):
             return await self.on_yes(stage)
-        if stage and re.fullmatch(r"\s*(no|nope|skip|cancel|stop)[.!]?\s*", body, re.IGNORECASE):
+        if active and re.match(r"\s*(no|nope|skip|cancel|stop|don'?t|not now)\b", body, re.IGNORECASE):
             return await self.on_no(stage)
         return await self.start(body)
 
@@ -172,6 +223,8 @@ class Conversation:
         from .coordinator import budget_from, parse_request
 
         req = await parse_request(body)
+        if req is not None and re.search(r"\bno product\b|not (?:provided|specified|mentioned)", req.product, re.IGNORECASE):
+            req = None
         if req is None:
             return await self.say(
                 "I'm **Focal**, a team of shopping agents. Tell me a product, e.g. "
@@ -186,7 +239,7 @@ class Conversation:
             + ".\nAsking the memory agent what it knows about you…"
         )
         started = time.perf_counter()
-        memory = await self.ask("memory", MemoryRequest(user=self.sender), MemoryResponse, timeout=15)
+        memory = await self.ask("memory", MemoryRequest(user=self.shopper), MemoryResponse, timeout=15)
         ms = round((time.perf_counter() - started) * 1000)
         priority = "balanced"
         if memory:
@@ -320,6 +373,7 @@ class Conversation:
             stage="decide",
             best=best,
             alt={"product": alt.product, "price": alt.price, "url": alt.url} if alt else None,
+            amazon_leads=self.amazon_leads(result),
         )
         self.save()
 
@@ -377,19 +431,10 @@ class Conversation:
         for section in (price, reviews):
             if section:
                 sources += [f"- [{s.title[:60]}]({s.url})" for s in section.sources[:2]]
-        await self.show(
-            card(
-                "✅ **Research complete.** Here's the verified comparison. Pick one and the "
-                "buyer agent takes it from here.\n\n" + result.summary[:1500]
-                + ("\n\n**Sources**\n" + "\n".join(sources) if sources else ""),
-                "custom",
-                payload,
-            )
-        )
         await self.ask(
             "memory",
             MemoryRequest(
-                user=self.sender,
+                user=self.shopper,
                 remember={
                     "product": result.product,
                     "budget": result.max_price,
@@ -400,9 +445,39 @@ class Conversation:
             MemoryResponse,
             timeout=10,
         )
-        await self.say(f"{self.line('memory')}: saved this research to your profile.")
+        self.log.append(f"{self.line('memory')}: saved this research to your profile.")
+        await self.show(
+            card(
+                "✅ **Research complete.** Here's the verified comparison. Pick one and the "
+                "buyer agent takes it from here.\n\n" + result.summary[:1500]
+                + ("\n\n**Sources**\n" + "\n".join(sources) if sources else ""),
+                "custom",
+                payload,
+            )
+        )
 
     # ---- 4. buyer ----------------------------------------------------------------
+
+    @staticmethod
+    def amazon_leads(result) -> dict[str, list[dict]]:
+        """Amazon product pages the research agents already cited, filed by the product
+        their title names (the main pick or the top rival)."""
+        from .buyer import amazon_listing
+        from .live import matches_product
+
+        products = [result.product]
+        if result.alternatives and result.alternatives.alternatives:
+            products.append(result.alternatives.alternatives[0].product)
+        leads: dict[str, list[dict]] = {p: [] for p in products}
+        for section in (result.price, result.reviews, result.alternatives, result.alternative_reviews):
+            for source in section.sources if section else []:
+                url = amazon_listing(source.url)
+                for product in products if url else []:
+                    if matches_product(source.title, product) and all(
+                        lead["url"] != url for lead in leads[product]
+                    ):
+                        leads[product].append({"title": source.title, "url": url})
+        return leads
 
     async def on_buy(self, alternative: bool):
         target = self.state.get("alt") if alternative else None
@@ -412,7 +487,14 @@ class Conversation:
         started = time.perf_counter()
         result = await self.ask("buyer", BuyRequest(product=product[:500]), BuyResponse, timeout=60)
         ms = round((time.perf_counter() - started) * 1000)
-        if result is None or not result.candidates:
+        candidates = result.candidates if result else []
+        leads = (self.state.get("amazon_leads") or {}).get(product) or []
+        if not candidates and leads:
+            # Recovery: the buyer's own search came back empty, so reuse the Amazon
+            # product pages the research agents already cited.
+            candidates = leads
+            self.note("🛒 Buyer search found nothing new; reusing Amazon listings the research agents cited.")
+        if not candidates:
             self.credit("buyer", "no listing", ms)
             link = result.search_url if result else None
             await self.say(
@@ -421,7 +503,7 @@ class Conversation:
                 + ". Skipping the cart step."
             )
             return await self.offer_message(added=False)
-        self.credit("buyer", f"{len(result.candidates)} listings", ms)
+        self.credit("buyer", f"{len(candidates)} listings", ms)
         self.state["stage"] = "listing"
         self.save()
         items = [
@@ -432,11 +514,11 @@ class Conversation:
                 ],
                 "action": {"selection": selection("focal_pick_listing", url=c["url"])},
             }
-            for c in result.candidates[:5]
+            for c in candidates[:5]
         ]
         await self.show(
             card(
-                f"{self.line('buyer')} · {secs(ms)}\nFound {len(result.candidates)} Amazon listings. "
+                f"{self.line('buyer')} · {secs(ms)}\nFound {len(candidates)} Amazon listings. "
                 "Pick the exact one; nothing is added yet.",
                 "custom",
                 {"root": {"type": "section", "title": f"Amazon listings · {product[:60]}",
@@ -469,7 +551,7 @@ class Conversation:
                         {"label": "Quantity", "value": str(result.quantity)},
                         {"label": "Expected price", "value": money((self.state.get("best") or {}).get("price"))},
                         {"label": "Checkout", "value": "Disabled: the agent stops at the cart"},
-                        {"label": "Mode", "value": "Live Amazon cart" if real else "Simulated (not the owner)"},
+                        {"label": "Mode", "value": "Live Amazon cart (owner)" if real else "Amazon add-to-cart link; you confirm on Amazon"},
                     ],
                     "approve_cta": {"label": "Add to cart", "primary": True, "selection": selection("focal_approve_cart")},
                     "reject_cta": {"label": "Not now", "selection": selection("focal_reject_cart")},
@@ -495,13 +577,29 @@ class Conversation:
                    else f"⚠️ {result.summary if result else 'No answer from the buyer agent.'}")
             )
         else:
-            added = True
-            self.credit("buyer", "simulated cart add", 0)
-            await self.say(
-                f"{self.line('buyer')}\n🧪 **Simulated:** approval recorded and the cart step was "
-                "rehearsed. Real cart additions run only for the owner's account."
-            )
+            # Everyone else gets Amazon's own add-to-cart link: they open it and confirm.
+            added = await self.cart_link()
         await self.offer_message(added=added)
+
+    async def cart_link(self) -> bool:
+        asin = re.search(r"/dp/([A-Z0-9]{10})", self.state.get("listing") or "", re.IGNORECASE)
+        started = time.perf_counter()
+        link = (
+            await self.ask("cart_link", CartRequest(product_id=asin[1].upper()), CartLink, timeout=20)
+            if asin
+            else None
+        )
+        ms = round((time.perf_counter() - started) * 1000)
+        if link is None or not link.cart_url:
+            self.credit("cart_link", "no link", ms)
+            await self.say(f"🛒 Approval recorded; open the listing to add it yourself: {self.state.get('listing')}")
+            return False
+        self.credit("cart_link", f"add-to-cart link for {link.product_id}", ms)
+        await self.say(
+            f"{self.line('cart_link')} · {secs(ms)}\n✅ Approved. Amazon's official add-to-cart link "
+            f"(you confirm on Amazon; nothing is bought):\n{link.cart_url}"
+        )
+        return True
 
     # ---- 5. messenger --------------------------------------------------------------
 
@@ -509,7 +607,7 @@ class Conversation:
         friend = os.getenv("FOCAL_SHARE_CONTACT", "").strip()
         product = self.state.get("buy_product") or self.state.get("product", "")
         if not friend:
-            await self.say("💬 Messenger skipped: set FOCAL_SHARE_CONTACT to tell a friend.")
+            self.note("💬 Messenger skipped: set FOCAL_SHARE_CONTACT to tell a friend.")
             return await self.offer_watch()
         price = (self.state.get("best") or {}).get("price")
         note = f"just {'added' if added else 'picked'} the {product}" + (f" for {money(price)}" if price else "") + " (Focal found it)"
@@ -545,17 +643,19 @@ class Conversation:
     async def on_message(self, approved: bool):
         draft = self.state.get("draft") or {}
         if not approved:
-            await self.say("💬 Message discarded. Nothing was sent.")
-        elif self.sender in owners():
+            self.note("💬 Message discarded. Nothing was sent.")
+        elif self.sender in owners() or imessage_dry_run():
+            # In dry-run mode the messenger records the exact send without running it,
+            # so anyone can take the real path.
             result = await self.ask(
                 "messenger", MessageApproval(draft_id=draft["id"], text=draft["text"]), MessageSendResponse, timeout=30
             )
             self.credit("messenger", result.status if result else "no answer")
             dry = " *(dry run: the exact send was recorded, not executed)*" if result and result.dry_run else ""
-            await self.say(f"{self.line('messenger')}\n{result.summary if result else 'No answer.'}{dry}")
+            self.note(f"{self.line('messenger')}\n{result.summary if result else 'No answer.'}{dry}")
         else:
             self.credit("messenger", "simulated send")
-            await self.say(f"{self.line('messenger')}\n🧪 **Simulated:** approval recorded; real sends run only for the owner.")
+            self.note(f"{self.line('messenger')}\n🧪 **Simulated:** approval recorded; real sends run only for the owner.")
         await self.offer_watch()
 
     # ---- 6. paid price watch (last) ----------------------------------------------
@@ -604,16 +704,17 @@ class Conversation:
         self.state.update(stage="awaiting_payment", payment_ref=reference, checkout_id=checkout["id"])
         self.save()
         self.ctx.storage.set(f"payment:{reference}", self.sender)
-        await self.ctx.send(
-            self.sender,
+        # The payment request goes last: ASI:One shows an agent's latest message per turn.
+        await self.say(
+            "💳 **Payment Protocol:** sending a Stripe payment request"
+            + (" in **test mode**. Use card 4242 4242 4242 4242, any future date and any CVC." if payments.test_mode() else ".")
+            + " The watch starts as soon as Stripe confirms."
+        )
+        await self.pace()
+        await self.send(
             payments.payment_request(
                 str(self.ctx.agent.address), reference, f"Focal Pro price watch for {product}", checkout
             ),
-        )
-        await self.say(
-            "💳 **Payment Protocol:** sent a Stripe payment request"
-            + (" in **test mode**. Use card 4242 4242 4242 4242, any future date and any CVC." if payments.test_mode() else ".")
-            + " The watch starts as soon as Stripe confirms."
         )
 
     async def on_commit(self, msg: CommitPayment):
@@ -669,9 +770,9 @@ class Conversation:
                                                 {"type": "text", "value": r["value"], "style": "muted"}]}
                                   for r in rows]}]}},
                 terminal=True,
+                end_session=True,
             )
         )
-        await self.say("Session complete.", end=True)
 
 
 def watch_interval() -> int:
@@ -684,10 +785,11 @@ def build_asi_protocols(addresses: dict[str, str]) -> list[Protocol]:
     @chat.on_message(ChatMessage)
     async def on_chat(ctx: Context, sender: str, msg: ChatMessage):
         await ctx.send(sender, ChatAcknowledgement(timestamp=datetime.now(UTC), acknowledged_msg_id=msg.msg_id))
-        body = message_text(msg)
+        # Direct @mentions arrive as "@agent1q… <text>"; card selections follow the mention.
+        body = re.sub(r"^\s*(?:@\S+\s*)+", "", message_text(msg))
         if not body:
             return
-        ctx.logger.info(f"ASI:One chat from {sender}")
+        ctx.logger.info(f"ASI:One chat from {sender} (session {ctx.session}): {body[:300]!r}")
         conversation = Conversation(ctx, sender, addresses)
         try:
             await conversation.handle(body)

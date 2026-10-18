@@ -9,7 +9,7 @@ import os
 import re
 from urllib.parse import urlencode
 
-from uagents import Agent, Context
+from uagents import Agent, Context, Protocol
 
 from .agents import make_agent
 from .models import CartLink, CartRequest
@@ -63,6 +63,14 @@ def build_amazon_cart_agent(port: int | None = None) -> Agent:
     async def on_cart(ctx: Context, req: CartRequest) -> CartLink:
         return _response("amazon", req, amazon_cart_link(req.product_id, req.quantity))
 
+    # Agent-to-agent: the coordinator asks for a link once the shopper approves.
+    proto = Protocol(name="CartLink", version="0.1.0")
+
+    @proto.on_message(CartRequest, replies=CartLink)
+    async def on_request(ctx: Context, sender: str, req: CartRequest):
+        await ctx.send(sender, _response("amazon", req, amazon_cart_link(req.product_id, req.quantity)))
+
+    agent.include(proto, publish_manifest=True)
     return agent
 
 
@@ -75,4 +83,12 @@ def build_bestbuy_cart_agent(port: int | None = None) -> Agent:
     async def on_cart(ctx: Context, req: CartRequest) -> CartLink:
         return _response("bestbuy", req, bestbuy_cart_link(req.product_id))
 
+    # Agent-to-agent: the coordinator asks for a link once the shopper approves.
+    proto = Protocol(name="CartLink", version="0.1.0")
+
+    @proto.on_message(CartRequest, replies=CartLink)
+    async def on_request(ctx: Context, sender: str, req: CartRequest):
+        await ctx.send(sender, _response("bestbuy", req, bestbuy_cart_link(req.product_id)))
+
+    agent.include(proto, publish_manifest=True)
     return agent

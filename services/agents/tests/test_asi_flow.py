@@ -12,6 +12,7 @@ from laai_agents import asi_flow, cards, handlers, imessage, memory, verifier
 from laai_agents.buyer import BuyRequest, BuyResponse, CartApproval
 from laai_agents.models import (
     AlternativesRequest,
+    CartRequest,
     Offer,
     PriceCompareRequest,
     PriceCompareResponse,
@@ -74,6 +75,10 @@ class Context:
                 confirmation_token="c" * 32 if message.url else None,
                 summary="ok",
             ), None
+        if isinstance(message, CartRequest):
+            from laai_agents.carts import _response, amazon_cart_link
+
+            return _response("amazon", message, amazon_cart_link(message.product_id, message.quantity)), None
         if isinstance(message, CartApproval):
             self.cart_approvals.append(message)
             return BuyResponse(product="Sony", status="cart_added", summary="Added to cart."), None
@@ -110,6 +115,7 @@ ADDRESSES = {
         "focal-memory",
         "focal-amazon-buyer-demo",
         "laai-messenger",
+        "laai-amazon-cart",
     )
 }
 
@@ -136,7 +142,7 @@ async def test_full_flow_from_intent_to_watch_with_cards():
 
     await step(ctx, SHOPPER, "The user approved: focal_approve_cart")
     assert not ctx.cart_approvals, "non-owners never trigger the real cart"
-    assert "Simulated" in ctx.texts()
+    assert "add-to-cart link" in ctx.texts()
     assert ctx.card_kinds()[-1] == "review"  # iMessage draft
 
     await step(ctx, SHOPPER, json.dumps({"focal_action": "focal_send_message"}))
