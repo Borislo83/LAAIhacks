@@ -20,6 +20,7 @@ from .models import (
     ChatMessage,
     ChatReply,
     MessageRequest,
+    SpotifyArgs,
     TaskKind,
     ToolArgs,
 )
@@ -36,7 +37,15 @@ Tools:
   For a general request with no topic ("brief me on the news", "everything that happened in
   the US yesterday"), pass the user's words as the query: it returns a multi-story brief.
 - find_youtube: a YouTube link for a song or video. Use it, not the shopping tools, whenever the
-  user wants to play, watch, listen to or find a song, music video or other video.
+  user wants to play, watch, listen to or find a song, music video or other video, unless they
+  say Spotify. When the user asks to play or watch it, the video is also opened on their laptop:
+  if the result's laptop.status is "opened", say "Playing <title> on your laptop"; otherwise
+  give the link and say it was not opened on the laptop. Never claim it is playing otherwise.
+- control_spotify: plays a song, artist, album or playlist in the laptop's Spotify app, or
+  pauses, resumes, skips, goes back or changes the volume. Use it when the user says Spotify,
+  and for bare playback controls ("pause", "skip", "next song", "volume 40", "turn it up").
+  Only pass volume or volume_change for a number or direction the user said. Repeat its
+  summary; if it returns an error, say what went wrong.
 - message_friend: drafts an iMessage for the user to review. It never sends; the user confirms
   the draft in the app. Use it for "text/message/tell <name> ...". Say the draft needs review.
 - compare_prices: where a product is cheapest. Use for price, deals, "where to buy", savings.
@@ -98,6 +107,40 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "control_spotify",
+            "description": (
+                "Play something or control playback in the Spotify app on the user's laptop."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["play", "pause", "resume", "next", "previous", "volume"],
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "For play: the song, artist, album or playlist",
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["track", "artist", "album", "playlist", "auto"],
+                    },
+                    "volume": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "volume_change": {
+                        "type": "integer",
+                        "minimum": -100,
+                        "maximum": 100,
+                        "description": "Relative change, e.g. 15 for 'turn it up'",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "summarize_news",
             "description": (
                 "Research recent news on a topic and return one headline, one image "
@@ -144,6 +187,10 @@ YOUTUBE_LINK = re.compile(
 )
 
 
+# The only URL the laptop is ever asked to open.
+WATCH_URL = re.compile(r"https://www\.youtube\.com/watch\?v=[A-Za-z0-9_-]{11}")
+
+
 def _youtube_link(url: Any) -> str | None:
     return url if isinstance(url, str) and YOUTUBE_LINK.fullmatch(url) else None
 
@@ -160,6 +207,40 @@ def safe_youtube(result: dict[str, Any]) -> dict[str, Any]:
             if isinstance(alternative, dict) and _youtube_link(alternative.get("url"))
         ],
     }
+
+
+SPOTIFY_KINDS = {"track", "artist", "album", "playlist"}
+SPOTIFY_URI = re.compile(r"spotify:(?:track|artist|album|playlist):[A-Za-z0-9]{22}")
+SPOTIFY_LINK = re.compile(r"https://open\.spotify\.com/(?:track|artist|album|playlist)/[A-Za-z0-9]{22}")
+
+
+def safe_spotify(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep only the Spotify agent's known fields, with capped text and checked links."""
+    uri, url, volume = result.get("uri"), result.get("url"), result.get("volume")
+    return {
+        "action": _text(result.get("action"), 20),
+        "query": _text(result.get("query")),
+        "kind": result.get("kind") if result.get("kind") in SPOTIFY_KINDS else None,
+        "title": _text(result.get("title")),
+        "artist": _text(result.get("artist")),
+        "device": _text(result.get("device"), 100),
+        "uri": uri if isinstance(uri, str) and SPOTIFY_URI.fullmatch(uri) else None,
+        "url": url if isinstance(url, str) and SPOTIFY_LINK.fullmatch(url) else None,
+        "volume": volume
+        if isinstance(volume, int) and not isinstance(volume, bool) and 0 <= volume <= 100
+        else None,
+        "summary": _text(result.get("summary")) or "",
+        "error": _text(result.get("error")),
+    }
+
+
+LAPTOP_STATUSES = {"opened", "dry_run", "not_configured", "refused", "failed"}
+
+
+def safe_laptop(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict) or result.get("status") not in LAPTOP_STATUSES:
+        return {"status": "failed", "summary": "The laptop gave an invalid answer; nothing was opened."}
+    return {"status": result["status"], "summary": _text(result.get("summary")) or ""}
 
 
 NEWS_HEADLINE_MAX = 200
@@ -270,7 +351,11 @@ RETRY_DELAY = 1.0
 
 
 async def call_agent(
-    kind: AgentKind, args: ToolArgs, config: Config, http: httpx.AsyncClient, emit=None
+    kind: AgentKind,
+    args: ToolArgs | SpotifyArgs,
+    config: Config,
+    http: httpx.AsyncClient,
+    emit=None,
 ) -> AgentCall:
     payload = args.model_dump(include=set(FIELDS[kind]))
     started = time.perf_counter()
@@ -307,13 +392,17 @@ async def call_agent(
                 answer = safe_youtube(answer)
             elif kind == AgentKind.NEWS:
                 answer = safe_news(answer)
+            elif kind == AgentKind.SPOTIFY:
+                answer = safe_spotify(answer)
         except httpx.TimeoutException:
             break  # Retrying a timed-out request would only multiply the wait.
         except (httpx.HTTPError, ValueError, TypeError):
             continue
         result, error = answer, answer.get("error")
-        if not error:
-            break  # A failed web search is retried; a real answer is final.
+        # A failed web search is retried; a real answer is final. A Spotify error ("needs
+        # Premium", "Spotify isn't open") won't change, and a repeat could skip twice.
+        if not error or kind == AgentKind.SPOTIFY:
+            break
     ms = round((time.perf_counter() - started) * 1000)
     if emit:
         emit(
@@ -327,6 +416,47 @@ async def call_agent(
             }
         )
     return AgentCall(kind=kind, payload=payload, result=result, error=error, ms=ms)
+
+
+# "play/watch X" opens the video on the laptop; "send me a link to X" only returns it.
+PLAY_WORDS = r"\b(?:play|watch|put on|listen to|start)\b"
+LINK_WORDS = r"\b(?:links?|urls?|send me|share)\b"
+
+
+def wants_playback(text: str) -> bool:
+    return bool(
+        re.search(PLAY_WORDS, text, re.IGNORECASE) and not re.search(LINK_WORDS, text, re.IGNORECASE)
+    )
+
+
+async def play_on_laptop(call: AgentCall, config: Config, http: httpx.AsyncClient, emit=None):
+    """Ask the agents process to open the found video in the laptop's browser."""
+    url = (call.result or {}).get("url")
+    if not isinstance(url, str) or not WATCH_URL.fullmatch(url):
+        return call
+    token = config.laptop_executor_token.get_secret_value()
+    if not token:
+        laptop = {"status": "not_configured", "summary": "Opening videos on the laptop isn't set up."}
+    else:
+        if emit:
+            emit(
+                {
+                    "type": "progress",
+                    "kind": AgentKind.YOUTUBE.value,
+                    "stage": "delegated",
+                    "message": "Opening the video on your laptop",
+                }
+            )
+        try:
+            # No progress_id: the token goes only to this one loopback-configured route.
+            response = await agent_request(
+                "youtube/open", {"url": url, "executor_token": token}, config, http, timeout=20
+            )
+            response.raise_for_status()
+            laptop = safe_laptop(response.json())
+        except (httpx.HTTPError, ValueError, TypeError):
+            laptop = {"status": "failed", "summary": "Couldn't reach the laptop; nothing was opened."}
+    return call.model_copy(update={"result": {**call.result, "laptop": laptop}})
 
 
 def _brief(call: AgentCall) -> str:
@@ -398,6 +528,45 @@ def grounded(args: ToolArgs, user_text: str) -> ToolArgs:
     )
 
 
+UP_WORDS = r"\b(?:up|louder|raise|increase|higher|more)\b"
+DOWN_WORDS = r"\b(?:down|quieter|softer|lower|decrease|reduce|less)\b"
+VOLUME_STEP = 15
+
+
+def grounded_spotify(args: SpotifyArgs, user_text: str) -> SpotifyArgs:
+    """Keep only a volume or direction the user said, and a query only for play."""
+    said = _numbers(user_text)
+    change = None
+    if args.action == "volume" and args.volume is None:
+        up = re.search(UP_WORDS, user_text, re.IGNORECASE)
+        down = re.search(DOWN_WORDS, user_text, re.IGNORECASE)
+        if up or down:
+            step = abs(args.volume_change) if args.volume_change and abs(args.volume_change) in said else VOLUME_STEP
+            change = step if up else -step
+    return args.model_copy(
+        update={
+            "query": args.query if args.action == "play" else None,
+            "kind": args.kind if args.action == "play" else "auto",
+            "volume": args.volume if args.action == "volume" and args.volume in said else None,
+            "volume_change": change,
+        }
+    )
+
+
+def laptop_honest(reply: str, calls: list[AgentCall]) -> str:
+    """The reply says a video plays on the laptop exactly when it was opened there."""
+    for call in calls:
+        laptop = (call.result or {}).get("laptop") if call.kind == AgentKind.YOUTUBE else None
+        if not laptop:
+            continue
+        opened = laptop["status"] == "opened"
+        if opened and "on your laptop" not in reply.lower():
+            return _line(call) + (" " + reply if reply else "")
+        if not opened and re.search(r"\bplaying\b|\bon your laptop\b", reply, re.IGNORECASE):
+            return _line(call)
+    return reply
+
+
 async def chat_with_llm(
     history: list[ChatMessage], config: Config, http: httpx.AsyncClient, emit=None, preferences=None
 ) -> ChatReply:
@@ -409,6 +578,8 @@ async def chat_with_llm(
     ]
     messages += [m.model_dump() for m in history]
     user_text = " ".join(m.content for m in history if m.role == "user")
+    # Only the latest ask can open a video, and only one video per chat turn.
+    play_pending = history[-1].role == "user" and wants_playback(history[-1].content)
     calls: list[AgentCall] = []
     for _ in range(MAX_ROUNDS):
         if emit:
@@ -423,9 +594,8 @@ async def chat_with_llm(
         message = await complete(messages, config, http, max_tokens=400, timeout=30, tools=TOOLS)
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
-            return ChatReply(
-                reply=(message.get("content") or "").strip(), calls=calls, source="asi_one"
-            )
+            reply = laptop_honest((message.get("content") or "").strip(), calls)
+            return ChatReply(reply=reply, calls=calls, source="asi_one")
         messages.append(
             {"role": "assistant", "content": message.get("content") or "", "tool_calls": tool_calls}
         )
@@ -439,10 +609,19 @@ async def chat_with_llm(
                 if name == "message_friend":
                     request = MessageRequest.model_validate_json(arguments).request
                     job = prepare_message(request, config, http, emit)
+                elif name == "control_spotify":
+                    args = grounded_spotify(
+                        SpotifyArgs.model_validate_json(arguments), history[-1].content
+                    )
+                    if args.suits():
+                        job = call_agent(AgentKind.SPOTIFY, args, config, http, emit)
                 elif kind := TOOL_KINDS.get(name):
                     args = ToolArgs.model_validate_json(arguments)
                     if args.suits(kind):
                         job = call_agent(kind, grounded(args, user_text), config, http, emit)
+                        if kind == AgentKind.YOUTUBE and play_pending:
+                            play_pending = False
+                            job = _then_play(job, config, http, emit)
             except ValidationError:
                 pass
             planned.append((tool_call, name, job))
@@ -457,6 +636,83 @@ async def chat_with_llm(
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": content})
     # Out of rounds: answer from what the agents returned.
     return rules_reply(calls)
+
+
+async def _then_play(job, config: Config, http: httpx.AsyncClient, emit=None) -> AgentCall:
+    return await play_on_laptop(await job, config, http, emit)
+
+
+# Keyword rules for Spotify. Bare controls must be the whole message ("pause", "next
+# song", "volume 40"), so "next-gen iPhone price" or "turn it up to 11 review" stay put.
+SPOTIFY_PREFIX = re.compile(
+    r"^(?:(?:hey|ok|okay|please|pls|can you|could you|would you)\b[\s,]*)+", re.IGNORECASE
+)
+SPOTIFY_SUFFIX = re.compile(
+    r"(?:\s+(?:on|in|from|with|using)\s+spotify|\s+please|\s+for me)+$", re.IGNORECASE
+)
+MUSIC = r"(?:\s+(?:it|the\s+)?(?:music|song|track|spotify|playback))?"
+SPOTIFY_CONTROLS = [
+    ("pause", re.compile(rf"(?:pause|stop){MUSIC}")),
+    ("resume", re.compile(rf"(?:resume|unpause|continue){MUSIC}|play(?:\s+(?:spotify|playback))?")),
+    ("next", re.compile(r"(?:next|skip)(?:\s+(?:this\s+|the\s+)?(?:song|track|one))?|(?:play\s+)?(?:the\s+)?next\s+(?:song|track)")),
+    ("previous", re.compile(r"(?:previous|prev|go\s+back)(?:\s+(?:a\s+|the\s+)?(?:song|track|one))?|(?:last|previous)\s+(?:song|track)")),
+]
+SPOTIFY_VOLUME = re.compile(
+    r"(?:set\s+|change\s+|put\s+)?(?:the\s+)?volume\s+(?:to\s+|at\s+)?(\d{1,3})\s*%?"
+    r"|(?:set\s+(?:the\s+)?volume\s+)?(\d{1,3})\s*%?\s+volume"
+)
+SPOTIFY_LOUDER = re.compile(
+    r"turn\s+(?:it|this|the\s+(?:music|volume|song))\s+up|turn\s+up\s+(?:the\s+)?(?:music|volume|song)"
+    r"|louder|volume\s+up|(?:raise|increase)\s+(?:the\s+)?volume"
+)
+SPOTIFY_QUIETER = re.compile(
+    r"turn\s+(?:it|this|the\s+(?:music|volume|song))\s+down|turn\s+down\s+(?:the\s+)?(?:music|volume|song)"
+    r"|quieter|softer|volume\s+down|(?:lower|decrease)\s+(?:the\s+)?volume"
+)
+SPOTIFY_PLAY = re.compile(
+    r"^(?:play|put\s+on|start|listen\s+to|queue\s+up|shuffle)\s+(?:me\s+)?(?:some\s+)?(?P<query>.+?)"
+    r"\s+(?:on|in|from|with|using)\s+spotify$"
+    r"|^spotify[\s,:]+play\s+(?P<query2>.+)$",
+    re.IGNORECASE,
+)
+SPOTIFY_KIND_PREFIX = re.compile(
+    r"^(?:the\s+|an?\s+)?(song|track|artist|band|album|playlist)\s+(?:called\s+|named\s+|by\s+)?",
+    re.IGNORECASE,
+)
+SPOTIFY_KIND_SUFFIX = re.compile(r"\s+(song|track|artist|album|playlist)$", re.IGNORECASE)
+
+
+def spotify_request(text: str) -> SpotifyArgs | None:
+    """'play the album Thriller on Spotify' -> play album Thriller; 'pause' -> pause."""
+    if re.search(r"youtube", text, re.IGNORECASE):
+        return None
+    clean = SPOTIFY_PREFIX.sub("", " ".join(text.split()).strip(" ?.!,"))
+    clean = SPOTIFY_SUFFIX.sub("", clean).strip(" ?.!,")
+    lower = clean.lower()
+    for action, pattern in SPOTIFY_CONTROLS:
+        if pattern.fullmatch(lower):
+            return SpotifyArgs(action=action)
+    if match := SPOTIFY_VOLUME.fullmatch(lower):
+        return SpotifyArgs(action="volume", volume=min(int(match[1] or match[2]), 100))
+    if SPOTIFY_LOUDER.fullmatch(lower):
+        return SpotifyArgs(action="volume", volume_change=VOLUME_STEP)
+    if SPOTIFY_QUIETER.fullmatch(lower):
+        return SpotifyArgs(action="volume", volume_change=-VOLUME_STEP)
+    # The play pattern needs "spotify" itself, so it reads the text before the suffix strip.
+    unsuffixed = SPOTIFY_PREFIX.sub("", " ".join(text.split()).strip(" ?.!,"))
+    unsuffixed = re.sub(r"\s+please$", "", unsuffixed, flags=re.IGNORECASE)
+    match = SPOTIFY_PLAY.match(unsuffixed)
+    if not match:
+        return None
+    query, kind = (match["query"] or match["query2"]).strip(" \"'“”"), "auto"
+    for pattern in (SPOTIFY_KIND_PREFIX, SPOTIFY_KIND_SUFFIX):
+        if found := pattern.search(query):
+            word = found[1].lower()
+            kind = {"song": "track", "band": "artist"}.get(word, word)
+            query = (query[: found.start()] + query[found.end() :]).strip()
+    if not query:
+        return None
+    return SpotifyArgs(action="play", query=query[:300], kind=kind)
 
 
 NEWS_WORDS = (
@@ -523,7 +779,14 @@ KEYWORDS = {
 
 def _line(call: AgentCall) -> str:
     link = call.result.get("url") if call.kind == AgentKind.YOUTUBE else None
+    laptop = call.result.get("laptop") if call.kind == AgentKind.YOUTUBE else None
+    if laptop and laptop["status"] == "opened":
+        return f"Playing {call.result.get('title') or 'the video'} on your laptop."
     summary = call.result["summary"]
+    if laptop:
+        # Not opened: the link, and why it isn't playing.
+        line = f"{summary} {link}" if link and link not in summary else summary
+        return f"{line} Not opened on your laptop: {laptop['summary']}".strip()
     headline = call.result.get("headline") if call.kind == AgentKind.NEWS else None
     if headline and headline not in summary:
         summary = f"{headline.rstrip('.')}. {summary}"
@@ -554,7 +817,7 @@ def _other_request(text: str) -> bool:
     return any(
         re.search(pattern, text, re.IGNORECASE)
         for pattern in (NEWS_WORDS, CART_REQUEST, REVIEWS_REQUEST, COORDINATE, MEDIA_WORDS,
-                        r"\byoutube\b|\b(?:find|play)\s+(?:the\s+)?(?:song|video)\b")
+                        r"\byoutube\b|\bspotify\b|\b(?:find|play)\s+(?:the\s+)?(?:song|video)\b")
     )
 
 
@@ -599,6 +862,8 @@ async def chat_with_rules(
     text = history[-1].content
     if _is_message_request(text):
         return rules_reply([await prepare_message(text, config, http, emit)])
+    if spotify := spotify_request(text):
+        return rules_reply([await call_agent(AgentKind.SPOTIFY, spotify, config, http, emit)])
     kinds = [k for k, pattern in KEYWORDS.items() if re.search(pattern, text, re.IGNORECASE)]
     youtube = re.search(r"youtube", text, re.IGNORECASE)
     if (
@@ -618,7 +883,10 @@ async def chat_with_rules(
             else "auto"
         )
         args = ToolArgs(query=text[:300], kind=media)
-        return rules_reply([await call_agent(AgentKind.YOUTUBE, args, config, http, emit)])
+        call = await call_agent(AgentKind.YOUTUBE, args, config, http, emit)
+        if wants_playback(text):
+            call = await play_on_laptop(call, config, http, emit)
+        return rules_reply([call])
     if kinds and TaskKind.REVIEWS not in kinds:
         # Any shopping question is worth reviews, even without a review word in it.
         kinds.append(TaskKind.REVIEWS)
