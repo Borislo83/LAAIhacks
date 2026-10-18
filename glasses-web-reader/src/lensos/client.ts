@@ -60,6 +60,11 @@ export class BackendClient {
   }
   /** Opens a hardcoded route (YouTube, Spotify, a product page) on the laptop. */
   openOnLaptop(url: string, signal?: AbortSignal) { return this.request<{ opened: string }>('/laptop/open', 'POST', { url }, signal) }
+  /** The bookmark list shared by the devices signed in to this laptop. */
+  sharedBookmarks(signal?: AbortSignal) { return this.request<{ bookmarks: { url: string; title: string; position: number; where?: string }[] }>('/bookmarks', 'GET', undefined, signal) }
+  saveSharedBookmarks(bookmarks: { url: string; title: string; position: number; where?: string }[], signal?: AbortSignal) {
+    return this.request<{ bookmarks: unknown[] }>('/bookmarks', 'PUT', { bookmarks }, signal)
+  }
   createSession(signal?: AbortSignal) { return this.request<{ session_id: string; revision: number }>('/v1/sessions', 'POST', {}, signal) }
   async display(session: string, after?: number, signal?: AbortSignal) {
     const d = await this.request<DisplayState | null>(`/v1/sessions/${this.id(session)}/display${after === undefined ? '' : `?after_revision=${after}`}`, 'GET', undefined, signal)
