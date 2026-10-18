@@ -77,7 +77,7 @@ export function mountRecommendations(root: HTMLElement,
     for (const child of list.querySelectorAll<HTMLButtonElement>('button')) {
       child.setAttribute('aria-pressed', String(child.dataset.action === action.id))
     }
-    status.textContent = 'Action selected. Execution is coming soon.'
+    status.textContent = 'Running on your glasses…'
     const detail: RecommendationSelection = { schema_version: '1.0', request_id: window.crypto.randomUUID(),
       executor: 'fetch.ai', source: 'claude', action: { ...action }, context: { ...context } }
     events.selected?.(detail)

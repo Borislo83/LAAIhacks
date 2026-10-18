@@ -159,7 +159,7 @@ test('dismissed recommendations reopen with working selections and no new Claude
   dom.window.close()
 })
 
-test('selection emits the chosen action and page context, with no execution claim', async () => {
+test('selection emits the chosen action and page context for the glasses to run', async () => {
   const { dom, root, panel } = popup()
   const selections: any[] = []
   dom.window.addEventListener(RECOMMENDATION_SELECTED, event => selections.push((event as CustomEvent).detail))
@@ -172,7 +172,7 @@ test('selection emits the chosen action and page context, with no execution clai
   assert.deepEqual(selections[0].context, context)
   assert.ok(selections[0].request_id)
   assert.equal(button.getAttribute('aria-pressed'), 'true')
-  assert.match(root.querySelector('[role=status]')!.textContent!, /not.*run|coming soon/i)
+  assert.match(root.querySelector('[role=status]')!.textContent!, /running/i)
   dom.window.close()
 })
 
