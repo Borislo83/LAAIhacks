@@ -247,6 +247,18 @@ Checked on 2026-10-17 at the repository root, `glasses-web-reader/`:
 - `/api/condense` returned pages for an NPR article, an AP and a BBC front page, Wikipedia, and an Amazon product page.
 - The SSRF guard refused `http://127.0.0.1:8001` (403).
 - The desktop simulator (`evenhub-simulator --automation-port`) runs, renders, and responds to taps.
+- Smart view, tested from the main checkout with an Anthropic key in its `.env`
+  (`npm run server`, :8787):
+
+  | Page | Result | Time |
+  |---|---|---|
+  | apnews.com (news) | page with 57 sections, then a `kind` event and 4 screen batches | 24 s |
+  | crutchfield.com, Sony WH-1000XM5 (product) | `kind` = `shop`, 2 screen batches | 18 s |
+  | rtings.com, WH-1000XM5 review | `kind` = `shop`, 2 screen batches | 7 s |
+  | bestbuy.com product page | clean 502 "Couldn't load bestbuy.com - it blocks automated readers" | — |
+
+  Smart view takes 7–24 s per page, so only PUT the page once the first `page` event
+  arrives, not after the whole deck is built.
 
 Today the app calls only its own `/api/condense`, `/api/manga/strip` and
 `/api/telemetry`. It never calls `/v1/sessions`, so nothing it reads reaches Focal and no
