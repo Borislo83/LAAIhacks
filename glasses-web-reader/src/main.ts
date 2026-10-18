@@ -21,7 +21,7 @@ import {
 } from './screens'
 import { mountCompanion, type Companion, type HeardLine, type VoiceUi } from './companion'
 import { clockFrame, loadingSpec, spinnerFrame, SPIN_MS } from './loading'
-import { VoiceRecorder, WakeListener, concat } from './voice'
+import { NoiseFloor, VoiceRecorder, WakeListener, concat } from './voice'
 import { BackendClient } from './lensos/client'
 import { BackendSession, type ActionGroup } from './lensos/session'
 import { apiActionCards } from './lensos/action-cards'
@@ -1195,6 +1195,7 @@ async function armWake() {
   wake = new WakeListener(
     utterance => void checkWake(utterance),
     utterance => void transcribeAmbient(utterance),
+    (window, from, utterance) => void recheckWake(window, from, utterance),
   )
   if (view === 'reader') void renderReader()
   companion.update()
@@ -1256,7 +1257,18 @@ async function checkWake(utterance: Uint8Array[]) {
   if (!listener || !res?.wake || wake !== listener || recorder) return
   wake = null
   wakeCommand = res.command ?? ''
-  void capture(wakeSeed(listener, utterance), true)
+  void capture(wakeSeed(listener, utterance), true, listener.floor)
+}
+
+/** During nonstop sound: the latest few seconds checked for the wake phrase. On a wake,
+ *  the capture starts from that window (the server strips everything up to "Hey Focal"). */
+async function recheckWake(window: Uint8Array[], from: number, utterance: Uint8Array[]) {
+  const listener = wake
+  const res = await sendVoice(concat(window), 'check').catch(() => null)
+  if (!listener || !res?.wake || wake !== listener || recorder) return
+  wake = null
+  wakeCommand = res.command ?? ''
+  void capture(listener.tail(utterance, from), true, listener.floor)
 }
 
 /**
@@ -1285,7 +1297,7 @@ async function transcribeAmbient(utterance: Uint8Array[]) {
   const full = pcm.length > check.bytes ? await sendVoice(pcm, 'check').catch(() => null) : null
   if (full?.wake && listener && wake === listener && !recorder) {
     wake = null
-    void capture(wakeSeed(listener, utterance), true)
+    void capture(wakeSeed(listener, utterance), true, listener.floor)
   }
   const text = full?.transcript || res.transcript
   if (check.line) {
@@ -1317,12 +1329,15 @@ function voiceBack() {
   void showContent()
 }
 
-async function capture(seed: Uint8Array[], fromWake: boolean) {
+async function capture(seed: Uint8Array[], fromWake: boolean, floor?: NoiseFloor) {
   const seq = nextVoice()
   // A new question replaces an answer or an unsent draft (nothing is sent).
   clearTimeout(agentFade)
   agentCard = null
-  const rec = (recorder = new VoiceRecorder(reason => void stopVoice(reason !== 'no-speech'), seed))
+  // After a wake the room's measured noise level carries over, so its chatter doesn't keep
+  // the capture open; a capture from a tap starts from a quiet-room level.
+  const rec = (recorder = new VoiceRecorder(reason => void stopVoice(reason !== 'no-speech'), seed,
+    floor ? new NoiseFloor(floor.level) : undefined))
   wakeCapture = fromWake
   voiceUi = { phase: 'listening', text: '' }
   await renderAssistant(rerecordFor ? `Say your new message to ${rerecordFor}.` : GREETING, fromWake ? WAKE_LISTEN_HINT : LISTEN_HINT)
