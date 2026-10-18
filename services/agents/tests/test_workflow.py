@@ -416,3 +416,111 @@ async def test_contract_rejects_cross_context_events(tmp_path, field, value):
     with pytest.raises(ValueError):
         await workflow.poll_once()
     assert workflow.executions == 0 and workflow.state["cursor"] == ""
+
+
+def _review_page(name, value, best=None, pros=(), cons=()):
+    import json
+
+    rating = {"@type": "Rating", "ratingValue": value}
+    if best is not None:
+        rating["bestRating"] = best
+    review = {
+        "@type": "Review",
+        "itemReviewed": {"@type": "Product", "name": name},
+        "reviewRating": rating,
+        "positiveNotes": {
+            "@type": "ItemList",
+            "itemListElement": [{"@type": "ListItem", "name": p} for p in pros],
+        },
+        "negativeNotes": [{"@type": "ListItem", "name": c} for c in cons],
+    }
+    return f'<title>{name} review</title><script type="application/ld+json">{json.dumps(review)}</script>'
+
+
+def test_expert_review_ratings_are_normalized_and_matched():
+    from laai_agents.expert_reviews import parse_review, to_five
+
+    assert to_five("7.7", "10") == 3.9 and to_five(8.6) == 4.3 and to_five(4) == 4.0
+    assert to_five(90) == 4.5 and to_five(0) is None and to_five("n/a") is None
+    page = _review_page("Sony WH-1000XM5", 4.5, 5, ["Great ANC"], ["Pricey"])
+    rating, pros, cons = parse_review(page, "https://www.pcmag.com/r", "Sony XM5")
+    assert (rating.source, rating.rating, pros, cons) == ("pcmag.com", 4.5, ["Great ANC"], ["Pricey"])
+    # A review of a different model on the same page is not counted.
+    other = _review_page("Sony WH-1000XM4", 5).replace("XM4 review", "XM4 review")
+    assert parse_review(other, "https://x.example/r", "Sony XM5")[0] is None
+
+
+async def test_reviews_average_expert_ratings(monkeypatch):
+    from laai_agents import merchants
+    from laai_agents.models import ReviewsRequest
+
+    pages = {
+        "https://www.pcmag.com/xm5": _review_page("Sony WH-1000XM5", 4.5, 5, ["Great ANC"]),
+        "https://www.soundguys.com/xm5": _review_page("Sony WH-1000XM5", 8.6, 10, [], ["Pricey"]),
+        "https://www.rtings.com/xm5": "<title>Sony WH-1000XM5 review</title>",
+    }
+
+    async def search(query):
+        sources = [Source(title="Sony WH-1000XM5 review", url=u) for u in pages]
+        return sources, {"sources": sources, "data_source": "ddgs", "notice": "n"}
+
+    async def fetch_page(url):
+        return pages[url]
+
+    monkeypatch.setattr(live, "search", search)
+    monkeypatch.setattr(merchants, "fetch_page", fetch_page)
+    result = await live.reviews(ReviewsRequest(product="Sony XM5"))
+    assert result.rating == 4.4 and result.review_count == 2
+    assert [r.source for r in result.ratings] == ["pcmag.com", "soundguys.com"]
+    assert result.pros == ["Great ANC"] and result.cons == ["Pricey"]
+    assert "4.4/5" in result.summary
+
+
+def test_snippet_prices_skip_listing_pages_and_copies():
+    from laai_agents.merchants import listing_page, rank, snippet_offer
+    from laai_agents.models import Offer
+
+    assert listing_page("https://www.walmart.com/brand/nothing/20006807")
+    assert listing_page("https://www.amazon.com/s?k=airpods")
+    assert listing_page("https://www.ebay.com/sch/i.html?_nkw=xm5")
+    assert not listing_page("https://www.walmart.com/ip/Nothing-Ear-a/123")
+    assert not listing_page("https://www.apple.com/shop/buy-airpods/airpods-pro-2")
+    brand = Source(title="Nothing Ear (a)", url="https://www.walmart.com/brand/nothing/1", snippet="Now $79.00")
+    assert snippet_offer(brand, "Nothing Ear (a)") is None
+
+    page = Offer(product="p", store="us.smartprix.com", price=249.31, url="https://a.example", source="structured", trust="medium")
+    copied = Offer(product="p", store="target.com", price=249.31, url="https://b.example", source="search_snippet", trust="medium")
+    own = Offer(product="p", store="bestbuy.com", price=239.0, url="https://c.example", source="search_snippet", trust="medium")
+    assert [o.store for o in rank([page, copied, own])] == ["bestbuy.com", "us.smartprix.com"]
+
+
+def test_review_notes_merge_same_topic_and_sites_count_once():
+    assert live.merge_notes(["Expensive"], ["Price", "Pricey", "No IP rating"]) == ["Expensive", "No IP rating"]
+    assert live.merge_notes(["Great ANC"], ["Excellent noise cancellation for the price"]) == [
+        "Great ANC",
+        "Excellent noise cancellation for the price",
+    ]
+
+
+async def test_reviews_count_each_site_once(monkeypatch):
+    from laai_agents import merchants
+    from laai_agents.models import ReviewsRequest
+
+    pages = {
+        "https://www.soundguys.com/q45-review": _review_page("Anker Soundcore Space Q45", 7.2, 10),
+        "https://www.soundguys.com/product/q45": _review_page("Anker Soundcore Space Q45", 7.2, 10),
+        "https://www.pcmag.com/q45": _review_page("Anker Soundcore Space Q45", 4.0, 5),
+    }
+
+    async def search(query):
+        sources = [Source(title="Anker Soundcore Space Q45 review", url=u) for u in pages]
+        return sources, {"sources": sources, "data_source": "ddgs", "notice": "n"}
+
+    async def fetch_page(url):
+        return pages[url]
+
+    monkeypatch.setattr(live, "search", search)
+    monkeypatch.setattr(merchants, "fetch_page", fetch_page)
+    result = await live.reviews(ReviewsRequest(product="Space Q45"))
+    assert [r.source for r in result.ratings] == ["soundguys.com", "pcmag.com"]
+    assert result.review_count == 2 and result.rating == 3.8  # (3.6 + 4.0) / 2

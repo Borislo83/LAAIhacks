@@ -172,16 +172,74 @@ def _research_url(product: str) -> str:
     return "https://duckduckgo.com/?q=" + quote_plus(f"{product} price")
 
 
+# Notes that say the same thing in different words ("Expensive", "Price", "Pricey").
+SAME_NOTE = [
+    re.compile(r"\b(?:expensive|price[ds]?|pricey|costly|cost)\b", re.IGNORECASE),
+    re.compile(r"\bbattery\b", re.IGNORECASE),
+    re.compile(r"\b(?:anc|noise[- ]cancell?(?:ing|ation))\b", re.IGNORECASE),
+]
+
+
+def merge_notes(notes: list[str], new: list[str]) -> list[str]:
+    """Add notes that aren't already covered, by wording or by a shared short topic."""
+    merged = list(notes)
+    for note in new:
+        key = note.lower().strip(" .")
+        if any(key == n.lower().strip(" .") for n in merged):
+            continue
+        # A short note ("Price") adds nothing next to one on the same topic.
+        topic = next((t for t in SAME_NOTE if t.search(note)), None)
+        if topic and len(note.split()) <= 3 and any(topic.search(n) for n in merged):
+            continue
+        merged.append(note)
+    return merged
+
+
 async def reviews(req):
+    from .expert_reviews import parse_review, site_name
+    from .merchants import fetch_page
+
     name = product_name(req.product)
     sources, meta = await search(f"{name} independent review")
-    report("summarizing", "Collecting sourced review excerpts")
-    excerpts = [f"{s.title}: {s.snippet[:280]}" for s in sources if s.snippet][:2]
-    summary = (
-        "Review search excerpts (not full-article analysis): " + " ".join(excerpts)
-        if excerpts
-        else f"Found review sources for {name}."
-    )
+    leads = [s for s in sources if matches_product(f"{s.title} {s.snippet}", name)]
+    urls = list(dict.fromkeys(s.url for s in leads or sources))[:6]
+    report("reading", f"Reading {len(urls)} expert review pages")
+    pages = await asyncio.gather(*(fetch_page(url) for url in urls))
+    ratings, pros, cons = [], [], []
+    for url, page in zip(urls, pages):
+        try:
+            rating, good, bad = parse_review(page, url, name) if page else (None, [], [])
+        except ValueError:  # malformed markup
+            continue
+        # One score per site: a review page and a product page can both carry it.
+        if rating and rating.source not in {r.source for r in ratings}:
+            ratings.append(rating)
+            pros = merge_notes(pros, good)
+            cons = merge_notes(cons, bad)
+    report("summarizing", f"Combining {len(ratings)} expert ratings")
+    average = round(sum(r.rating for r in ratings) / len(ratings), 1) if ratings else None
+    if ratings:
+        scores = ", ".join(f"{r.source} {r.rating:g}" for r in ratings)
+        summary = f"Experts rate {name} {average}/5 on average ({scores})."
+        if pros:
+            summary += f" Pros: {pros[0]}."
+        if cons:
+            summary += f" Cons: {cons[0]}."
+    else:
+        names = ", ".join(dict.fromkeys(site_name(s.url) for s in sources[:5]))
+        summary = (
+            f"Found review sources for {name} ({names}), but none published a "
+            "machine-readable rating. Open them to read the reviews."
+        )
+    best = max(ratings, key=lambda r: r.rating, default=None)
     return ReviewsResponse(
-        product=name, review_url=sources[0].url, summary=summary, **meta
+        product=name,
+        rating=average,
+        review_count=len(ratings),
+        ratings=ratings,
+        pros=pros[:4],
+        cons=cons[:4],
+        review_url=best.url if best else sources[0].url,
+        summary=summary,
+        **meta,
     )

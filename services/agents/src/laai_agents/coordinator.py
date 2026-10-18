@@ -60,10 +60,14 @@ def compare_reviews(main: ReviewsResponse, alt: ReviewsResponse) -> str:
         if r.error:
             return f"{r.product}: reviews unavailable right now"
         if r.rating is not None:
-            return f"{r.product}: {r.rating}/5 from {r.review_count:,} reviews"
-        return f"{r.product}: {len(r.sources)} review sources found"
+            return f"{r.product}: {r.rating}/5 from {r.review_count} expert reviews"
+        return f"{r.product}: {len(r.sources)} review sources, no published rating"
 
-    return f"Reviews compared: {line(main)} vs {line(alt)}."
+    verdict = ""
+    if main.rating is not None and alt.rating is not None and main.rating != alt.rating:
+        better = main if main.rating > alt.rating else alt
+        verdict = f" Experts rate {better.product} higher."
+    return f"Reviews compared: {line(main)} vs {line(alt)}.{verdict}"
 
 
 async def consider(

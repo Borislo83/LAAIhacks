@@ -520,3 +520,26 @@ async def test_rules_add_reviews_to_shopping_questions():
         )
     assert sorted(routes) == ["alternatives", "price", "reviews"]
     assert [c.kind.value for c in reply.calls] == ["price", "alternatives", "reviews"]
+
+
+@pytest.mark.parametrize(
+    "text, coordinated",
+    [
+        ("Earbuds like the Galaxy Buds3 Pro but under $100", True),
+        ("Something similar to the Sony XM5", True),
+        ("Consider AirPods Pro", True),
+        ("I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?", True),
+        ("Sony XM5 price", False),
+        ("I'd like a review of the Sony XM5", False),
+    ],
+)
+def test_budget_and_similar_product_questions_use_the_coordinator(text, coordinated):
+    import re
+
+    from laai_orchestrator.chat import COORDINATE, COORDINATE_WITHOUT_LLM
+
+    # Without an LLM key (the local default), both patterns apply.
+    found = re.search(COORDINATE, text, re.IGNORECASE) or re.search(
+        COORDINATE_WITHOUT_LLM, text, re.IGNORECASE
+    )
+    assert bool(found) is coordinated

@@ -388,8 +388,17 @@ const VIEW={
   },
   reviews(d){
     const pc=(d.pros.length||d.cons.length)?`<div class="pc"><div><h4>Pros</h4><ul>${d.pros.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div><div><h4>Cons</h4><ul>${d.cons.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div></div>`:"";
-    const link=d.review_url?`<div class="list"><a href="${esc(d.review_url)}" target="_blank" rel="noopener"><span>Read full reviews</span><span class="p">↗</span></a></div>`:"";
-    return {lens:lens(d.product,d.rating!=null?`${d.rating}★ from ${d.review_count.toLocaleString()} reviews`:"No reviews found",d.pros[0]?`“${d.pros[0].toLowerCase()}” · glance down`:""),body:pc+link};
+    // One row per expert score (live mode); otherwise a single link to the reviews.
+    const rated=d.ratings||[];
+    const rows=rated.length
+      ?rated.map(r=>`<a href="${esc(r.url)}" target="_blank" rel="noopener"><span>${esc(r.source)}</span><span class="p">${Number(r.rating).toFixed(1)}★</span></a>`).join("")
+      :d.review_url?`<a href="${esc(d.review_url)}" target="_blank" rel="noopener"><span>Read full reviews</span><span class="p">↗</span></a>`:"";
+    const n=(d.sources||[]).length;
+    const main=d.rating!=null
+      ?`${Number(d.rating).toFixed(1)}★ ${rated.length?`avg of ${d.review_count} expert reviews`:`from ${d.review_count.toLocaleString()} reviews`}`
+      :n?`${n} review sources`:"No reviews found";
+    const sub=d.pros[0]?`“${d.pros[0].toLowerCase()}” · glance down`:d.rating==null&&n?"no published rating · open sources":"";
+    return {lens:lens(d.product,main,sub),body:pc+(rows?`<div class="list">${rows}</div>`:"")};
   },
 };
 
