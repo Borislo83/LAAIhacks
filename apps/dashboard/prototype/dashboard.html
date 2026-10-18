@@ -70,7 +70,7 @@ h2 em{color:var(--muted)}
 .field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:140px}
 .field label{font:11px var(--mono);color:var(--muted);letter-spacing:.02em}
 .field input,.field select,.field textarea{font:15px var(--sans);border:1px solid var(--hair);border-radius:var(--r);padding:10px 12px;background:var(--well);color:var(--ink)}
-.field input::placeholder,.field textarea::placeholder,.composer input::placeholder{color:#737a80}
+.field input::placeholder,.field textarea::placeholder,.composer input::placeholder{color:var(--muted)}
 .field textarea{resize:vertical;line-height:1.5;width:100%}
 .field select{appearance:none;background:var(--well) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238d949a'/%3E%3C/svg%3E") no-repeat right 12px center;padding-right:32px}
 .preference-form{display:flex;flex-direction:column;gap:14px;margin-top:16px}
@@ -201,7 +201,6 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
 .draft-status{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
 .draft-status.err{color:var(--warn)}
 .draft:is([data-state="sent"],[data-state="cancelled"],[data-state="replaced"]) .draft-actions{display:none}
-.draft[data-state="sent"]{border-color:var(--lens)}
 .draft[data-state="sent"] .draft-status{color:var(--lens);font-weight:500}
 .draft[data-state="cancelled"],.draft[data-state="replaced"]{opacity:.6}
 .draft:not([data-state="sent"],[data-state="cancelled"],[data-state="replaced"]){border-top:2px solid var(--lens)}
