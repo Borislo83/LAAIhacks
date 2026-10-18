@@ -23,6 +23,7 @@ class AgentKind(StrEnum):
     ALTERNATIVES = "alternatives"
     REVIEWS = "reviews"
     YOUTUBE = "youtube"
+    NEWS = "news"
 
 
 class UserSettings(InputModel):
@@ -77,6 +78,7 @@ FIELDS = {
     AgentKind.ALTERNATIVES: ("product", "max_price"),
     AgentKind.REVIEWS: ("product",),
     AgentKind.YOUTUBE: ("query", "kind"),
+    AgentKind.NEWS: ("query", "max_sources"),
 }
 
 
@@ -110,6 +112,8 @@ class ToolArgs(BaseModel):
     # YouTube agent arguments.
     query: str | None = Field(default=None, min_length=1, max_length=300)
     kind: Literal["song", "video", "auto"] = "auto"
+    # News agent arguments (query is shared with YouTube).
+    max_sources: int = Field(default=6, ge=3, le=12)
 
     def suits(self, agent: "AgentKind") -> bool:
         """Whether the agent's required argument is present."""
