@@ -73,28 +73,12 @@ can't reach it.
 
 ## Spotify agent
 
-`laai-spotify` controls the Spotify app on the laptop. It plays a song, artist, album or
-playlist, and pauses, resumes, skips, goes back or sets the volume. It has two backends,
-chosen by `SPOTIFY_BACKEND`: `auto` (the default) uses AppleScript on macOS until a Web API
-login is stored, then the Web API; `applescript` or `webapi` forces one.
+`laai-spotify` controls the Spotify app on the laptop through the
+[Spotify Web API](https://developer.spotify.com/documentation/web-api). It plays a song,
+artist, album or playlist, and pauses, resumes, skips, goes back or sets the volume.
+Playback control needs Spotify Premium.
 
-### Spotify Free: AppleScript (no setup)
-
-Free accounts can't use the Web API, so on the Mac the agent drives the desktop app with
-`osascript`. Each action runs a fixed script; values like the volume or the track URI are
-passed only as `on run argv` arguments, never written into the script, and nothing runs
-through a shell. `play` finds an `open.spotify.com` track, album, playlist or artist link with
-the keyless web search (`site:open.spotify.com/<kind> <query>`), accepts it only if it
-converts to a strict `spotify:<kind>:<22-char id>` URI, plays it, and then reports the title
-and artist of the track that is actually playing. If nothing is found, it says so. For
-`play` and `resume` it opens Spotify first if needed; other controls say the app isn't open.
-The first run asks macOS to let the terminal control Spotify. If that is refused, the reply
-points to System Settings > Privacy & Security > Automation.
-
-### Spotify Premium: Web API
-
-Uses the [Spotify Web API](https://developer.spotify.com/documentation/web-api), which needs
-Premium. One-time setup on the laptop:
+One-time setup on the laptop:
 
 1. Create an app at the [Spotify developer dashboard](https://developer.spotify.com/dashboard),
    tick **Web API**, and add the redirect URI `http://127.0.0.1:8888/callback`.
@@ -117,9 +101,7 @@ curl http://127.0.0.1:8000/spotify -H 'Content-Type: application/json' -d '{"act
 otherwise the top track. Chat takes plain text: "play the album Thriller", "play Daft
 Punk", "skip", "pause", "volume 40", "turn it up". The response has the `title`, `artist`,
 Spotify `uri` and `url`, the `device` and a one-line `summary`, which is also its chat reply.
-Both backends return this same shape (AppleScript sets `device` to "the laptop").
-If Spotify isn't linked, isn't open, needs Premium or isn't allowed by macOS, `error` and
-`summary` say so.
+If Spotify isn't linked, isn't open, or needs Premium, `error` and `summary` say so.
 
 Anyone who can message this agent can control the laptop's music, so run it locally rather
 than with `AGENTVERSE_MAILBOX=1` unless that is what you want.
