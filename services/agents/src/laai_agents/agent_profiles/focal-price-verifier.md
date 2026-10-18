@@ -8,4 +8,4 @@ It never invents a price; it only filters and explains.
 
 Input: a `PriceCompareResponse` and an optional budget. Output: kept and dropped offers with reasons, flags, the best verified offer, and a verdict (`verified`, `caution` or `rejected`).
 
-Part of the Focal team; the coordinator is `focal-shopping-assistant`.
+Part of the Focal team; the coordinator is `FOCAL`.

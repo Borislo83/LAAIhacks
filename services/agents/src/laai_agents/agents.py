@@ -47,7 +47,7 @@ NEWS_SEED = os.getenv("NEWS_AGENT_SEED", "laai news agent dev seed")
 # ASI:One finds agents by these, so they say what each agent does and how to ask.
 PROFILES = Path(__file__).parent / "agent_profiles"
 DESCRIPTIONS = {
-    "focal-shopping-assistant": "Should I buy it? A team of agents researches a product, verifies every price, adds your pick to your Amazon cart, tells a friend and watches the price, in one chat.",
+    "FOCAL": "FOCAL turns what you ask into something done: a team of 12 agents that researches and verifies purchases, adds to your cart, briefs you on news, finds videos and messages friends, with memory of what you like.",
     "laai-price-compare": "Current prices for a product across online stores, read from product pages and ranked by trust, with a source for every price.",
     "laai-alternatives": "Cheaper or better-rated alternatives to a product in the same category, within your budget.",
     "laai-reviews": "Expert review summary for a product: average rating on a 5-point scale, pros, cons and links.",
@@ -62,13 +62,19 @@ DESCRIPTIONS = {
 }
 
 
+# Avatars uploaded on Agentverse; re-registering would otherwise clear them.
+AVATARS = {
+    "FOCAL": "https://storage.googleapis.com/agentverse-prod-assets/agent-avatars-pub/1739184632.jpg",
+}
+
+
 def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
     kwargs = {}
     if port is not None:
         kwargs = {"port": port, "endpoint": [f"http://127.0.0.1:{port}/submit"]}
     # Set AGENTVERSE_MAILBOX=1 to reach the agent through Agentverse (needed for ASI:One).
     if os.getenv("AGENTVERSE_MAILBOX") == "1" or (
-        name == "focal-shopping-assistant" and os.getenv("COORDINATOR_AGENTVERSE_MAILBOX") == "1"
+        name == "FOCAL" and os.getenv("COORDINATOR_AGENTVERSE_MAILBOX") == "1"
     ):
         kwargs = {"port": port, "mailbox": True} if port else {"mailbox": True}
     readme = PROFILES / f"{name}.md"
@@ -79,6 +85,7 @@ def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
         seed=seed,
         publish_agent_details=True,
         description=DESCRIPTIONS.get(name),
+        avatar_url=AVATARS.get(name),
         **kwargs,
     )
 

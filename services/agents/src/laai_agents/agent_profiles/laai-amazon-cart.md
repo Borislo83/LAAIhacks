@@ -4,4 +4,4 @@
 
 Turns an Amazon product ID (ASIN) and a quantity into Amazon's documented **add-to-cart link**. You open the link yourself and Amazon asks you to confirm. There's no browser automation, no account access, and nothing is bought.
 
-The Focal coordinator (`focal-shopping-assistant`) calls this agent after you approve a cart addition on a review card.
+The Focal coordinator (`FOCAL`) calls this agent after you approve a cart addition on a review card.

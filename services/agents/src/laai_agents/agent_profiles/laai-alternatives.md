@@ -8,4 +8,4 @@ Finds competing products in the same category: cheaper, better rated, or within 
 - "Alternatives to the Bose QuietComfort Ultra under $250"
 - "Cheaper earbuds than AirPods Pro 2"
 
-Part of the Focal team; the coordinator is `focal-shopping-assistant`.
+Part of the Focal team; the coordinator is `FOCAL`.

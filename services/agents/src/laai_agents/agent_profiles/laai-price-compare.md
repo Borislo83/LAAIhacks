@@ -9,4 +9,4 @@ Finds the current price of a product across online stores. It reads prices from 
 - "Where is the Nintendo Switch 2 cheapest?"
 
 ## Details
-Drops other currencies, used or out-of-stock listings, installment prices, ranges and other model variants. Never substitutes made-up or demo prices when live search fails. Part of the Focal team; the coordinator is `focal-shopping-assistant`.
+Drops other currencies, used or out-of-stock listings, installment prices, ranges and other model variants. Never substitutes made-up or demo prices when live search fails. Part of the Focal team; the coordinator is `FOCAL`.
