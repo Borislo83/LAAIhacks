@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Focal Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@1&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
 :root{
-  --paper:#F7F7F5; --ink:#0B0B0C; --muted:#6E6E73; --hair:#E4E4E6; --cobalt:#2F47E8;
+  --paper:#F7F7F5; --ink:#0B0B0C; --muted:#6E6E73; --hair:#E4E4E6;
   --lens:#0E0E10; --signal:#139A4E; --signal-soft:rgba(19,154,78,.14); --phosphor:#3CFF7A; --white:#FFFFFF; --warn:#C2410C;
   --sans:'Inter',system-ui,sans-serif; --serif:'Instrument Serif',Georgia,serif; --mono:'JetBrains Mono',ui-monospace,monospace;
 }
@@ -17,7 +18,6 @@
 body{background:var(--paper);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
 .wrap{max-width:1296px;margin:0 auto;padding:0 24px 72px}
 em{font-family:var(--serif);font-style:italic;font-weight:400}
-.mono{font-family:var(--mono)}
 .muted{color:var(--muted)}
 
 nav.top{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:center;padding:26px 0 20px;border-bottom:1px solid var(--hair)}
@@ -73,7 +73,6 @@ h2 em{color:var(--muted);font-size:1.12em}
 .field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:140px}
 .field label{font-size:12px;color:var(--muted)}
 .field input,.field select,.field textarea{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
-.field textarea{font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
 .field textarea{resize:vertical;line-height:1.5;width:100%}
 .preference-form{display:flex;flex-direction:column;gap:14px;margin-top:16px}
 .preference-form fieldset{border:0;display:flex;flex-direction:column;gap:14px}
@@ -99,9 +98,9 @@ body[data-density="compact"] .agent{padding:10px}
 .lensbox .l2{font-size:15px;line-height:22px}
 .summary{font-size:15px;line-height:23px}
 .list{margin-top:12px;display:flex;flex-direction:column}
-.list a,.list div{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--hair);font-size:14px;color:var(--ink);text-decoration:none}
+.list a{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--hair);font-size:14px;color:var(--ink);text-decoration:none}
 .list a:hover span:first-child{text-decoration:underline}
-.list .p{font-family:var(--mono);font-size:13px}
+.list .p{font-family:var(--mono);font-size:13px;white-space:nowrap}
 .list .best .p{color:var(--signal)}
 .pc{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:12px;font-size:14px}
 .pc ul{padding-left:18px;margin-top:6px;line-height:22px}
@@ -117,6 +116,10 @@ body[data-density="compact"] .agent{padding:10px}
 @keyframes wave{from{transform:translateY(-34%)}to{transform:translateY(34%)}}
 .orb .s3{animation:scan 2.2s linear infinite;transform-box:view-box}
 @keyframes scan{from{transform:translateX(-60%)}to{transform:translateX(110%)}}
+.orb .s5{animation:play 1.8s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+@keyframes play{50%{transform:scale(.78);opacity:.55}}
+.orb .s6{animation:typing 1.2s ease-in-out infinite;transform-box:fill-box}
+@keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.5}30%{transform:translateY(-45%);opacity:1}}
 .orb.idle *{animation-play-state:paused}
 
 /* mode tabs + chat */
@@ -124,48 +127,92 @@ body[data-density="compact"] .agent{padding:10px}
 .tabs button{font:500 13px var(--sans);border:0;background:none;border-radius:999px;padding:7px 14px;cursor:pointer;color:var(--muted)}
 .tabs button[aria-selected="true"]{background:var(--ink);color:var(--white)}
 .chat{background:var(--white);border:1px solid var(--hair);border-radius:16px;display:flex;flex-direction:column;min-height:520px}
-.thread{flex:1;display:flex;flex-direction:column;gap:18px;padding:20px;overflow-y:auto;max-height:68vh}
+.thread-scroll{flex:1;overflow-y:auto;max-height:68vh;overscroll-behavior:contain;overflow-anchor:none}
+.thread{display:flex;flex-direction:column;gap:18px;padding:20px}
 .msg{max-width:88%;font-size:15px;line-height:23px}
-.msg.user{align-self:flex-end;background:var(--ink);color:var(--white);padding:10px 14px;border-radius:14px 14px 4px 14px}
+.msg.user{align-self:flex-end;background:#ECECEA;color:var(--ink);padding:10px 14px;border-radius:16px 16px 4px 16px}
 .msg.bot{align-self:flex-start;display:flex;gap:12px;align-items:flex-start;width:88%}
-.msg.bot .body{flex:1;min-width:0;display:flex;flex-direction:column;gap:12px}
-.msg.bot .via{font:11px var(--mono);color:var(--muted)}
+.msg.bot .body{flex:1;min-width:0;display:flex;flex-direction:column;gap:14px}
 .msg .err{font-size:14px}
-.mini{border:1px solid var(--hair);border-radius:12px;overflow:hidden}
-.mini .hd{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--hair);font-size:13px}
-.mini .hd b{font-weight:500;flex:1}
-.mini .hd .ms{font:11px var(--mono);color:var(--muted)}
-.mini .bd{display:grid;grid-template-columns:1fr 240px;gap:14px;padding:12px 14px}
-.mini .list{margin-top:0}
-.mini .pc{margin-top:0}
-.sources{grid-column:1/-1;border-top:1px solid var(--hair);margin-top:4px;padding-top:8px;font-size:12px;color:var(--muted)}
-.sources summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:4px 0;user-select:none}
-.sources summary::-webkit-details-marker{display:none}
-.sources summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
-.sources[open] summary::before{transform:rotate(45deg)}
-.sources summary:hover{color:var(--ink)}
-.sources .when{margin-left:auto;font-family:var(--mono);font-size:11px}
-.sources .note{margin:6px 0 4px;line-height:18px}
-.sources ul{list-style:none;margin:0;padding:0}
-.sources li{border-top:1px solid var(--hair)}
-.sources li a{display:flex;justify-content:space-between;gap:12px;padding:7px 0;color:var(--ink);text-decoration:none}
-.sources li a span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sources li a:hover span:first-child{text-decoration:underline}
-.sources .host{font-family:var(--mono);font-size:11px;color:var(--muted);flex-shrink:0}
+.reply{font-size:15px;line-height:24px}
+/* agent output: a quiet block per agent, like a tool result. Summary, then facts, then sources */
+.outs{display:flex;flex-direction:column;gap:16px}
+.outs:empty{display:none}
+.out{border-left:2px solid var(--hair);padding:2px 0 2px 14px;display:flex;flex-direction:column;gap:10px;font-size:14px;line-height:21px}
+.out header{display:flex;align-items:center;gap:8px;font-size:13px}
+.out header b{font-weight:500}
+.out .tag{color:var(--muted)}
+.out .ms{margin-left:auto;font:11px var(--mono);color:var(--muted)}
+.out .summary{font-size:14px;line-height:22px}
+.out .list{margin-top:0}
+.out .list a{padding:6px 0;font-size:13px}
+.out .pc{margin-top:0;font-size:13px}
+.out .lensbox{padding:10px 12px;font-size:11px;line-height:17px;max-width:380px}
+.out .lensbox .l2{font-size:13px;line-height:19px}
+.out-buyer{border-left:0;padding-left:0}
+.fresh{animation:fadein .35s ease-out}
+@keyframes fadein{from{opacity:0}}
+.sources{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.sources .note{flex-basis:100%;line-height:18px}
+.src{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 10px;border:1px solid var(--hair);border-radius:999px;background:var(--white);color:var(--ink);text-decoration:none;font-size:12px;line-height:18px}
+.src:hover{border-color:var(--ink)}
+.sources .when{font:11px var(--mono);margin-left:2px}
 .warn-note{grid-column:1/-1;font-size:12px;color:var(--warn)}
-.mini .hd .tag{font-weight:400;color:var(--muted)}
+.yt{display:flex;gap:12px;align-items:center;max-width:520px;padding:8px;border:1px solid var(--hair);border-radius:12px;background:var(--white);color:var(--ink);text-decoration:none}
+.yt img{width:160px;height:90px;object-fit:cover;border-radius:8px;background:var(--lens);flex-shrink:0}
+.yt span{display:flex;flex-direction:column;gap:4px;min-width:0}
+.yt b{font-weight:500;font-size:14px;line-height:20px}
+.yt small{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.yt:hover b{text-decoration:underline}
+/* iMessage draft: nothing leaves without an explicit Send click on the exact drafted text */
+.out-messenger{border-left:0;padding-left:0}
+.draft{padding:16px;border:1.5px solid var(--ink);border-radius:12px;background:var(--white);display:flex;flex-direction:column;gap:10px;font-size:14px}
+.draft textarea{font:15px/1.5 var(--sans);border:1px solid var(--hair);border-radius:8px;padding:10px 12px;background:var(--paper);color:var(--ink);resize:vertical;width:100%}
+.draft textarea:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
+.draft-foot{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.draft-exp{font-family:var(--mono)}
+.draft-actions{display:flex;gap:8px;flex-wrap:wrap}
+.draft-status{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.draft-status.err{color:var(--warn)}
+.draft:is([data-state="sent"],[data-state="cancelled"],[data-state="replaced"]) .draft-actions{display:none}
+.draft[data-state="sent"]{border-color:var(--signal)}
+.draft[data-state="sent"] .draft-status{color:var(--signal);font-weight:500}
+.draft[data-state="cancelled"],.draft[data-state="replaced"]{opacity:.6}
+.badge{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#FDF0E6;color:var(--warn);font-size:12px;font-weight:500}
+.draft-cands{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
+.yt-alts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
 .composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--hair)}
 .composer input{flex:1;min-width:0;font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
 .starters{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 4px}
-.work{border:1px solid var(--hair);border-radius:10px;padding:12px;font-size:13px;background:var(--paper)}
-.work-row{display:flex;gap:9px;align-items:center;padding:9px 0;border-bottom:1px solid var(--hair)}
-.work-row:last-child{border-bottom:0}.work-row .detail{flex:1;min-width:0}.work-row small{display:block;color:var(--muted);overflow-wrap:anywhere}
-.work-row .phase{font:11px var(--mono);color:var(--muted)}.work-row[data-state="completed"] .phase{color:#139A4E}.work-row[data-state="failed"] .phase{color:#B83A32}
-.work-history{margin-top:10px;color:var(--muted);font-size:11px;max-height:180px;overflow:auto}.work-history p{margin:4px 0}
-.demo-checkout{padding:14px;border:1px solid var(--hair);border-radius:10px;display:flex;flex-direction:column;gap:10px}.demo-checkout strong{color:#139A4E}
+/* live agent work: each agent's own orb animates beside a shimmering status line until it finishes */
+.work{display:flex;flex-direction:column;font-size:13px}
+.work-row{display:flex;gap:10px;align-items:center;min-height:30px;padding:3px 0}
+.work-row .detail{flex:1;min-width:0;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.work-row b{font-weight:500}
+.work-row small{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.work-row:not([data-done]) small{color:transparent;background:linear-gradient(90deg,var(--muted) 0 38%,var(--ink) 50%,var(--muted) 62% 100%) 0 0/250% 100%;-webkit-background-clip:text;background-clip:text;animation:shimmer 2.4s linear infinite}
+@keyframes shimmer{from{background-position:100% 0}to{background-position:-150% 0}}
+.work-row .phase{font:11px var(--mono);color:var(--muted);white-space:nowrap}
+.work-row[data-state="completed"] .phase,.work-row[data-state="review_ready"] .phase{color:var(--signal)}
+.work-row[data-state="failed"] .phase{color:var(--warn)}
+.coord circle+circle{animation:pulse 1.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+@keyframes pulse{50%{transform:scale(.55)}}
+/* "Show steps": the finished run folds away like Claude's tool-use blocks */
+.work-history{font-size:12px;color:var(--muted)}
+.work-history summary{cursor:pointer;list-style:none;display:inline-flex;flex-wrap:wrap;align-items:center;gap:0 8px;padding:4px 0;user-select:none;white-space:nowrap}
+.work-history summary::-webkit-details-marker{display:none}
+.work-history summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+.work-history[open] summary::before{transform:rotate(45deg)}
+.work-history summary:hover{color:var(--ink)}
+.work-history .meta{font:11px var(--mono);white-space:normal}
+.work-history .work-rows,.work-history .log{border-left:2px solid var(--hair);padding-left:12px;margin:6px 0 0 2px}
+.card>.work{padding:0 18px 12px}
+.work-history .log{max-height:180px;overflow:auto}.work-history .log p{margin:3px 0}
+/* cart actions stay separate and prominent: real money is one step away */
+.demo-checkout{padding:16px;border:1.5px solid var(--signal);border-radius:12px;background:var(--white);display:flex;flex-direction:column;align-items:flex-start;gap:10px;font-size:14px}
+.demo-checkout strong{color:var(--signal);font-weight:600;font-size:13px}
 
 @media (max-width:980px){
-  .mini .bd{grid-template-columns:1fr}
   .msg.bot{width:100%}
   .grid{grid-template-columns:1fr}
   .card .bd{grid-template-columns:1fr}
@@ -175,8 +222,13 @@ body[data-density="compact"] .agent{padding:10px}
   .endpoint input{width:150px}
   .endpoint{width:100%}
   .pc{grid-template-columns:1fr}
+  .thread{padding:14px}
+  .msg.bot{max-width:100%}
+  .msg.bot>.orb{display:none}
+  .yt{flex-direction:column;align-items:stretch}
+  .yt img{width:100%;height:auto;aspect-ratio:16/9}
 }
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.work-row small{background:none!important;color:var(--muted)!important}}
 </style>
 </head>
 <body>
@@ -209,8 +261,9 @@ body[data-density="compact"] .agent{padding:10px}
       </div>
       <div class="row"><button class="btn dark" id="sign-in" type="submit">Sign in</button><button class="btn" id="sign-up" type="submit">Create account</button></div>
     </form>
+    </details>
     <p id="auth-message" role="status" style="margin-top:12px;font-size:14px"></p>
-    <button type="button" class="linkbtn" id="auth-retry" hidden>Reconnect</button>
+    <button type="button" class="linkbtn" id="auth-retry" style="margin-top:8px" hidden>Reconnect</button>
   </section>
 
   <div class="grid" id="workspace" hidden inert>
@@ -246,9 +299,7 @@ body[data-density="compact"] .agent{padding:10px}
 
       <section id="pane-chat">
         <div class="chat">
-          <div class="thread" id="thread" aria-live="polite">
-            <div class="msg bot"><span data-orb-logo></span><div class="body"><p>Ask me to consider a product. I’ll check prices, reviews, and alternatives within your budget.</p></div></div>
-          </div>
+          <div class="thread-scroll" id="thread-scroll"><div class="thread" id="thread" aria-live="polite"></div></div>
           <div class="starters" id="starters"></div>
           <form class="composer" id="chat-form"><input id="chat-input" placeholder="Is the Sony XM5 worth it, or is there something cheaper?" autocomplete="off" required><button class="btn dark" id="send">Send</button></form>
         </div>
@@ -271,12 +322,13 @@ body[data-density="compact"] .agent{padding:10px}
           </div>
         </form>
       </div>
-      <div class="results" id="results"><div class="empty">Answers from the agents show up here.</div></div>
+      <div class="results" id="results"></div>
       </section>
     </main>
   </div>
 </div>
 
+<script src="orb.js"></script>
 <script type="module">
 import { setupAuth } from "./auth.js";
 import { setupPreferences } from "./preferences.js";
@@ -285,6 +337,8 @@ const AGENTS={
   alternatives:{v:2,name:"Alternatives agent",id:"laai-alternatives",route:"/alternatives",what:"Cheaper or better-rated picks"},
   reviews:{v:1,name:"Reviews agent",id:"laai-reviews",route:"/reviews",what:"Rating, pros and cons"},
   buyer:{v:3,name:"Amazon cart agent",id:"focal-amazon-buyer-demo",route:"/buy/prepare",what:"Real cart · stops before checkout"},
+  youtube:{v:5,name:"YouTube finder",id:"laai-youtube",route:"/youtube",what:"Finds the video or song you mean"},
+  messenger:{v:6,name:"Messenger",id:"laai-messenger",route:"/messages/draft",what:"Drafts iMessages in chat; you approve each send"},
 };
 const KEYS=Object.keys(AGENTS);
 const TRY=["Sony XM5","AirPods Pro 2","Bose QC Ultra","Nothing Ear (a)"];
@@ -295,20 +349,13 @@ const money=n=>n==null?"–":"$"+Number(n).toFixed(2);
 /* storage is a convenience only */
 const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
 
-/* orbs, same generator as focal.html */
-let uid=0;
-function orb(v,size=40,idle=false){
-  const id="c"+(uid++), r=size/2-1, c=size/2, g="#4A4A50";
-  let el="";
-  const st=Math.max(2.6,size/11), n=Math.floor(size/st)+1;
-  if(v===1){const gap=Math.max(3,Math.round(size/12));let i=0;for(let y=2;y<size-1;y+=gap,i++)el+=`<rect class="s1" style="animation-delay:${(i*0.09).toFixed(2)}s" x="0" y="${y}" width="${size}" height="${Math.max(1.2,size/18).toFixed(1)}" fill="#fff"/>`}
-  if(v===2)for(let i=0;i<n;i++)el+=`<rect x="${(i*st+1).toFixed(1)}" y="0" width="1" height="${size}" fill="${g}"/>`;
-  if(v===2)for(let k=0;k<5;k++)el+=`<circle class="s2" style="animation-delay:${(-k*0.32).toFixed(2)}s" cx="${(size*.15+k*size*.175).toFixed(1)}" cy="${c}" r="${Math.max(1,size/22).toFixed(1)}" fill="#fff"/>`;
-  if(v===3){for(let i=0;i<n;i++)el+=`<rect x="0" y="${(i*st+1).toFixed(1)}" width="${size}" height="1" fill="${g}"/>`;
-    [[.28,.3,1.9],[.45,.25,2.6],[.62,.2,2.2],[.8,.15,3.1]].forEach(([y,w,d],k)=>el+=`<rect class="s3" style="animation-duration:${d}s;animation-delay:${(-k*0.7).toFixed(2)}s" x="0" y="${(y*size).toFixed(1)}" width="${(w*size).toFixed(1)}" height="${Math.max(1,size/16).toFixed(1)}" fill="#fff"/>`)}
-  return `<svg class="orb${idle?" idle":""}" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><defs><clipPath id="${id}"><circle cx="${c}" cy="${c}" r="${r}"/></clipPath></defs><circle cx="${c}" cy="${c}" r="${r}" fill="#0E0E10"/><g clip-path="url(#${id})">${el}</g></svg>`;
-}
-document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=`<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
+document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=logoMark()+`Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
+const logoOrb=()=>logoMark(28,"orb");
+const WELCOME=`<div class="msg bot">${logoOrb()}<div class="body"><p>Ask me to consider a product, and I’ll check prices, reviews and alternatives within your budget. I can also find a song or video on YouTube, or draft an iMessage for you to approve.</p></div></div>`;
+const EMPTY_RESULTS='<div class="empty">Answers from the agents show up here.</div>';
+const THREAD_MAX=40;
+$("#thread").innerHTML=WELCOME;
+$("#results").innerHTML=EMPTY_RESULTS;
 
 /* state */
 let auth, preferences;
@@ -318,16 +365,23 @@ let usage=store.get("focal.usage",null)||freshUsage();
 KEYS.forEach(k=>usage.agents[k]??={calls:0,ms:0,errors:0});
 function freshUsage(){return {since:Date.now(),agents:Object.fromEntries(KEYS.map(k=>[k,{calls:0,ms:0,errors:0}]))}}
 
-function renderRoster(){
-  $("#roster").innerHTML=KEYS.map(k=>{const a=AGENTS[k],h=health[k];
-    const s=h===true?"up":h===false?"down":"";
-    return `<button class="agent" type="button" data-k="${k}" aria-pressed="${selected.has(k)}">${orb(a.v,44,true)}
-      <span class="meta"><b>${a.name}</b><small>${a.what}</small><br><span class="route">POST ${a.route}</span></span>
-      <span class="status ${s}"><i></i>${h===true?"Online":h===false?"Offline":"…"}</span></button>`}).join("");
-  document.querySelectorAll(".agent").forEach(b=>b.onclick=()=>{
-    const k=b.dataset.k; selected.has(k)?selected.delete(k):selected.add(k);
-    store.set("focal.selected",[...selected]); renderRoster(); $("#go").disabled=!selected.size});
+// Built once; later changes only touch aria-pressed and the status line.
+$("#roster").innerHTML=KEYS.map(k=>{const a=AGENTS[k];
+  return `<button class="agent" type="button" data-k="${k}" aria-pressed="false">${orb(a.v,44,true)}
+    <span class="meta"><b>${a.name}</b><small>${a.what}</small><br><span class="route">POST ${a.route}</span></span>
+    <span class="status"><i></i><span>…</span></span></button>`}).join("");
+const rosterButtons=[...document.querySelectorAll("#roster .agent")];
+function updateRoster(){
+  rosterButtons.forEach(b=>{const k=b.dataset.k,h=health[k],st=b.querySelector(".status");
+    b.setAttribute("aria-pressed",selected.has(k));
+    st.className="status"+(h===true?" up":h===false?" down":"");
+    st.lastChild.textContent=h===true?"Online":h===false?"Offline":"…"});
 }
+$("#roster").addEventListener("click",e=>{
+  const b=e.target.closest(".agent"); if(!b)return;
+  const k=b.dataset.k; selected.has(k)?selected.delete(k):selected.add(k);
+  store.set("focal.selected",[...selected]); updateRoster(); $("#go").disabled=!selected.size;
+});
 function renderUsage(){
   $("#usage").innerHTML=KEYS.map(k=>{const u=usage.agents[k];
     return `<tr><td>${AGENTS[k].name.replace(" agent","")}</td><td class="n">${u.calls}</td><td class="n">${u.calls?Math.round(u.ms/u.calls)+" ms":"–"}</td><td class="n">${u.errors}</td></tr>`}).join("");
@@ -337,6 +391,7 @@ $("#reset").onclick=()=>{usage=freshUsage();store.set("focal.usage",usage);rende
 
 /* calls */
 const ATTEMPTS=3;
+const retryMessage=n=>`Couldn't reach the orchestrator; retrying (${n} of ${ATTEMPTS})`;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 // Retry only when the orchestrator couldn't be reached at all. A stream that started, or any
 // cart action, is never resent, so nothing can be added to a cart twice.
@@ -352,7 +407,7 @@ async function call(k,body,onProgress){
     const path=k==="buyer"?"/v1/buyer/prepare/stream":`/v1/agents/${k}/stream`;
     const progress=onProgress||(()=>{});
     const result=await withRetry(()=>readEvents(path,body,progress),
-      n=>progress({kind:k,stage:"retrying",message:`Couldn't reach the orchestrator; retrying (${n} of ${ATTEMPTS})`}),k!=="buyer");
+      n=>progress({kind:k,stage:"retrying",message:retryMessage(n)}),k!=="buyer");
     if(result.result?.confirmation_token)activePurchase=result.result.confirmation_token;
     // A failed web search is still an answer: the agent is reachable.
     return {ok:!!result.result&&!result.error,reachable:!!result.result,data:result.result,error:result.error,ms:performance.now()-t0};
@@ -362,12 +417,12 @@ function record(k,res){
   const u=usage.agents[k]; u.calls++; u.ms+=res.ms; if(!res.ok||res.data?.error)u.errors++;
   store.set("focal.usage",usage); renderUsage();
   // A failed web search is a result, not an outage.
-  health[k]=res.reachable??res.ok; renderRoster();
+  health[k]=res.reachable??res.ok; updateRoster();
 }
 async function checkAll(){
-  KEYS.forEach(k=>delete health[k]); renderRoster();
+  KEYS.forEach(k=>delete health[k]); updateRoster();
   try{const r=await fetch(orch.value.replace(/\/$/,"")+"/health",{redirect:"error"});KEYS.forEach(k=>health[k]=r.ok)}catch{KEYS.forEach(k=>health[k]=false)}
-  renderRoster();
+  updateRoster();
 }
 $("#ping").onclick=checkAll;
 
@@ -391,6 +446,27 @@ const VIEW={
     const rows=d.alternatives.map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.product)} <span class="muted" style="font-size:12px">· ${esc(x.reason)}</span></span><span class="p">${x.price==null?"price ↗":money(x.price)} ${x.rating!=null?`· ${x.rating}★`:""}</span></a>`).join("");
     return {lens:lens(d.product,a?`Try ${a.product}`:"No candidate established",a?`${a.price==null?"check price":money(a.price)} ${a.rating!=null?`· ${a.rating}★`:""} · open source`:"review sources or adjust the budget"),body:rows?`<div class="list">${rows}</div>`:`<p class="muted">${esc(d.summary)}</p>`};
   },
+  youtube(d){
+    const id=youtubeId(d.url),meta=[d.channel,d.duration].filter(Boolean).join(" · ");
+    const card=id?`<a class="yt" href="${watchUrl(id)}" target="_blank" rel="noopener noreferrer"><img src="https://i.ytimg.com/vi/${id}/hqdefault.jpg" alt="" width="160" height="90" loading="lazy"><span><b>${esc(d.title)}</b><small>${esc(meta)}</small></span></a>`:"";
+    const alts=(d.alternatives||[]).map(a=>[a,youtubeId(a.url)]).filter(([,aid])=>aid)
+      .map(([a,aid])=>`<a class="src" href="${watchUrl(aid)}" target="_blank" rel="noopener noreferrer" title="${esc(a.channel||"")}">${esc(a.title)}</a>`).join("");
+    return {lens:lens("YOUTUBE",id?d.title:"No video found",id?`${meta} · nod to play`:"try a more specific request"),
+      body:card+(alts?`<div class="yt-alts">Also${alts}</div>`:"")};
+  },
+  messenger(d){
+    const who=d.recipient_name?`${esc(d.recipient_name)}${d.recipient_masked?` <span class="muted">(${esc(d.recipient_masked)})</span>`:""}`:"";
+    const cands=(d.candidates||[]).map(c=>{const n=c.recipient_name??c.name,m=c.recipient_masked??c.masked;
+      return `<button type="button" class="chip" data-msg-pick="${esc(n)}">${esc(n)}${m?` <span class="muted">${esc(m)}</span>`:""}</button>`}).join("");
+    const card=d.draft_id&&d.recipient_name?`<div class="draft" data-draft="${esc(d.draft_id)}" data-recipient="${esc(d.recipient_name)}">
+      <div>To: ${who}</div>
+      <textarea rows="3" maxlength="1000" aria-label="Message text" data-original="${esc(d.text)}">${esc(d.text)}</textarea>
+      <div class="draft-foot"><span class="draft-status" role="status"></span><span class="draft-exp" data-expires="${esc(d.expires_at||"")}"></span></div>
+      <div class="draft-actions"><button type="button" class="btn dark" data-msg-send>Send via iMessage</button><button type="button" class="btn" data-msg-redraft hidden>Re-draft</button><button type="button" class="btn" data-msg-cancel>Cancel</button></div>
+    </div>`:"";
+    return {lens:lens("IMESSAGE DRAFT",d.recipient_name?`To ${d.recipient_name}`:"Pick a recipient","nothing sends until you approve"),
+      body:(cands?`<div class="draft-cands">Who did you mean?${cands}</div>`:"")+card};
+  },
   reviews(d){
     const pc=(d.pros.length||d.cons.length)?`<div class="pc"><div><h4>Pros</h4><ul>${d.pros.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div><div><h4>Cons</h4><ul>${d.cons.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div></div>`:"";
     // One row per expert score (live mode); otherwise a single link to the reviews.
@@ -407,14 +483,28 @@ const VIEW={
   },
 };
 
+// Only real YouTube links render: www.youtube.com/watch?v=<11 chars> or youtu.be/<id>.
+// Links are rebuilt from the parsed id, so nothing else from the agent's URL reaches the page.
+function youtubeId(url){
+  try{
+    const u=new URL(url),ok=id=>/^[\w-]{11}$/.test(id||"")?id:null;
+    if(u.protocol!=="https:")return null;
+    if(u.hostname==="www.youtube.com"&&u.pathname==="/watch")return ok(u.searchParams.get("v"));
+    if(u.hostname==="youtu.be")return ok(u.pathname.slice(1));
+  }catch{}
+  return null;
+}
+const watchUrl=id=>`https://www.youtube.com/watch?v=${id}`;
+
 function evidence(d){
   const seen=new Set();
   const items=(d.sources||[]).map(s=>{try{const u=new URL(s.url);return u.protocol==="https:"?{s,u}:null}catch{return null}})
     .filter(x=>x&&!seen.has(x.u.href)&&seen.add(x.u.href)).slice(0,10);
   if(!items.length&&!d.notice)return "";
   const when=d.fetched_at?new Date(d.fetched_at).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}):"";
-  const links=items.map(({s,u})=>`<li><a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"><span>${esc(s.title.split(/\.\.\.|…/)[0].trim()||u.hostname)}</span><span class="host">${esc(u.hostname.replace(/^www\./,""))} ↗</span></a></li>`).join("");
-  return `<details class="sources"><summary>Sources (${items.length})<span class="when">${esc(d.data_source||"")}${when?" · "+esc(when):""}</span></summary>${d.notice?`<p class="note">${esc(d.notice)}</p>`:""}<ul>${links}</ul></details>`;
+  const links=items.map(({s,u})=>`<a class="src" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" title="${esc(s.title||u.hostname)}">${esc(u.hostname.replace(/^www\./,""))}</a>`).join("");
+  const meta=[d.data_source,when].filter(Boolean).join(", ");
+  return `<div class="sources">${d.notice?`<p class="note">${esc(d.notice)}</p>`:""}${links}${meta?`<span class="when">${esc(meta)}</span>`:""}</div>`;
 }
 
 function cardShell(k){
@@ -438,7 +528,7 @@ $("#ask").onsubmit=async e=>{
   e.preventDefault();
   const product=$("#product").value.trim(),amazonUrl=$("#amazon-url").value.trim();
   if(!product&&!amazonUrl)return;
-  if(!product&&amazonUrl){selected=new Set(["buyer"]);renderRoster()}
+  if(!product&&amazonUrl){selected=new Set(["buyer"]);updateRoster()}
   if(!selected.size)return;
   const num=id=>{const v=$(id).value;return v===""?null:Number(v)};
   const bodies={
@@ -446,11 +536,13 @@ $("#ask").onsubmit=async e=>{
     alternatives:{product,max_price:num("#max")},
     reviews:{product},
     buyer:{product:product||null,url:amazonUrl||null,quantity:Number($("#quantity").value)||1},
+    youtube:{query:product},
   };
-  const ks=KEYS.filter(k=>selected.has(k));
+  // Messenger is chat-only: a message needs the conversation's context and a reviewed draft.
+  const ks=KEYS.filter(k=>selected.has(k)&&bodies[k]);
   $("#results").innerHTML=ks.map(cardShell).join("");
   $("#go").disabled=true;
-  await Promise.all(ks.map(async k=>{const progress=makeProgress($("#card-"+k+" .thinking"));const r=await call(k,bodies[k],progress.update);progress.finish(r.ok);record(k,r);fill(k,r);$("#card-"+k).append(progress.el)}));
+  await Promise.all(ks.map(async k=>{const progress=makeProgress($("#card-"+k+" .thinking"));const r=await call(k,bodies[k],progress.update);progress.finish(r.ok);record(k,r);const card=$("#card-"+k);morph(card,()=>{fill(k,r);card.append(progress.el)})}));
   $("#go").disabled=false;
 };
 
@@ -468,27 +560,71 @@ setMode(store.get("focal.mode","chat"));
 const orch=$("#orch");
 orch.value=store.get("focal.orch","http://127.0.0.1:8001");
 orch.onchange=()=>store.set("focal.orch",orch.value.trim());
-const logoOrb=()=>`<svg class="orb" width="28" height="28" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#0B0B0C" stroke-width="2"/><circle cx="11" cy="11" r="3.5" fill="#2F47E8"/></svg>`;
-document.querySelectorAll("[data-orb-logo]").forEach(e=>e.outerHTML=logoOrb());
 const convo=[];
 let activePurchase=null;
-const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100"];
+// Cart requests are never retried, so nothing can be added to a cart twice.
+const isCartRelated=text=>!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
+const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100","Find the song Blinding Lights","Text Alex that I'm running 10 minutes late"];
 $("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
 document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
 
+/* Claude-style scrolling: follow new output only while the reader is at the bottom, so
+   scrolling up to reread is never interrupted. One rAF-throttled jump per frame, no smooth
+   scrolls fighting each other, and the page itself never moves. */
+const scroller=$("#thread-scroll");
+let pinned=true,followQueued=false,userAt=0;
+const atBottom=()=>scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<48;
+const pin=()=>{pinned=true};
+// Only the reader's own scrolling unpins. Layout changes (a height clamp mid-morph) never do.
+scroller.addEventListener("wheel",e=>{userAt=performance.now();if(e.deltaY<0)pinned=false},{passive:true});
+["touchmove","keydown","pointerdown"].forEach(t=>scroller.addEventListener(t,()=>userAt=performance.now(),{passive:true}));
+scroller.addEventListener("scroll",()=>{if(atBottom())pinned=true;else if(performance.now()-userAt<800)pinned=false},{passive:true});
+function follow(){
+  if(followQueued)return; followQueued=true;
+  requestAnimationFrame(()=>{followQueued=false;if(pinned)scroller.scrollTop=scroller.scrollHeight});
+}
+// Content changes call follow() directly; the observer also catches growth from animations.
+new ResizeObserver(follow).observe($("#thread"));
+const reduceMotion=matchMedia("(prefers-reduced-motion: reduce)");
+// Swap content without a jump: the element eases from its old height to its new one.
+function morph(el,change){
+  const from=el.offsetHeight; change(); const to=el.offsetHeight;
+  follow();
+  if(Math.abs(to-from)<2||reduceMotion.matches||document.hidden)return;
+  const duration=Math.min(420,200+Math.abs(to-from)*.3);
+  el.style.overflow="hidden";
+  const anim=el.animate([{height:from+"px"},{height:to+"px"}],{duration,easing:"cubic-bezier(.2,.7,.2,1)"});
+  // If frames stall (a background page), never leave the message clipped.
+  const stall=setTimeout(()=>anim.finish(),duration+200);
+  anim.finished.catch(()=>{}).then(()=>{clearTimeout(stall);el.style.overflow="";follow()});
+}
 function bubble(html,cls){
   const el=document.createElement("div"); el.className="msg "+cls; el.innerHTML=html;
-  $("#thread").appendChild(el); el.scrollIntoView({block:"end",behavior:"smooth"}); return el;
+  const thread=$("#thread"); thread.appendChild(el);
+  while(thread.children.length>THREAD_MAX)thread.firstElementChild.remove();
+  // Sending a message always brings the conversation back to the bottom.
+  if(cls==="user")pin();
+  follow(); return el;
 }
 // Also called with one card for live previews, so `all` may be missing.
 function miniCard(c,i,all=[c]){
   const a=AGENTS[c.kind];
-  const tag=c.kind==="reviews"&&all.filter(x=>x.kind==="reviews").length>1?` <span class="tag">· ${esc(c.result?.product||c.payload?.product||"")}</span>`:"";
-  const head=`<div class="hd">${orb(a.v,22,true)}<b>${a.name}${tag}</b><span class="ms">${c.ms} ms</span></div>`;
-  if(!c.result)return `<div class="mini">${head}<div class="bd" style="grid-template-columns:1fr"><p class="err">${esc(c.error||"No result")}</p></div></div>`;
+  const tag=c.kind==="reviews"&&all.filter(x=>x.kind==="reviews").length>1?`<span class="tag">${esc(c.result?.product||c.payload?.product||"")}</span>`:"";
+  const head=`<header>${orb(a.v,20,true)}<b>${a.name}</b>${tag}<span class="ms">${Math.round(c.ms)} ms</span></header>`;
+  if(!c.result)return `<section class="out">${head}<p class="err">${esc(c.error||"No result")}</p></section>`;
   const v=VIEW[c.kind](c.result);
   const warn=c.result.error?`<p class="warn-note">${esc(c.result.error)}. The agent is fine; the free web search refused this request. Try again in a moment.</p>`:"";
-  return `<div class="mini">${head}<div class="bd"><div>${v.body||`<p class="muted" style="font-size:14px">${esc(c.result.summary)}</p>`}</div>${v.lens}${warn}${evidence(c.result)}</div></div>`;
+  const summary=c.kind==="buyer"?"":`<p class="summary">${esc(c.result.summary)}</p>`;
+  return `<section class="out out-${c.kind}">${head}${summary}${v.body}${warn}${v.lens}${evidence(c.result)}</section>`;
+}
+// The final reply arrives whole; reveal it word by word so it reads like Claude writing.
+async function streamReply(host,text){
+  const p=document.createElement("p");p.className="reply";host.append(p);
+  if(reduceMotion.matches||document.hidden){p.textContent=text;follow();return}
+  p.setAttribute("aria-busy","true");
+  const words=text.split(/(?<=\s)/),per=Math.max(1,Math.ceil(words.length/45));
+  for(let i=per;i<words.length+per;i+=per){p.textContent=words.slice(0,i).join("");follow();await sleep(22)}
+  p.removeAttribute("aria-busy");
 }
 async function readEvents(path,body,onProgress){
   let response;
@@ -514,21 +650,36 @@ async function readEvents(path,body,onProgress){
     return result;
   }finally{await reader.cancel().catch(()=>{});reader.releaseLock();response.authComplete?.()}
 }
-function makeProgress(container){
+const DONE=["completed","failed","review_ready"];
+function makeProgress(container,outs){
   const started=performance.now(),rows=new Map();
   const el=document.createElement("div");el.className="work";el.setAttribute("aria-live","polite");
-  el.innerHTML='<b class="work-title">Live agent activity</b><div class="work-rows"></div><details class="work-history"><summary>Activity log</summary><div></div></details>';
+  el.innerHTML='<div class="work-rows"></div><details class="work-history"><summary>Show steps</summary><div class="log"></div></details>';
   container.replaceChildren(el);
   function update(event){
     const key=event.kind;if(key!=="coordinator"&&!AGENTS[key])return;
     let row=rows.get(key);
-    if(!row){row=document.createElement("div");row.className="work-row";row.innerHTML=`${orb(AGENTS[key]?.v||2,24)}<span class="detail"><b></b><small></small></span><span class="phase"></span>`;row.querySelector("b").textContent=key==="coordinator"?"Focal coordinator":AGENTS[key].name;el.querySelector(".work-rows").append(row);rows.set(key,row)}
-    row.dataset.state=event.stage;row.querySelector("small").textContent=event.message||"";row.querySelector(".phase").textContent=event.stage.replaceAll("_"," ");row.querySelector(".orb").classList.toggle("idle",["completed","failed","review_ready"].includes(event.stage));
-    const line=document.createElement("p");line.textContent=`${((performance.now()-started)/1000).toFixed(1)}s · ${key} · ${event.message}`;el.querySelector(".work-history div").append(line);
-    if(el.querySelector(".work-history div").children.length>100)el.querySelector(".work-history div").firstChild.remove();
-    if(event.result&&AGENTS[key]){let slot=el.querySelector(`[data-partial="${key}"]`);if(!slot){slot=document.createElement("div");slot.dataset.partial=key;el.append(slot)}slot.innerHTML=miniCard({kind:key,result:event.result,error:event.result.error,ms:event.ms||0})}
+    if(!row){row=document.createElement("div");row.className="work-row";row.dataset.t0=performance.now();row.innerHTML=`${key==="coordinator"?logoMark(20,"orb coord"):orb(AGENTS[key].v,20)}<span class="detail"><b></b><small></small></span><span class="phase"></span>`;row.querySelector("b").textContent=key==="coordinator"?"Focal coordinator":AGENTS[key].name;el.querySelector(".work-rows").append(row);rows.set(key,row)}
+    const done=DONE.includes(event.stage);
+    row.dataset.state=event.stage;row.toggleAttribute("data-done",done);row.querySelector("small").textContent=event.message||"";
+    // While working the status line speaks for itself; once done, show how long it took.
+    // Prefer the agent's own timing so this matches the ms shown on its result.
+    row.querySelector(".phase").textContent=event.stage==="failed"?"failed":done?`${((event.ms??performance.now()-row.dataset.t0)/1000).toFixed(1)} s`:"";
+    row.querySelector(".orb").classList.toggle("idle",done);
+    const line=document.createElement("p");line.textContent=`${((performance.now()-started)/1000).toFixed(1)}s · ${key} · ${event.message}`;const log=el.querySelector(".log");log.append(line);
+    if(log.children.length>100)log.firstChild.remove();
+    follow();
+    if(event.result&&AGENTS[key]){const host=outs||el;let slot=host.querySelector(`[data-partial="${key}"]`);if(!slot){slot=document.createElement("div");slot.className="fresh";slot.dataset.partial=key;host.append(slot)}slot.innerHTML=miniCard({kind:key,result:event.result,error:event.result.error,ms:event.ms||0});
+      // Live previews are replaced when the run ends, so their actions stay inert until then.
+      slot.querySelectorAll(".draft button,.draft textarea").forEach(x=>x.disabled=true)}
   }
-  function finish(ok){el.querySelector(".work-title").textContent=`${ok?"Request finished":"Request interrupted"} · ${((performance.now()-started)/1000).toFixed(1)}s`;rows.forEach((row,key)=>{if(!["completed","failed","review_ready"].includes(row.dataset.state)){row.querySelector(".phase").textContent=ok&&key==="coordinator"?"completed":ok?"finished":"interrupted";row.querySelector(".orb").classList.add("idle")}});el.querySelectorAll("[data-partial]").forEach(slot=>slot.remove())}
+  function finish(ok,note){
+    const summary=el.querySelector(".work-history summary");
+    summary.after(el.querySelector(".work-rows"));
+    summary.innerHTML=`Show steps <span class="meta">${esc(note||(ok?"finished":"interrupted"))}, ${((performance.now()-started)/1000).toFixed(1)} s</span>`;
+    el.classList.add("done");
+    rows.forEach(row=>{if(!row.hasAttribute("data-done")){row.setAttribute("data-done","");row.querySelector("small").textContent=ok?"Done":"Interrupted";row.querySelector(".phase").textContent=ok?`${((performance.now()-row.dataset.t0)/1000).toFixed(1)} s`:"interrupted";row.querySelector(".orb").classList.add("idle")}});el.querySelectorAll("[data-partial]").forEach(slot=>slot.remove());
+  }
   return {el,update,finish};
 }
 $("#chat-form").onsubmit=async e=>{
@@ -537,28 +688,31 @@ $("#chat-form").onsubmit=async e=>{
   input.value=""; $("#send").disabled=true; $("#starters").hidden=true;
   bubble(esc(text),"user");
   convo.push({role:"user",content:text});
-  const pending=bubble(`${logoOrb()}<div class="body"><div class="progress-host"></div></div>`,"bot");
-  const progress=makeProgress(pending.querySelector(".progress-host"));
+  const pending=bubble(`${logoOrb()}<div class="body"><div class="progress-host"></div><div class="outs"></div></div>`,"bot");
+  const body=pending.querySelector(".body"),outs=pending.querySelector(".outs");
+  const progress=makeProgress(pending.querySelector(".progress-host"),outs);
   progress.update({kind:"coordinator",stage:"connecting",message:"Connecting to the agent workflow"});
   try{
-    const cartRelated=!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
+    const cartRelated=isCartRelated(text);
     const d=await withRetry(()=>readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update),
-      n=>progress.update({kind:"coordinator",stage:"retrying",message:`Couldn't reach the orchestrator; retrying (${n} of ${ATTEMPTS})`}),!cartRelated);
+      n=>progress.update({kind:"coordinator",stage:"retrying",message:retryMessage(n)}),!cartRelated);
     d.calls.forEach(c=>{if(c.result?.confirmation_token)activePurchase=c.result.confirmation_token;if(c.result?.status==="cart_added")activePurchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
-    progress.finish(true);
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
-    const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
-    pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
-    pending.querySelector(".body").append(progress.el);
+    const by=d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules";
+    const via=d.calls.length?`${d.calls.length} agent${d.calls.length>1?"s":""} via ${by}`:d.source==="asi_one"?"ASI:One, no agents needed":by;
+    // Live previews become the final blocks in the same frame, so nothing blinks out and back.
+    morph(pending,()=>{progress.finish(true,via);outs.innerHTML=d.calls.map(miniCard).join("")});
+    tickDrafts();
+    await streamReply(body,d.reply||"");
   }catch(err){
     convo.pop();
-    progress.finish(false);
-    const tried=err.retryable&&!(!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text));
-    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">${esc(err.message)}. ${tried?`Tried ${ATTEMPTS} times; is the orchestrator running?`:"No automatic retry was sent."}</p></div>`;
-    pending.querySelector(".body").append(progress.el);
+    const tried=err.retryable&&!isCartRelated(text);
+    morph(pending,()=>{
+      progress.finish(false);
+      body.insertAdjacentHTML("beforeend",`<p class="err">${esc(err.message)}. ${tried?`Tried ${ATTEMPTS} times; is the orchestrator running?`:"No automatic retry was sent."}</p>`);
+    });
   }
-  pending.scrollIntoView({block:"end",behavior:"smooth"});
   $("#send").disabled=false; input.focus();
 };
 
@@ -571,18 +725,90 @@ document.addEventListener("click",e=>{
   $("#chat-form").requestSubmit();
 });
 
-renderRoster(); renderUsage();
+/* iMessage drafts. Sending needs an explicit click and sends only the exact drafted text;
+   an edit must be re-drafted first. Enter in the textarea is just a new line. */
+const chatAsk=text=>{setMode("chat");$("#chat-input").value=text;$("#chat-form").requestSubmit()};
+const draftStatus=(d,html,err=false)=>{const s=d.querySelector(".draft-status");s.innerHTML=html;s.classList.toggle("err",err)};
+function draftControls(d){
+  const t=d.querySelector("textarea"),edited=t.value!==t.dataset.original,expired=d.dataset.state==="expired";
+  t.disabled=false;d.querySelector("[data-msg-cancel]").disabled=false;
+  const send=d.querySelector("[data-msg-send]"),redraft=d.querySelector("[data-msg-redraft]");
+  send.disabled=edited||expired;send.textContent="Send via iMessage";
+  // After an edit or expiry, re-drafting is the next step, so it becomes the primary action.
+  redraft.hidden=!(edited||expired);send.classList.toggle("dark",!(edited||expired));redraft.classList.toggle("dark",edited||expired);
+}
+function lockDraft(d,state,html){
+  d.dataset.state=state;
+  d.querySelectorAll("button").forEach(b=>b.disabled=true);d.querySelector("textarea").readOnly=true;
+  draftStatus(d,html);d.querySelector(".draft-exp").textContent="";
+}
+const DRAFT_DONE=["sent","cancelled","replaced"];
+function tickDrafts(){
+  document.querySelectorAll(".draft [data-expires]").forEach(el=>{
+    const d=el.closest(".draft"),left=Math.round((Date.parse(el.dataset.expires)-Date.now())/1000);
+    if(DRAFT_DONE.includes(d.dataset.state)||Number.isNaN(left))return;
+    if(left>0){el.textContent=`Expires in ${Math.floor(left/60)}:${String(left%60).padStart(2,"0")}`;return}
+    el.textContent="Expired";
+    if(d.dataset.state!=="expired"&&d.dataset.state!=="sending"){d.dataset.state="expired";draftControls(d);draftStatus(d,"This draft expired. Re-draft to send it.")}
+  });
+}
+setInterval(tickDrafts,1000);
+document.addEventListener("input",e=>{
+  const t=e.target.closest(".draft textarea");if(!t)return;
+  const d=t.closest(".draft");if(d.dataset.state==="sending")return;
+  draftControls(d);
+  draftStatus(d,t.value!==t.dataset.original?"Edited. Re-draft so the agent sends exactly this text.":"");
+});
+async function sendDraft(d){
+  const t=d.querySelector("textarea");
+  if(["sending",...DRAFT_DONE].includes(d.dataset.state)||t.value!==t.dataset.original)return;
+  d.dataset.state="sending";
+  d.querySelectorAll("button,textarea").forEach(x=>x.disabled=true);
+  d.querySelector("[data-msg-send]").textContent="Sending…";
+  draftStatus(d,`${orb(AGENTS.messenger.v,18)}Sending to ${esc(d.dataset.recipient)}…`);
+  const orbEl=d.closest(".out")?.querySelector("header .orb");orbEl?.classList.remove("idle");
+  let res={};
+  try{
+    const r=await auth.request("/v1/messages/send",{method:"POST",body:JSON.stringify({draft_id:d.dataset.draft,text:t.value})});
+    res=await r.json().catch(()=>({}));
+    // A 200 without a status may already have gone out; never invite a second send of it.
+    res=r.ok?{...res,status:res.status||"sent"}:{status:res.status||"failed",error:res.error||res.message||`HTTP ${r.status}`};
+  }catch(err){res={status:"failed",error:err.message}}
+  orbEl?.classList.add("idle");
+  const at=new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
+  if(res.status==="sent")return lockDraft(d,"sent",`Sent at ${at}${res.dry_run?'<span class="badge">Dry run — not actually sent</span>':""}`);
+  d.dataset.state=res.status==="needs_permission"?"needs_permission":"failed";
+  draftControls(d);
+  draftStatus(d,res.status==="needs_permission"
+    ?"Not sent. Messages needs Automation permission on the Mac running the agent: allow it in System Settings, then send again."
+    :`Not sent${res.error?`: ${esc(res.error)}`:""}. You can send again.`,true);
+}
+document.addEventListener("click",e=>{
+  const pick=e.target.closest("[data-msg-pick]");
+  if(pick){if(!$("#send").disabled)chatAsk(`Message ${pick.dataset.msgPick}`);return}
+  const b=e.target.closest(".draft button");if(!b||b.disabled)return;
+  const d=b.closest(".draft");
+  if(b.matches("[data-msg-send]"))sendDraft(d);
+  else if(b.matches("[data-msg-cancel]"))lockDraft(d,"cancelled","Cancelled. Nothing was sent.");
+  else if(b.matches("[data-msg-redraft]")&&!$("#send").disabled){
+    chatAsk(`Re-draft my message to ${d.dataset.recipient}: ${d.querySelector("textarea").value}`);
+    lockDraft(d,"replaced","Replaced by a new draft below.");
+  }
+});
+
+updateRoster(); renderUsage();
 auth=setupAuth({
   endpoint:orch,
   onUserChange(session){
     preferences?.setUser(session?.user?.id);
     convo.length=0;
     activePurchase=null;
-    $("#thread").innerHTML='<div class="msg bot"><div class="body"><p>Ask me to consider a product. I’ll check prices, reviews, and alternatives within your budget.</p></div></div>';
-    $("#results").innerHTML='<div class="empty">Answers from the agents show up here.</div>';
+    $("#thread").innerHTML=WELCOME;
+    $("#results").innerHTML=EMPTY_RESULTS;
     $("#starters").hidden=false;
     $("#chat-input").value="";
     $("#product").value="";
+    pin();
   }
 });
 preferences=setupPreferences({request:(...args)=>auth.request(...args)});
