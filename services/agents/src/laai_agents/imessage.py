@@ -159,7 +159,8 @@ VERB = re.compile(
     r"(?:send\s+(?:an?\s+)?(?:imessage|text|message)\s+to|imessage|text|message|tell)\s+(.+)$",
     re.IGNORECASE | re.DOTALL,
 )
-LINK = re.compile(r"^(?:that|saying|says|to say)\b\s*|^[:,.;!\-–]\s*", re.IGNORECASE)
+# Linking words and punctuation before the message, possibly several: "to say: hi".
+LINK = re.compile(r"^(?:(?:that|saying|says|to say)\b\s*|[:,.;!\-–]\s*)+", re.IGNORECASE)
 
 
 # "Send Jonathan a message "lol"", "shoot Alex a quick text saying I'm late".
