@@ -51,14 +51,16 @@ def read(progress_id, after):
     return [e for e in run["events"] if e["seq"] > after] if run else []
 
 
-def tracked(kind):
+def tracked(kind, subject=None):
+    """`subject` names the work in progress events when the request has no product."""
+
     def decorate(fn):
         @wraps(fn)
         async def run(req):
             token = active.set((getattr(req, "progress_id", None), kind))
             started = time.perf_counter()
-            subject = getattr(req, "product", None) or getattr(req, "query", None)
-            report("started", f"Working on {subject or 'Amazon listing'}")
+            label = getattr(req, "product", None) or getattr(req, "query", None)
+            report("started", f"Working on {label or subject or 'Amazon listing'}")
             try:
                 result = await fn(req)
                 publish(

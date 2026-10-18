@@ -43,7 +43,9 @@ def build_chat_protocol(answer: Answer, extract_product: bool = True) -> Protoco
         if not text:
             return
         product = await llm.extract_product(text) if extract_product else text
-        ctx.logger.info(f"Chat from {sender}: {text!r} -> product {product!r}")
+        # Text can be a private message (the messenger agent): keep it out of info logs.
+        ctx.logger.info(f"Chat from {sender}")
+        ctx.logger.debug(f"Chat text {text!r} -> {product!r}")
         await ctx.send(sender, text_message(await answer(ctx, product)))
 
     @proto.on_message(ChatAcknowledgement)

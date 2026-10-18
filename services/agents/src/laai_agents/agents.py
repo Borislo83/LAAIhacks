@@ -28,6 +28,7 @@ PRICE_SEED = os.getenv("PRICE_AGENT_SEED", "laai price compare agent dev seed")
 ALTERNATIVES_SEED = os.getenv("ALTERNATIVES_AGENT_SEED", "laai alternatives agent dev seed")
 REVIEWS_SEED = os.getenv("REVIEWS_AGENT_SEED", "laai reviews agent dev seed")
 YOUTUBE_SEED = os.getenv("YOUTUBE_AGENT_SEED", "laai youtube agent dev seed")
+MESSENGER_SEED = os.getenv("MESSENGER_AGENT_SEED", "laai messenger agent dev seed")
 
 
 def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
@@ -137,3 +138,25 @@ def build_youtube_agent(port: int | None = None) -> Agent:
         port,
         chat_request=lambda text: YouTubeRequest(query=text[:300]),
     )
+
+
+def build_messenger_agent(port: int | None = None) -> Agent:
+    """Typed protocol and chat only prepare drafts; sending needs the executor token."""
+    from . import imessage
+
+    agent = build_specialist(
+        "laai-messenger",
+        MESSENGER_SEED,
+        "/imessage/prepare",
+        imessage.MessageDraftRequest,
+        imessage.MessageDraftResponse,
+        imessage.prepare,
+        port,
+        chat_request=lambda text: imessage.MessageDraftRequest(request=text[:1200]),
+    )
+
+    @agent.on_rest_post("/imessage/send", imessage.MessageSendRequest, imessage.MessageSendResponse)
+    async def on_send(ctx: Context, req):
+        return await imessage.send(req)
+
+    return agent
