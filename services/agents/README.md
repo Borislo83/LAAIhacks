@@ -76,9 +76,17 @@ reply is plain text: the headline, the summary and up to three source links. Pro
 stages are `searching`, `reading` ("Reading N articles"), `ranking` and `summarizing`.
 
 1. **Search.** Request phrasing ("what's the latest on", "news about", "today") is
-   stripped. Keyless DDGS news search (past week) runs first, and the shared web search
-   is the fallback.
-2. **Read.** The top `max_sources` results are fetched concurrently on the shared
+   stripped. When `TAVILY_API_KEY` is set, [Tavily search](https://docs.tavily.com/documentation/api-reference/endpoint/search)
+   runs first (`topic: news`, past week, `max_results` = `max_sources`, basic depth,
+   raw text and images included, 15 s timeout, key sent only as a bearer header). Its
+   results already carry the article text, date and images, so a page is fetched only
+   when Tavily's text is under 600 characters, or (top three) when no result has a usable
+   image. If there is no key, or Tavily errors, times out, is rate-limited (429) or finds
+   nothing, the agent falls back to keyless DDGS news search (past week), then the
+   shared web search. Progress messages name the provider, e.g. "Searching news
+   (Tavily) for ..." and "Tavily unavailable (Tavily returned HTTP 429); using free news
+   search"; the response shape is the same either way.
+2. **Read.** On the DDGS path, the top `max_sources` results are fetched concurrently on the shared
    session. Pages are HTTPS only, 8 s and 1.5 MB each (longer pages are read up to the
    cap), redirects are re-checked, and hosts that resolve to private, loopback or
    link-local addresses are refused. From each page it reads the title, `og:image`
@@ -89,7 +97,7 @@ stages are `searching`, `reading` ("Reading N articles"), `ranking` and `summari
    or mostly the same title words) are kept once, and results that share no word with
    the query are dropped when others match.
 4. **Headline and image.** The headline is the top article's title. The image is the
-   first ranked article's HTTPS `og:image` that is not on a private or local host, not
+   first ranked article's Tavily image or HTTPS `og:image` that is not on a private or local host, not
    logo-like, and not tiny when `og:image:width`/`height` say so. The image itself is
    never fetched.
 5. **Summary.** With `ASI_ONE_API_KEY`, ASI:One gets only the extracted text of the top
