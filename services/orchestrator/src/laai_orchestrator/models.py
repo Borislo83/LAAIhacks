@@ -125,7 +125,7 @@ class ToolArgs(BaseModel):
 class SpotifyArgs(BaseModel):
     """control_spotify tool arguments chosen by the LLM (or the keyword rules)."""
 
-    action: Literal["play", "pause", "resume", "next", "previous", "volume"]
+    action: Literal["play", "pause", "resume", "next", "previous", "volume", "now_playing"]
     query: str | None = Field(default=None, min_length=1, max_length=300)
     kind: Literal["track", "artist", "album", "playlist", "auto"] = "auto"
     volume: int | None = Field(default=None, ge=0, le=100)

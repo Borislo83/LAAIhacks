@@ -42,8 +42,9 @@ Tools:
   if the result's laptop.status is "opened", say "Playing <title> on your laptop"; otherwise
   give the link and say it was not opened on the laptop. Never claim it is playing otherwise.
 - control_spotify: plays a song, artist, album or playlist in the laptop's Spotify app, or
-  pauses, resumes, skips, goes back or changes the volume. Use it when the user says Spotify,
-  and for bare playback controls ("pause", "skip", "next song", "volume 40", "turn it up").
+  pauses, resumes, skips, goes back, changes the volume or says what is playing (now_playing).
+  Use it when the user says Spotify, for bare playback controls ("pause", "skip", "next song",
+  "volume 40", "turn it up") and for "what's playing" or "what song is this".
   Only pass volume or volume_change for a number or direction the user said. Repeat its
   summary; if it returns an error, say what went wrong.
 - message_friend: drafts an iMessage for the user to review. It never sends; the user confirms
@@ -116,7 +117,9 @@ TOOLS = [
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["play", "pause", "resume", "next", "previous", "volume"],
+                        "enum": [
+                            "play", "pause", "resume", "next", "previous", "volume", "now_playing"
+                        ],
                     },
                     "query": {
                         "type": "string",
@@ -655,6 +658,12 @@ SPOTIFY_CONTROLS = [
     ("pause", re.compile(rf"(?:pause|stop){MUSIC}")),
     ("resume", re.compile(rf"(?:resume|unpause|continue){MUSIC}|play(?:\s+(?:spotify|playback))?")),
     ("next", re.compile(r"(?:next|skip)(?:\s+(?:this\s+|the\s+)?(?:song|track|one))?|(?:play\s+)?(?:the\s+)?next\s+(?:song|track)")),
+    ("now_playing", re.compile(
+        r"(?:what(?:'|’)?s|what\s+is)\s+(?:(?:currently|now)\s+)?playing(?:\s+(?:now|right\s+now))?"
+        r"|what\s+(?:song|track)\s+is\s+(?:this|that|playing)(?:\s+(?:now|right\s+now))?"
+        r"|what(?:'|’)?s\s+this\s+(?:song|track)|who\s+(?:sings|is\s+singing)\s+this(?:\s+song)?"
+        r"|what\s+am\s+i\s+listening\s+to|now\s+playing"
+    )),
     ("previous", re.compile(r"(?:previous|prev|go\s+back)(?:\s+(?:a\s+|the\s+)?(?:song|track|one))?|(?:last|previous)\s+(?:song|track)")),
 ]
 SPOTIFY_VOLUME = re.compile(
