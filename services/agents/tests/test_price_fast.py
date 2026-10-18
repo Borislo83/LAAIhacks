@@ -301,3 +301,131 @@ async def test_amazon_landing_links_are_read_as_product_pages(monkeypatch):
     monkeypatch.setattr(merchants, "fetch_page", fetch)
     [offer] = await merchants.fetch_offers("https://www.amazon.com/clp/B0F3GWXLTS", "Nintendo Switch 2")
     assert asked == ["https://www.amazon.com/dp/B0F3GWXLTS"] and offer.price == 449.0
+
+
+# --- Generations and tiers -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "title, product, matches",
+    [
+        ("Apple AirPods Pro 3 Wireless Earbuds", "AirPods Pro 3", True),
+        ("Apple AirPods Pro (3rd Generation)", "AirPods Pro 3", True),
+        ("AirPods Pro Gen 3", "AirPods Pro 3", True),
+        ("Apple AirPods Pro 2 Wireless Earbuds", "AirPods Pro 3", False),
+        ("Apple AirPods Pro (2nd generation) with MagSafe Case (USB-C)", "AirPods Pro 3", False),
+        ("Apple AirPods Pro (2nd Gen)", "AirPods Pro 2", True),
+        ("Apple AirPods Pro, second generation", "AirPods Pro 2", True),
+        ("Apple AirPods 4 Wireless Earbuds", "AirPods 4", True),
+        ("Apple AirPods Pro 2", "AirPods 4", False),
+        ("Apple AirPods Pro 4", "AirPods 4", False),
+        ("Apple AirPods 4 with Active Noise Cancellation", "AirPods Pro", False),
+        ("Nintendo Switch 2 System", "Nintendo Switch 2", True),
+        ("Nintendo Switch OLED Model", "Nintendo Switch 2", False),
+        ("Nintendo Switch Lite", "Nintendo Switch 2", False),
+        ("Nintendo Switch 2 System", "Nintendo Switch OLED", False),
+    ],
+)
+def test_generation_and_tier_words_are_part_of_the_model(title, product, matches):
+    assert live.matches_product(title, product) is matches
+    # The looser review/buyer matcher never accepts another generation or tier either.
+    if not matches:
+        assert not live.names_product(title, product)
+
+
+def test_catalog_does_not_turn_a_newer_generation_into_the_older_one():
+    from laai_agents import catalog
+
+    assert catalog.find_product("AirPods Pro 3") is None
+    assert live.product_name("AirPods Pro 3") == "AirPods Pro 3"
+    assert catalog.find_product("AirPods Pro 2nd generation").name == "Apple AirPods Pro 2"
+    # A budget is not a model number.
+    assert catalog.find_product("Sony XM5 under $300").name == "Sony WH-1000XM5"
+
+
+def test_listing_without_a_generation_is_unconfirmed_not_matched():
+    assert live.unconfirmed_model("Apple AirPods Pro with MagSafe Case", "AirPods Pro 3")
+    assert not live.unconfirmed_model("Apple AirPods Pro 2", "AirPods Pro 3")
+    assert not live.unconfirmed_model("Apple AirPods Pro 3", "AirPods Pro 3")
+
+
+async def test_airpods_pro_3_prices_never_use_pro_2_listings(monkeypatch):
+    async def search(query):
+        assert "AirPods Pro 3" in query
+        sources = [
+            Source(title="Apple AirPods Pro (2nd generation) with MagSafe Case (USB-C)",
+                   url="https://www.target.com/p/airpods-pro-2nd-generation/-/A-85978612", snippet="$199.99"),
+            Source(title="Apple AirPods Pro 3", url="https://shop.example/pro3", snippet="Now $239.00"),
+            Source(title="Apple AirPods Pro", url="https://deals.example/pro", snippet="Only $169.00"),
+        ]  # fmt: skip
+        return sources, {"sources": sources, "data_source": "ddgs", "notice": None}
+
+    pages = []
+
+    async def page(url, product):
+        pages.append(url)
+        return []
+
+    async def walmart(query, max_price=None):
+        return [
+            stores._offer("Apple AirPods Pro 3 Wireless Earbuds", "walmart.com", 249.0,
+                          "https://www.walmart.com/ip/1", None, 4.7, "900", "walmart_search_page"),
+            stores._offer("Apple AirPods Pro 2 Wireless Earbuds", "walmart.com", 189.0,
+                          "https://www.walmart.com/ip/2", None, 4.8, "9000", "walmart_search_page"),
+            stores._offer("Apple AirPods Pro Wireless Earbuds", "walmart.com", 229.0,
+                          "https://www.walmart.com/ip/3", None, 4.5, "100", "walmart_search_page"),
+        ]  # fmt: skip
+
+    monkeypatch.setattr(live, "search", search)
+    monkeypatch.setattr(merchants, "fetch_offers", page)
+    monkeypatch.setattr(stores, "walmart_page_search", walmart)
+    result = await live.compare(PriceCompareRequest(product="AirPods Pro 3"))
+    assert result.product == "AirPods Pro 3"
+    prices = {o.price: o for o in result.offers}
+    assert 189.0 not in prices and 199.99 not in prices  # Pro 2 dropped
+    assert result.best.price == 249.0 and result.best.verified
+    for price in (229.0, 169.0):  # no generation stated: kept, labeled, never verified
+        assert prices[price].note == merchants.MODEL_UNCONFIRMED and not prices[price].verified
+    assert pages == ["https://shop.example/pro3"]
+
+
+async def test_older_generation_is_labeled_not_listed_as_a_rival(monkeypatch):
+    async def search(query):
+        sources = [Source(title=t, url=f"https://reviews.example/{i}") for i, t in enumerate([
+            "AirPods Pro 3 vs AirPods Pro 2: should you upgrade?",
+            "AirPods Pro 2 vs AirPods Pro 3 compared",
+            "AirPods Pro 3 vs Sony WF-1000XM5",
+            "Sony WF-1000XM5 vs AirPods Pro 3 review",
+        ])]  # fmt: skip
+        return sources, {"sources": sources, "data_source": "ddgs", "notice": None}
+
+    async def compare(req):
+        return type("R", (), {"best": None, "sources": []})()
+
+    monkeypatch.setattr(live, "search", search)
+    monkeypatch.setattr(live, "compare", compare)
+    priced, unpriced = await live.compared_alternatives("AirPods Pro 3", None)
+    reasons = {a.product: a.reason for a in priced + unpriced}
+    assert reasons["AirPods Pro 2"].startswith("Older model of AirPods Pro 3, not a rival")
+    assert reasons["Sony WF-1000XM5"].startswith("Often compared with AirPods Pro 3")
+
+
+def test_search_races_only_engines_this_ddgs_has():
+    from ddgs.engines import ENGINES
+
+    from laai_agents import search as search_module
+
+    assert search_module.RACE and set(search_module.RACE) <= set(ENGINES["text"])
+
+
+def test_a_case_named_after_the_product_is_an_accessory():
+    product = "AirPods Pro 3"
+    assert merchants.is_accessory("CASETiFY Red Cherry AirPods Pro 3 Case with Ring", product)
+    assert merchants.is_accessory("Spigen AirPods Pro 3 Silicone Cover", product)
+    assert not merchants.is_accessory("Apple AirPods Pro 3 Wireless Earbuds with MagSafe Charging Case", product)
+
+
+def test_another_tier_is_a_rival_not_a_newer_model():
+    assert live.other_generation("AirPods Pro 2", "AirPods Pro 3") == "older model"
+    assert live.other_generation("AirPods 5", "AirPods Pro 3") is None
+    assert live.other_generation("Sony WF-1000XM5", "AirPods Pro 3") is None

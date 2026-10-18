@@ -78,8 +78,23 @@ CACHE_SIZE = 256
 _SLOTS = asyncio.Semaphore(2)
 # Different engines are asked at once and the first useful answer wins; "auto" (ddgs's
 # own rotation) is the last resort. One engine rate-limiting no longer costs seconds.
-RACE = ("duckduckgo", "bing", "yahoo")
+PREFERRED = ("duckduckgo", "brave", "yahoo", "mojeek", "startpage", "google")
 FALLBACK = "auto"
+
+
+def _installed_engines() -> tuple[str, ...]:
+    """Text engines this ddgs version has, so no request goes to a missing one (ddgs
+    9.16 has no "bing" text engine, for example)."""
+    try:
+        from ddgs.engines import ENGINES
+
+        available = set(ENGINES.get("text", {}))
+    except (ImportError, AttributeError):
+        return ("duckduckgo",)
+    return tuple(e for e in PREFERRED if e in available)[:3] or ("duckduckgo",)
+
+
+RACE = _installed_engines()
 BACKENDS = (*RACE, FALLBACK)
 ENGINE_SECONDS = 4
 

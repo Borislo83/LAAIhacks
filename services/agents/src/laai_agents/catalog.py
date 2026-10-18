@@ -4,6 +4,7 @@ Every agent reads product data through the functions in this module, so swapping
 in a real price/review API only means changing this file.
 """
 
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -105,11 +106,34 @@ def find_product(query: str) -> Product | None:
         names = (product.name, *product.aliases)
         if any(_norm(n) == q for n in names):
             return product
+    # A model number or generation the query names must be the product's own: "AirPods
+    # Pro 3" contains the alias "airpods pro" but is not the AirPods Pro 2.
+    asked = _model_tokens(_norm(BUDGET.sub(" ", query)))
     for product in PRODUCTS:
         names = (product.name, *product.aliases)
+        own = set().union(*(_model_tokens(_norm(n)) for n in names))
+        if asked - own:
+            continue
         if any(_norm(n) in q or q in _norm(n) for n in names):
             return product
     return None
+
+
+# Prices and budgets in a request are not model numbers ("under $300", "$249.99").
+BUDGET = re.compile(
+    r"\$\s*\d[\d,]*(?:\.\d+)?|\b(?:under|below|less\s+than|up\s+to|over|above|max(?:imum)?|"
+    r"budget(?:\s+of)?)\s*\$?\s*\d[\d,]*(?:\.\d+)?|\b\d[\d,]*(?:\.\d+)?\s*(?:dollars|usd|bucks)\b",
+    re.IGNORECASE,
+)
+
+
+def _model_tokens(text: str) -> set[str]:
+    """Words holding a digit, with ordinals as numbers ("2nd" -> "2")."""
+    return {
+        re.sub(r"^(\d+)(?:st|nd|rd|th)$", r"\1", w)
+        for w in text.split()
+        if any(c.isdigit() for c in w)
+    }
 
 
 def offer_url(store: str, product: Product) -> str:
