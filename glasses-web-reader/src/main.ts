@@ -1780,23 +1780,27 @@ async function flushSave() {
   await enqueue(() => bridge.setLocalStorage(STATE_KEY, JSON.stringify(state))).catch(() => {})
   await enqueue(() => bridge.setLocalStorage(BOOKMARKS_KEY, JSON.stringify(bookmarks))).catch(() => {})
   await enqueue(() => bridge.setLocalStorage(RECENT_KEY, JSON.stringify(recent))).catch(() => {})
-  // The laptop keeps one list for the simulator and the glasses.
-  void backend.agents?.saveSharedBookmarks(bookmarks).catch(() => {})
+  // The glasses own the bookmarks; the laptop keeps a copy of theirs.
+  if (onGlasses) void backend.agents?.saveSharedBookmarks(bookmarks).catch(() => {})
 }
 
-/** Merges the laptop's shared bookmarks with this device's, then saves the union on both. */
+/** The glasses (signed in with the pairing code) send their bookmarks to the laptop, which
+ *  keeps a copy; the simulator (signed in on the laptop) shows that copy instead of its own. */
 async function syncBookmarks() {
   const client = backend.agents
   if (!client) return
   try {
-    const { bookmarks: shared } = await client.sharedBookmarks()
-    const known = new Set(bookmarks.map(b => b.url))
-    const added = shared.filter(b => !known.has(b.url))
-    bookmarks = [...bookmarks, ...added]
-    if (added.length || shared.length !== bookmarks.length) await client.saveSharedBookmarks(bookmarks)
+    if (onGlasses) {
+      await client.saveSharedBookmarks(bookmarks)
+      return
+    }
+    const { bookmarks: copy } = await client.sharedBookmarks()
+    if (!copy.length) return
+    bookmarks = copy
     await enqueue(() => bridge.setLocalStorage(BOOKMARKS_KEY, JSON.stringify(bookmarks))).catch(() => {})
     companion.update()
-  } catch { /* the laptop's list is a convenience */ }
+    if (view === 'bookmarks') openBookmarks()
+  } catch { /* the laptop's copy is a convenience */ }
 }
 
 async function restore() {
@@ -2103,7 +2107,11 @@ async function renderGlassesRecommendations() {
   }
 }
 
+/** Signed in with the pairing code: this is the glasses (via the phone), not the simulator. */
+let onGlasses = false
+
 async function connectBackend(token: string, g2Token: string) {
+  onGlasses = token.startsWith('pair-')
   try {
     actionCards.clear()
     const api = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
