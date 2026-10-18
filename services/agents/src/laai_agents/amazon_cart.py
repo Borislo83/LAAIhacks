@@ -23,13 +23,22 @@ _page = None
 CART_URL = "https://www.amazon.com/gp/cart/view.html"
 NEEDS_SIGN_IN = {
     "status": "needs_sign_in",
-    "message": "Sign in in the opened Amazon browser, then prepare and approve again.",
+    "message": "Sign in to your Amazon account in the opened Chrome window (only needed once), "
+    "then press Add to Amazon cart again. Nothing was added.",
 }
 
 
 def _on_sign_in(page) -> bool:
     # Amazon's sign-in lives at /ap/signin or, in its newer flow, /ax/claim/...
     return bool(re.search(r"/(?:ap/signin|ax/claim)", urlsplit(page.url).path))
+
+
+async def _signed_out(page) -> bool:
+    """Amazon's header greets a signed-out visitor with "Hello, sign in"."""
+    greeting = page.locator("#nav-link-accountList-nav-line-1").first
+    if not await greeting.count():
+        return False
+    return "sign in" in (await greeting.inner_text()).lower()
 
 
 def _cart_item(page, asin: str):
@@ -76,6 +85,13 @@ async def add_to_cart(url: str, quantity: int):
             )
             await page.goto(cart_url, wait_until="domcontentloaded", timeout=45000)
             if _on_sign_in(page):
+                return dict(NEEDS_SIGN_IN)
+            if await _signed_out(page):
+                # A signed-out add lands in a guest cart, not the user's account: open
+                # Amazon's sign-in in this window and stop.
+                link = page.locator("#nav-link-accountList").first
+                if await link.count():
+                    await link.click(timeout=10000)
                 return dict(NEEDS_SIGN_IN)
             try:
                 await page.wait_for_selector(
