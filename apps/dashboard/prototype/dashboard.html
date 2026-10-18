@@ -122,13 +122,26 @@ body[data-density="compact"] .agent{padding:10px}
 @keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.5}30%{transform:translateY(-45%);opacity:1}}
 .orb .s7{animation:read 2.2s ease-in-out infinite;transform-box:fill-box;transform-origin:left center}
 @keyframes read{0%,100%{transform:scaleX(.35);opacity:.45}50%{transform:scaleX(1);opacity:1}}
+.orb .s8{stroke-dasharray:1;animation:tick 2.2s ease-in-out infinite}
+@keyframes tick{0%{stroke-dashoffset:1;opacity:1}45%,80%{stroke-dashoffset:0;opacity:1}100%{stroke-dashoffset:0;opacity:0}}
+.orb .s9{animation:recall 2.1s ease-in-out infinite}
+@keyframes recall{0%,100%{opacity:.2}35%{opacity:1}}
 .orb.idle *{animation-play-state:paused}
+/* an idle verifier shows its finished tick, not the empty first frame */
+.orb.idle .s8{animation:none}
 
 /* mode tabs + chat */
 .tabs{display:inline-flex;gap:4px;padding:4px;border:1px solid var(--hair);border-radius:999px;background:var(--white);margin-bottom:16px}
 .tabs button{font:500 13px var(--sans);border:0;background:none;border-radius:999px;padding:7px 14px;cursor:pointer;color:var(--muted)}
 .tabs button[aria-selected="true"]{background:var(--ink);color:var(--white)}
 .chat{background:var(--white);border:1px solid var(--hair);border-radius:16px;display:flex;flex-direction:column;min-height:520px}
+/* who this chat talks to: the coordinator orchestrates, every other agent is scoped to itself */
+.chat-head{display:flex;gap:12px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--hair)}
+.chat-head .meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.chat-head b{font-weight:500;font-size:15px}
+.chat-head small{font-size:13px;line-height:19px;color:var(--muted)}
+.chat-head .route{font:11px var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.chat-head .scope{color:var(--signal)}
 .thread-scroll{flex:1;overflow-y:auto;max-height:68vh;overscroll-behavior:contain;overflow-anchor:none}
 .thread{display:flex;flex-direction:column;gap:18px;padding:20px}
 .msg{max-width:88%;font-size:15px;line-height:23px}
@@ -308,7 +321,7 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
   <div class="grid" id="workspace" hidden inert>
     <aside>
       <h2>Agents</h2>
-      <p class="muted" style="font-size:13px;margin:6px 0 14px">In chat the orchestrator picks. In Direct, you do.</p>
+      <p class="muted" id="roster-hint" style="font-size:13px;margin:6px 0 14px">Pick an agent to chat with it alone. The coordinator calls the others.</p>
       <div class="roster" id="roster"></div>
 
       <div class="usage">
@@ -338,7 +351,8 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
 
       <section id="pane-chat">
         <div class="chat">
-          <div class="thread-scroll" id="thread-scroll"><div class="thread" id="thread" aria-live="polite"></div></div>
+          <div class="chat-head" id="chat-head"></div>
+          <div class="thread-scroll" id="thread-scroll"></div>
           <div class="starters" id="starters"></div>
           <form class="composer" id="chat-form"><input id="chat-input" placeholder="Is the Sony XM5 worth it, or is there something cheaper?" autocomplete="off" required><button class="btn dark" id="send">Send</button></form>
         </div>
@@ -377,10 +391,44 @@ const AGENTS={
   reviews:{v:1,name:"Reviews agent",id:"laai-reviews",route:"/reviews",what:"Rating, pros and cons"},
   buyer:{v:3,name:"Amazon cart agent",id:"focal-amazon-buyer-demo",route:"/buy/prepare",what:"Real cart · stops before checkout"},
   youtube:{v:5,name:"YouTube finder",id:"laai-youtube",route:"/youtube",what:"Finds the video or song you mean"},
-  messenger:{v:6,name:"Messenger",id:"laai-messenger",route:"/messages/draft",what:"Drafts iMessages in chat; you approve each send"},
+  messenger:{v:6,name:"Messenger",id:"laai-messenger",route:"/imessage/prepare",what:"Drafts iMessages in chat; you approve each send"},
   news:{v:7,name:"News brief",id:"laai-news",route:"/news",what:"Reads several sources, one sourced summary"},
+  verifier:{v:8,name:"Price verifier",id:"focal-price-verifier",route:"/verify",what:"Audits offers before anyone acts on them"},
+  memory:{v:9,name:"Memory",id:"focal-memory",route:"/memory",what:"Your preferences and past decisions"},
 };
 const KEYS=Object.keys(AGENTS);
+// Direct mode fills a form per agent; the others need a conversation.
+const DIRECT=["price","alternatives","reviews","buyer","youtube","news"];
+const COORD="focal-shopping-assistant";
+// Every agent gets its own chat. Descriptions match the agents' Agentverse profiles.
+const CHATS=[
+  {id:COORD,k:"coordinator",name:"Focal coordinator",route:"/consider",what:"Orchestrates the whole team",
+    desc:"Should I buy it? A team of agents researches a product, verifies every price, adds your pick to your Amazon cart, tells a friend and watches the price, in one chat.",
+    intro:"Ask me to consider a product, and I’ll check prices, reviews and alternatives within your budget. I can also find a song or video on YouTube, brief you on the news, or draft an iMessage for you to approve.",
+    placeholder:"Is the Sony XM5 worth it, or is there something cheaper?",
+    starters:["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100","Find the song Blinding Lights","Text Alex that I'm running 10 minutes late"]},
+  {k:"price",desc:"Current prices for a product across online stores, read from product pages and ranked by trust, with a source for every price.",
+    intro:"Name a product and I’ll compare current prices across stores, with a source for every price.",placeholder:"A product, e.g. Sony XM5",starters:["Sony XM5","AirPods Pro 2"]},
+  {k:"alternatives",desc:"Cheaper or better-rated alternatives to a product in the same category, within your budget.",
+    intro:"Name a product, and a budget if you have one, and I’ll find cheaper or better-rated picks in the same category.",placeholder:"A product and budget, e.g. Sony XM5 under $300",starters:["Sony XM5 under $300","Galaxy Buds3 Pro under $100"]},
+  {k:"reviews",desc:"Expert review summary for a product: average rating on a 5-point scale, pros, cons and links.",
+    intro:"Name a product and I’ll summarize expert reviews: rating, pros and cons.",placeholder:"A product, e.g. Bose QC Ultra",starters:["Sony XM5","Bose QC Ultra"]},
+  {k:"verifier",desc:"Audits price offers: drops low-trust leads and outliers, flags budget and single-source prices, and asks for a deeper search when nothing is trustworthy.",
+    intro:"Paste offers, a store and price each, and I’ll audit them: drop low-trust leads and outliers, and flag single-source or over-budget prices. I only check what you paste; this chat never asks the price agent for offers.",
+    placeholder:"Sony XM5: Amazon $279, Best Buy $299, dealz4u $99",starters:["Sony XM5: Amazon $279, Best Buy $299, Walmart $310, dealz4u $99","AirPods Pro 2: Target $199, Amazon $189, max $180"]},
+  {k:"memory",desc:"Long-term memory for the Focal shopping team: a shopper's preferences and past decisions.",
+    intro:"I keep your shopping preferences and past decisions. Start a message with “Remember” to save something; anything else recalls what I know.",
+    placeholder:"Remember that I prefer over-ear headphones",starters:["What do you remember about me?","Remember that I prefer over-ear headphones"]},
+  {k:"buyer",desc:"Finds the Amazon listing and adds it to your cart only after you approve. Checkout is disabled.",
+    intro:"Name a product or paste an Amazon link. I prepare a cart review; nothing is added until you approve it, and checkout is disabled.",placeholder:"A product or Amazon link",starters:["Sony WH-1000XM5","Echo Dot, quantity 2"]},
+  {k:"messenger",desc:"Drafts an iMessage to an allowlisted friend and sends it only after you approve.",
+    intro:"Tell me who to text and what to say. I draft the iMessage; it sends only when you click Approve.",placeholder:"Text Alex that I'm running late",starters:["Text Alex that I'm running 10 minutes late"]},
+  {k:"youtube",desc:"Finds a YouTube link for a song or video you ask for.",
+    intro:"Ask for a song or video and I’ll find the YouTube link.",placeholder:"A song or video",starters:["Find the song Blinding Lights","Sony XM5 review video"]},
+  {k:"news",desc:"Short, sourced summary of the latest news on any topic.",
+    intro:"Ask about any topic for a short, sourced news brief.",placeholder:"A topic, e.g. smart glasses",starters:["What's the latest on smart glasses?","Latest news on the Fed"]},
+].map(c=>c.k==="coordinator"?c:{...c,id:AGENTS[c.k].id,name:AGENTS[c.k].name,route:AGENTS[c.k].route,what:AGENTS[c.k].what});
+const CHAT_BY=Object.fromEntries(CHATS.map(c=>[c.id,c]));
 const TRY=["Sony XM5","AirPods Pro 2","Bose QC Ultra","Nothing Ear (a)"];
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -390,15 +438,17 @@ const money=n=>n==null?"–":"$"+Number(n).toFixed(2);
 const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
 
 document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=logoMark()+`Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
-const logoOrb=()=>logoMark(28,"orb");
-const WELCOME=`<div class="msg bot">${logoOrb()}<div class="body"><p>Ask me to consider a product, and I’ll check prices, reviews and alternatives within your budget. I can also find a song or video on YouTube, brief you on the news, or draft an iMessage for you to approve.</p></div></div>`;
+const orbFor=(c,size,idle=false)=>c.k==="coordinator"?logoMark(size,"orb coord"+(idle?" idle":"")):orb(AGENTS[c.k].v,size,idle);
+const welcome=c=>`<div class="msg bot">${orbFor(c,28,true)}<div class="body"><p>${esc(c.intro)}</p>${c.k==="coordinator"?"":`<p class="muted" style="font-size:13px">Only ${esc(c.id)} answers here; it never calls the other agents.</p>`}</div></div>`;
 const EMPTY_RESULTS='<div class="empty">Answers from the agents show up here.</div>';
 const THREAD_MAX=40;
-$("#thread").innerHTML=WELCOME;
 $("#results").innerHTML=EMPTY_RESULTS;
 
 /* state */
 let auth, preferences;
+/* one thread per agent: its own conversation, pending cart approval and busy state */
+const threads={};
+let current=null;
 let selected=new Set(store.get("focal.selected",["price","alternatives","reviews"]));
 const health={};
 let usage=store.get("focal.usage",null)||freshUsage();
@@ -406,19 +456,24 @@ KEYS.forEach(k=>usage.agents[k]??={calls:0,ms:0,errors:0});
 function freshUsage(){return {since:Date.now(),agents:Object.fromEntries(KEYS.map(k=>[k,{calls:0,ms:0,errors:0}]))}}
 
 // Built once; later changes only touch aria-pressed and the status line.
-$("#roster").innerHTML=KEYS.map(k=>{const a=AGENTS[k];
-  return `<button class="agent" type="button" data-k="${k}" aria-pressed="false">${orb(a.v,44,true)}
-    <span class="meta"><b>${a.name}</b><small>${a.what}</small><br><span class="route">POST ${a.route}</span></span>
-    <span class="status"><i></i><span>…</span></span></button>`}).join("");
+$("#roster").innerHTML=CHATS.map(c=>
+  `<button class="agent" type="button" data-k="${c.k}" data-chat="${c.id}" aria-pressed="false" title="${esc(c.desc)}">${orbFor(c,44,true)}
+    <span class="meta"><b>${esc(c.name)}</b><small>${esc(c.what)}</small><br><span class="route">${esc(c.id)}</span></span>
+    <span class="status"><i></i><span>…</span></span></button>`).join("");
 const rosterButtons=[...document.querySelectorAll("#roster .agent")];
+const chatMode=()=>store.get("focal.mode","chat")==="chat";
 function updateRoster(){
+  const chatting=chatMode();
+  $("#roster-hint").textContent=chatting?"Pick an agent to chat with it alone. The coordinator calls the others.":"Pick which agents to call.";
   rosterButtons.forEach(b=>{const k=b.dataset.k,h=health[k],st=b.querySelector(".status");
-    b.setAttribute("aria-pressed",selected.has(k));
+    b.hidden=!chatting&&!DIRECT.includes(k);
+    b.setAttribute("aria-pressed",chatting?b.dataset.chat===current?.id:selected.has(k));
     st.className="status"+(h===true?" up":h===false?" down":"");
     st.lastChild.textContent=h===true?"Online":h===false?"Offline":"…"});
 }
 $("#roster").addEventListener("click",e=>{
   const b=e.target.closest(".agent"); if(!b)return;
+  if(chatMode()){openChat(b.dataset.chat);$("#chat-input").focus();return}
   const k=b.dataset.k; selected.has(k)?selected.delete(k):selected.add(k);
   store.set("focal.selected",[...selected]); updateRoster(); $("#go").disabled=!selected.size;
 });
@@ -448,7 +503,7 @@ async function call(k,body,onProgress){
     const progress=onProgress||(()=>{});
     const result=await withRetry(()=>readEvents(path,body,progress),
       n=>progress({kind:k,stage:"retrying",message:retryMessage(n)}),k!=="buyer");
-    if(result.result?.confirmation_token)activePurchase=result.result.confirmation_token;
+    if(result.result?.confirmation_token)thread(COORD).purchase=result.result.confirmation_token;
     // A failed web search is still an answer: the agent is reachable.
     return {ok:!!result.result&&!result.error,reachable:!!result.result,data:result.result,error:result.error,ms:performance.now()-t0};
   }catch(e){return {ok:false,reachable:false,error:e.message||String(e),ms:performance.now()-t0}}
@@ -464,8 +519,9 @@ function record(k,res){
   health[k]=res.reachable??res.ok; updateRoster();
 }
 async function checkAll(){
-  KEYS.forEach(k=>delete health[k]); updateRoster();
-  try{const r=await fetch(orch.value.replace(/\/$/,"")+"/health",{redirect:"error"});KEYS.forEach(k=>health[k]=r.ok)}catch{KEYS.forEach(k=>health[k]=false)}
+  const all=[...KEYS,"coordinator"];
+  all.forEach(k=>delete health[k]); updateRoster();
+  try{const r=await fetch(orch.value.replace(/\/$/,"")+"/health",{redirect:"error"});all.forEach(k=>health[k]=r.ok)}catch{all.forEach(k=>health[k]=false)}
   updateRoster();
 }
 $("#ping").onclick=checkAll;
@@ -522,6 +578,19 @@ const VIEW={
     const chips=srcs.slice(0,8).map(({s,u})=>`<a class="src" href="${esc(u.href)}" target="_blank" rel="noopener noreferrer" title="${esc(s.title||u.hostname)}">${esc(s.publisher||u.hostname.replace(/^www\./,""))}</a>`).join("");
     return {lens:lens("NEWS",d.headline,""),
       body:`<div class="news">${frame}<div class="news-text"><h3 title="${esc(d.headline)}">${esc(d.headline)}</h3>${d.summary?`<p>${esc(d.summary)}</p>`:""}${meta?`<span class="news-meta">${meta}</span>`:""}</div>${chips?`<div class="news-srcs">Sources${chips}</div>`:""}</div>`};
+  },
+  verifier(d){
+    const li=o=>`<li>${esc(o.store)} <span class="p">${money(o.price)}</span>${o.reason?` <span class="muted">· ${esc(o.reason)}</span>`:o.trust?` <span class="muted">· ${esc(o.trust)} trust</span>`:""}</li>`;
+    const pc=`<div class="pc"><div><h4>Kept</h4><ul>${(d.kept||[]).map(li).join("")||"<li class=muted>None</li>"}</ul></div><div><h4>Dropped</h4><ul>${(d.dropped||[]).map(li).join("")||"<li class=muted>None</li>"}</ul></div></div>`;
+    const flags=(d.flags||[]).map(f=>`<p class="warn-note">${esc(f)}</p>`).join("");
+    return {lens:lens("VERIFIER · "+d.product,d.best?`${money(d.best.price)} at ${d.best.store}`:"Nothing verified",d.verdict+(d.within_budget===false?" · over budget":"")),body:pc+flags};
+  },
+  memory(d){
+    // Private notes from the Studio profile stay out of the chat, like they stay out of prompts.
+    const prefs=Object.entries(d.preferences||{}).filter(([k])=>k!=="notes"&&k!=="updated_at").map(([k,v])=>`<li>${esc(k.replace(/_/g," "))}: ${esc(v)}</li>`).join("");
+    const recent=(d.history||[]).map(h=>`<li>${esc(h.note||JSON.stringify(h))}${h.at?` <span class="muted">· ${esc(new Date(h.at*1000).toLocaleDateString([], {month:"short",day:"numeric"}))}</span>`:""}</li>`).join("");
+    return {lens:lens("MEMORY",`${(d.history||[]).length} saved`,d.source==="supabase"?"profile from Focal Studio":"agent memory"),
+      body:`<div class="pc"><div><h4>Preferences</h4><ul>${prefs||"<li class=muted>None saved</li>"}</ul></div><div><h4>Recent</h4><ul>${recent||"<li class=muted>Nothing yet</li>"}</ul></div></div><p class="route muted" style="font:11px var(--mono)">${esc(d.request)} → ${esc(d.status??"no response")}</p>`};
   },
   reviews(d){
     const pc=(d.pros.length||d.cons.length)?`<div class="pc"><div><h4>Pros</h4><ul>${d.pros.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div><div><h4>Cons</h4><ul>${d.cons.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div></div>`:"";
@@ -622,6 +691,7 @@ function setMode(m){
   document.querySelectorAll("[data-mode]").forEach(b=>b.setAttribute("aria-selected",b.dataset.mode===m));
   Object.entries(MODE_PANES).forEach(([k,el])=>el.hidden=k!==m);
   store.set("focal.mode",m);
+  updateRoster();
 }
 document.querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
 setMode(store.get("focal.mode","chat"));
@@ -630,13 +700,9 @@ setMode(store.get("focal.mode","chat"));
 const orch=$("#orch");
 orch.value=store.get("focal.orch","http://127.0.0.1:8001");
 orch.onchange=()=>store.set("focal.orch",orch.value.trim());
-const convo=[];
-let activePurchase=null;
 // Cart requests are never retried, so nothing can be added to a cart twice.
-const isCartRelated=text=>!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
-const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100","Find the song Blinding Lights","Text Alex that I'm running 10 minutes late"];
-$("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
-document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
+const isCartRelated=(text,t)=>t.c.k==="buyer"||!!t.purchase||/\b(buy|purchase|order|cart)\b/i.test(text);
+$("#starters").onclick=e=>{const b=e.target.closest("[data-start]");if(!b||$("#send").disabled)return;$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()};
 
 /* Claude-style scrolling: follow new output only while the reader is at the bottom, so
    scrolling up to reread is never interrupted. One rAF-throttled jump per frame, no smooth
@@ -654,7 +720,26 @@ function follow(){
   requestAnimationFrame(()=>{followQueued=false;if(pinned)scroller.scrollTop=scroller.scrollHeight});
 }
 // Content changes call follow() directly; the observer also catches growth from animations.
-new ResizeObserver(follow).observe($("#thread"));
+const grows=new ResizeObserver(follow);
+function thread(id){
+  if(threads[id])return threads[id];
+  const c=CHAT_BY[id],el=document.createElement("div");
+  el.className="thread";el.dataset.agent=id;el.setAttribute("aria-live","polite");el.hidden=true;el.innerHTML=welcome(c);
+  scroller.append(el);grows.observe(el);
+  return threads[id]={id,c,el,convo:[],purchase:null,busy:false};
+}
+function openChat(id){
+  const t=thread(CHAT_BY[id]?id:COORD);current=t;
+  Object.values(threads).forEach(x=>x.el.hidden=x!==t);
+  store.set("focal.chatWith",t.id);
+  const c=t.c,scope=c.k==="coordinator"?"orchestrates every agent":"scoped: only this agent";
+  $("#chat-head").innerHTML=`${orbFor(c,32,true)}<span class="meta"><b>${esc(c.name)}</b><small>${esc(c.desc)}</small><span class="route">${esc(c.id)} · POST ${esc(c.route)} · <span class="scope">${scope}</span></span></span>`;
+  $("#starters").innerHTML=c.starters.map(s=>`<button type="button" class="chip" data-start="${esc(s)}">${esc(s)}</button>`).join("");
+  $("#starters").hidden=t.convo.length>0;
+  $("#chat-input").placeholder=c.placeholder;
+  $("#send").disabled=t.busy;
+  updateRoster();pin();follow();
+}
 const reduceMotion=matchMedia("(prefers-reduced-motion: reduce)");
 // Swap content without a jump: the element eases from its old height to its new one.
 function morph(el,change){
@@ -668,12 +753,12 @@ function morph(el,change){
   const stall=setTimeout(()=>anim.finish(),duration+200);
   anim.finished.catch(()=>{}).then(()=>{clearTimeout(stall);el.style.overflow="";follow()});
 }
-function bubble(html,cls){
+function bubble(html,cls,t=current){
   const el=document.createElement("div"); el.className="msg "+cls; el.innerHTML=html;
-  const thread=$("#thread"); thread.appendChild(el);
-  while(thread.children.length>THREAD_MAX)thread.firstElementChild.remove();
+  t.el.appendChild(el);
+  while(t.el.children.length>THREAD_MAX)t.el.firstElementChild.remove();
   // Sending a message always brings the conversation back to the bottom.
-  if(cls==="user")pin();
+  if(cls==="user"&&t===current)pin();
   follow(); return el;
 }
 // Cart buttons only for the stores' own add-to-cart links; everything else is "View".
@@ -745,7 +830,7 @@ function makeProgress(container,outs){
   el.innerHTML='<div class="work-rows"></div><details class="work-history"><summary>Show steps</summary><div class="log"></div></details>';
   container.replaceChildren(el);
   function update(event){
-    const key=event.kind;if(key!=="coordinator"&&!AGENTS[key])return;
+    const key=kindOf(event.kind);if(key!=="coordinator"&&!AGENTS[key])return;
     let row=rows.get(key);
     if(!row){row=document.createElement("div");row.className="work-row";row.dataset.t0=performance.now();row.innerHTML=`${key==="coordinator"?logoMark(20,"orb coord"):orb(AGENTS[key].v,20)}<span class="detail"><b></b><small></small></span><span class="phase"></span>`;row.querySelector("b").textContent=key==="coordinator"?"Focal coordinator":AGENTS[key].name;el.querySelector(".work-rows").append(row);rows.set(key,row)}
     const done=DONE.includes(event.stage);
@@ -772,44 +857,52 @@ function makeProgress(container,outs){
 }
 $("#chat-form").onsubmit=async e=>{
   e.preventDefault();
-  const input=$("#chat-input"), text=input.value.trim(); if(!text)return;
-  input.value=""; $("#send").disabled=true; $("#starters").hidden=true;
-  bubble(esc(text),"user");
-  convo.push({role:"user",content:text});
-  const pending=bubble(`${logoOrb()}<div class="body"><div class="progress-host"></div><div class="outs"></div></div>`,"bot");
+  const t=current,input=$("#chat-input"), text=input.value.trim(); if(!text||t.busy)return;
+  const coord=t.id===COORD;
+  input.value=""; t.busy=true; $("#send").disabled=true; $("#starters").hidden=true;
+  bubble(esc(text),"user",t);
+  t.convo.push({role:"user",content:text});
+  const pending=bubble(`${orbFor(t.c,28)}<div class="body"><div class="progress-host"></div><div class="outs"></div></div>`,"bot",t);
   const body=pending.querySelector(".body"),outs=pending.querySelector(".outs");
   const progress=makeProgress(pending.querySelector(".progress-host"),outs);
-  progress.update({kind:"coordinator",stage:"connecting",message:"Connecting to the agent workflow"});
+  progress.update(coord?{kind:"coordinator",stage:"connecting",message:"Connecting to the agent workflow"}:{kind:t.c.k,stage:"connecting",message:`Connecting to ${t.id} only`});
+  // The coordinator keeps the main chat route; every other agent has its own scoped route.
+  const path=coord?"/v1/chat/stream":`/v1/agents/${encodeURIComponent(t.id)}/chat/stream`;
+  const cartRelated=isCartRelated(text,t);
   try{
-    const cartRelated=isCartRelated(text);
-    const d=await withRetry(()=>readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update),
-      n=>progress.update({kind:"coordinator",stage:"retrying",message:retryMessage(n)}),!cartRelated);
+    const d=await withRetry(()=>readEvents(path,{messages:t.convo.slice(-20),purchase_confirmation:t.purchase},progress.update),
+      n=>progress.update({kind:coord?"coordinator":t.c.k,stage:"retrying",message:retryMessage(n)}),!cartRelated);
     d.calls=(d.calls||[]).map(c=>({...c,kind:kindOf(c.kind)}));
-    d.calls.forEach(c=>{if(c.result?.confirmation_token)activePurchase=c.result.confirmation_token;if(c.result?.status==="cart_added")activePurchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
+    d.calls.forEach(c=>{if(c.result?.confirmation_token)t.purchase=c.result.confirmation_token;if(c.result?.status==="cart_added")t.purchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
-    convo.push({role:"assistant",content:d.reply||"(no reply)"});
-    const by=d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules";
-    const via=d.calls.length?`${d.calls.length} agent${d.calls.length>1?"s":""} via ${by}`:d.source==="asi_one"?"ASI:One, no agents needed":by;
+    if(coord){health.coordinator=true;updateRoster()}
+    t.convo.push({role:"assistant",content:d.reply||"(no reply)"});
+    const by=d.source==="agent"?`${t.id} only`:d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules";
+    const via=d.source==="agent"?(d.calls.length?`1 agent · ${by}`:by):d.calls.length?`${d.calls.length} agent${d.calls.length>1?"s":""} via ${by}`:d.source==="asi_one"?"ASI:One, no agents needed":by;
     // Live previews become the final blocks in the same frame, so nothing blinks out and back.
     morph(pending,()=>{progress.finish(true,via);outs.innerHTML=picksCard(d.picks)+d.calls.map(miniCard).join("")});
     tickDrafts();
     await streamReply(body,d.reply||"");
   }catch(err){
-    convo.pop();
-    const tried=err.retryable&&!isCartRelated(text);
+    t.convo.pop();
+    const tried=err.retryable&&!cartRelated;
     morph(pending,()=>{
       progress.finish(false);
       body.insertAdjacentHTML("beforeend",`<p class="err">${esc(err.message)}. ${tried?`Tried ${ATTEMPTS} times; is the orchestrator running?`:"No automatic retry was sent."}</p>`);
     });
   }
-  $("#send").disabled=false; input.focus();
+  t.busy=false;
+  if(t===current){$("#send").disabled=false;input.focus()}
 };
 
 document.addEventListener("click",e=>{
   const listing=e.target.closest("[data-buy-link]"),confirmation=e.target.closest("[data-confirm-buy]");
-  if(!listing&&!confirmation)return;if($("#send").disabled)return;
-  setMode("chat");
-  if(confirmation){activePurchase=confirmation.dataset.confirmBuy;$("#chat-input").value="confirm add to cart"}
+  if(!listing&&!confirmation)return;
+  // A cart button continues the chat it came from; Direct results continue with the coordinator.
+  const id=e.target.closest(".thread")?.dataset.agent||COORD;
+  if(threads[id]?.busy)return;
+  setMode("chat");openChat(id);
+  if(confirmation){current.purchase=confirmation.dataset.confirmBuy;$("#chat-input").value="confirm add to cart"}
   else{$("#chat-input").value=`Prepare Amazon cart addition for ${listing.dataset.product}, quantity ${listing.dataset.quantity}: ${listing.dataset.buyLink}`}
   $("#chat-form").requestSubmit();
 });
@@ -888,16 +981,14 @@ document.addEventListener("click",e=>{
   }
 });
 
-updateRoster(); renderUsage();
+openChat(store.get("focal.chatWith",COORD)); renderUsage();
 auth=setupAuth({
   endpoint:orch,
   onUserChange(session){
     preferences?.setUser(session?.user?.id);
-    convo.length=0;
-    activePurchase=null;
-    $("#thread").innerHTML=WELCOME;
+    Object.values(threads).forEach(t=>{t.convo.length=0;t.purchase=null;t.busy=false;t.el.innerHTML=welcome(t.c)});
     $("#results").innerHTML=EMPTY_RESULTS;
-    $("#starters").hidden=false;
+    openChat(current.id);
     $("#chat-input").value="";
     $("#product").value="";
     pin();
