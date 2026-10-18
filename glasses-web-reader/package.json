@@ -11,6 +11,8 @@
     "simulate": "evenhub-simulator http://localhost:5173",
     "server": "tsx watch --env-file-if-exists=.env server/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:preview": "node tests/preview-server.mjs",
     "qr": "bash scripts/qr.sh"
   },
   "dependencies": {

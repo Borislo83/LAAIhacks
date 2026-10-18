@@ -1,5 +1,12 @@
 import type { CondensedPage, SiteKind } from '../shared/types'
 import type { PageSpec } from './screens'
+import { mountBackendPanel } from './lensos/panel'
+import type { ActionGroup, BackendState } from './lensos/session'
+import type { Preferences } from './lensos/types'
+import { mountRecommendations, type RecommendationEvents } from './recommendations'
+import { recommendActions } from './api'
+import { toContext } from './lensos/page'
+import './recommendations.css'
 
 // Phone-side UI inside the Even app WebView: URL entry, recent
 // pages, and a live mirror of what the glasses are showing.
@@ -46,9 +53,20 @@ interface CompanionOptions {
   onLoad: (url: string) => void
   onStep: (delta: 1 | -1) => void
   onSelect: () => void
+  onBack: () => void
   /** Start listening, or stop and send when already listening. */
   onVoice: () => void
   onHandsFree: (on: boolean) => void
+  recommendations?: RecommendationEvents
+  backend: {
+    state(): BackendState
+    connect(token: string, g2Token: string): void
+    disconnect(): void
+    save(p: Omit<Preferences, 'notes'>): void
+    review(group: ActionGroup): void
+    sync(): void
+    back(): void
+  }
 }
 
 const KIND_LABEL: Record<SiteKind, string> = {
@@ -64,6 +82,11 @@ export interface Companion {
   update(): void
   setBusy(busy: boolean): void
   setError(message: string): void
+  resetRecommendations(): void
+  recommend(page: CondensedPage): void
+  selectRecommendation(index: number): void
+  closeRecommendations(): void
+  reopenRecommendations(): boolean
   /** Live mic loudness (0..1), plus elapsed time while capturing a command. */
   voiceLevel(level: number, ms?: number): void
 }
@@ -131,10 +154,22 @@ const STYLE = `
   .wr .feed li.pending::after { content: ' …'; }
   .wr .feed-head { margin: 12px 0 0; font-size: 11px; font-weight: 500; letter-spacing: 0.04em;
     text-transform: uppercase; color: var(--text-dim); }
-  .wr .feed-head[hidden] { display: none; }
   .wr .feed li.open::before { content: 'Opened · '; color: var(--text-dim); }
   .wr .recent small { color: var(--text-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
   .wr .recent span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .wr [hidden] { display: none !important; }
+  .wr .backend-panel { display: grid; gap: 12px; }
+  .wr .backend-panel label { display: grid; gap: 6px; font-size: 13px; }
+  .wr .backend-panel input[type=password], .wr .backend-panel select { width: 100%; box-sizing: border-box;
+    border: 1px solid var(--text-dim); border-radius: 8px; min-height: 44px; padding: 8px; background: var(--bg); color: var(--text); }
+  .wr .backend-panel button, .wr .back-button { min-height: 44px; border: 0; border-radius: 8px; padding: 10px 12px;
+    background: var(--input); color: var(--text); cursor: pointer; font: inherit; font-size: 14px; }
+  .wr .backend-panel .check { display: flex; align-items: center; }
+  .wr .backend-panel .check input { width: 20px; height: 20px; }
+  .wr .backend-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+  .wr .backend-panel summary { cursor: pointer; font-size: 13px; }
+  .wr .compact .backend-panel { gap: 6px; padding: 12px; }
+  .wr .back-button { width: 100%; margin-top: 8px; }
 `
 
 export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Companion {
@@ -167,6 +202,7 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
             <button type="button" id="sel" class="sel">Select</button>
             <button type="button" id="next">Next</button>
           </div>
+          <button type="button" id="back-control" class="back-button">Back / cancel</button>
         </div>
       </section>
       <section>
@@ -183,10 +219,12 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
           <ul class="feed" id="feed" aria-label="Everything heard" aria-live="polite"></ul>
         </div>
       </section>
+      <section id="backend"></section>
       <section id="recentWrap" hidden>
         <label class="lbl">Recent</label>
         <ul class="recent" id="recent"></ul>
       </section>
+      <aside id="recommendations" hidden></aside>
     </main>
   `
 
@@ -206,12 +244,15 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
   $('prev').addEventListener('click', () => opts.onStep(-1))
   $('next').addEventListener('click', () => opts.onStep(1))
   $('sel').addEventListener('click', () => opts.onSelect())
+  $('back-control').addEventListener('click', () => opts.onBack())
   $('mic').addEventListener('click', () => opts.onVoice())
   const hf = $<HTMLInputElement>('hf')
   hf.addEventListener('change', () => opts.onHandsFree(hf.checked))
   const meter = $<HTMLDivElement>('meter')
   const vmsg = $<HTMLParagraphElement>('vmsg')
   let listenNote = ''
+  const backendPanel = mountBackendPanel($('backend'), opts.backend)
+  const recommendations = mountRecommendations($('recommendations'), recommendActions, opts.recommendations)
 
   const glass = $<HTMLDivElement>('glass')
   const mirror = $<HTMLDivElement>('mirror')
@@ -254,7 +295,17 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
   })
 
   return {
+    resetRecommendations() { recommendations.reset() },
+    selectRecommendation(index) { recommendations.select(index) },
+    closeRecommendations() { recommendations.close() },
+    reopenRecommendations() { return recommendations.reopen() },
+    recommend(page) {
+      if (opts.backend.state().preferences?.proactive_enabled === false) return
+      const context = toContext(page)
+      if (context.text.trim()) void recommendations.show({ url: context.url, title: context.title, text: context.text })
+    },
     update() {
+      backendPanel.update()
       const s = opts.getState()
       $('title').textContent = s.doc?.title ?? 'Nothing loaded'
       $('count').textContent = s.doc && !s.status ? s.position : ''
