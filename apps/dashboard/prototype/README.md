@@ -6,12 +6,12 @@ The Paper file "Focal — Design" holds the static E2 frame (still in the older 
 
 ## Design rules
 
-- **Name:** Focal. Logo is an aperture: ink ring with a dot in the centre.
-- **Ground:** paper `#F7F7F5`, ink `#0B0B0C`, muted `#6E6E73`, hairline `#E4E4E6`.
-- **Signal green `#139A4E`:** the one accent on light surfaces. Used for live signals from the glasses: gaze dot, lens highlight, active pins, timeline steps, the italic headline word, the `s` unit.
-- **Lens surface `#0E0E10`:** only for the glasses display and agents. Phosphor green `#3CFF7A` appears only inside the lens.
-- **Type:** Inter 500 with tight tracking for headings, one Instrument Serif italic word per heading, JetBrains Mono for numbers and times.
-- **Agents are orbs:** each agent has its own animated "thinking" orb, used as its avatar everywhere.
+- **Name:** Focal. Logo is an aperture: ink ring with a lens-green dot in the centre.
+- **Sheet:** every page follows `blueprint.html`, graphite drafting film `#23272b` with a 24px/120px grid and a thin inset frame line. Shared tokens live in `blueprint-tokens.css` (public-info keeps its own copy).
+- **Ink `#e8ebe4`** for line work and text, muted `#8d949a`, 1px hairlines, corners of 3px or less, no shadows or gradients.
+- **Lens green `#8ee6a2`:** the G2's display colour, used only for live things: what lands on the lens, active states, data in motion. Lens previews are dark glass with green type.
+- **Type:** Instrument Serif (upright, no italics) for headings, Instrument Sans for body, JetBrains Mono for small technical labels, numbers and times. Buttons are solid ink with sheet-coloured text, or a hairline outline.
+- **Agents are orbs:** each agent has its own animated "thinking" orb, off-white marks on a dark disc with a hairline ring, used as its avatar everywhere.
   - Reviews: light sweeps down a striped sphere
   - Alternatives: dots ride a wave across vertical lines
   - Price: dashes slide along scanlines
