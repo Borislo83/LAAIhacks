@@ -266,6 +266,12 @@ class CartAddResponse(Model):
     purchase_enabled: bool = False
 
 
+class CartShowRequest(Model):
+    """Opens the cart window on the cart page (nothing is added)."""
+
+    executor_token: SecretStr = SecretStr("")
+
+
 class CartListingRequest(Model):
     """The page watcher's approved listing, added here because this process owns the cart browser."""
 
@@ -382,6 +388,15 @@ def build_buyer_agent(port=None):
     @agent.on_rest_post("/cart/add", CartAddRequest, CartAddResponse)
     async def on_cart_add(ctx, req):
         return await add_product(req)
+
+    @agent.on_rest_post("/cart/show", CartShowRequest, CartAddResponse)
+    async def on_cart_show(ctx, req):
+        if not _executor_ok(req.executor_token):
+            return CartAddResponse(product="Amazon cart", status="not_connected", summary="Not authorized.")
+        from .amazon_cart import show_cart
+
+        shown = await show_cart()
+        return CartAddResponse(product="Amazon cart", status=shown["status"], summary=shown["message"])
 
     @agent.on_rest_post("/cart/add_listing", CartListingRequest, CartAddResponse)
     async def on_cart_add_listing(ctx, req):
