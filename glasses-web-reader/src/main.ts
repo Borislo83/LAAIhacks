@@ -25,6 +25,7 @@ import { VoiceRecorder, WakeListener, concat } from './voice'
 import { BackendClient } from './lensos/client'
 import { BackendSession, type ActionGroup } from './lensos/session'
 import { apiActionCards } from './lensos/action-cards'
+import { AgentCard, askAgents, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
 import type { RecommendationBatch } from '../shared/recommendations'
 
@@ -165,6 +166,9 @@ let recommendationIndex = 0
 let recommendationSelected = false
 let recommendationBase: PageSpec | undefined
 let actionGroup: ActionGroup = 'tasks'
+/** An agent answer or iMessage draft on the lens, paged with swipes. */
+let agentCard: AgentCard | null = null
+let agentFade: ReturnType<typeof setTimeout> | undefined
 const actionCards = new Map<ActionGroup, ReturnType<typeof apiActionCards>>()
 const backend = new BackendSession({
   saveSession(id, pageUrl) {
@@ -1023,6 +1027,8 @@ const LISTEN_HINT = 'Listening...   Tap: send   Swipe: cancel'
 const PARTIAL_MS = 1200
 /** A hands-free result stays on the glasses this long, then the page comes back. */
 const WAKE_RESULT_MS = 6000
+/** Agent answers are longer to read; each swipe restarts this. */
+const AGENT_RESULT_MS = 10_000
 const MAX_HEARD = 40
 
 // Voice card, like a system assistant popping up: a name line, a bordered
@@ -1206,6 +1212,7 @@ function startVoice() {
 
 /** Tap on the voice card (or the phone's mic / Select): send what's been said, or listen again. */
 function toggleVoice() {
+  if (agentCard && !recorder) return agentGesture('tap')
   if (recorder) void stopVoice(true)
   else startVoice()
 }
@@ -1213,12 +1220,16 @@ function toggleVoice() {
 /** Swipe on the voice card (or the phone's Back): cancel the capture, or leave the card. */
 function voiceBack() {
   if (recorder) return void stopVoice(false)
+  if (agentCard) return agentGesture('back')
   voiceSeq++ // drops a search still in flight
   void showContent()
 }
 
 async function capture(seed: Uint8Array[], fromWake: boolean) {
   const seq = ++voiceSeq
+  // A new question replaces an answer or an unsent draft (nothing is sent).
+  clearTimeout(agentFade)
+  agentCard = null
   const rec = (recorder = new VoiceRecorder(reason => void stopVoice(reason !== 'no-speech'), seed))
   wakeCapture = fromWake
   voiceUi = { phase: 'listening', text: '' }
@@ -1289,6 +1300,20 @@ async function stopVoice(send: boolean) {
     if (!command) return void fail("Sorry, I didn't catch that.", "Couldn't make that out.")
     logHeard({ text: command, command: true })
     voiceUi = { phase: 'searching', text: command }
+    // Signed in: the Focal agents get the first try. Anything chat can't route,
+    // and any gateway or chat failure, falls through to the web search below.
+    const client = backend.agents
+    if (client) {
+      void renderThinking(command, 'Asking the agents')
+      const asking = loading
+      const answer = await askAgents(client, command)
+      if (seq !== voiceSeq || loading !== asking) return
+      if (answer) {
+        voiceUi = { phase: 'done', text: command }
+        logHeard({ text: answer.title, opened: true })
+        return void showAgentCard(answer, quiet)
+      }
+    }
     void renderThinking(command, 'Searching the web')
     const searching = loading
     const page = await searchPage(command)
@@ -1304,6 +1329,65 @@ async function stopVoice(send: boolean) {
     const detail = err instanceof Error ? err.message : String(err)
     void fail("Sorry, I couldn't find that.", detail)
   }
+}
+
+// Agent answers use the reader layout: a title row, 8 rows of text, then the
+// gestures in the footer. Swipes page through; a draft waits for a tap to send.
+function showAgentCard(answer: AgentAnswer, quiet: boolean) {
+  stopLoading()
+  agentCard = new AgentCard(answer, quiet)
+  armAgentFade()
+  return renderAgentCard()
+}
+
+async function renderAgentCard() {
+  if (!agentCard) return
+  view = 'voice'
+  await showText(agentCard.text, agentCard.footer())
+}
+
+function armAgentFade() {
+  clearTimeout(agentFade)
+  const card = agentCard
+  if (!card?.fades) return
+  agentFade = setTimeout(() => {
+    if (agentCard === card && view === 'voice' && !recorder) closeAgentCard()
+  }, AGENT_RESULT_MS)
+}
+
+function closeAgentCard() {
+  clearTimeout(agentFade)
+  agentCard = null
+  void showContent()
+}
+
+/** A draft's outcome ("Not sent.", "Sent to J•••") replaces it as a plain answer. */
+function agentNote(card: AgentCard, text: string) {
+  if (agentCard !== card) return
+  voiceUi = { phase: 'done', text }
+  void showAgentCard({ kind: 'answer', title: 'Messages', pages: paginate('Messages', text) }, card.quiet)
+}
+
+function agentGesture(gesture: CardGesture) {
+  const card = agentCard
+  if (!card) return
+  const next = card.gesture(gesture)
+  if (next === 'close') return closeAgentCard()
+  if (next === 'cancel') return agentNote(card, 'Cancelled. Nothing was sent.')
+  if (next === 'send') return void confirmDraft(card)
+  if (next === 'render') { armAgentFade(); void renderAgentCard() }
+}
+
+/** Sends the draft exactly as shown, only after the tap on its last page. */
+async function confirmDraft(card: AgentCard) {
+  if (card.answer.kind !== 'draft') return
+  const client = backend.agents
+  void renderAgentCard()
+  const text = client
+    ? await sendDraft(client, card.answer.draft)
+    : 'Signed out, so nothing was sent. Connect your account and ask again.'
+  logHeard({ text })
+  agentNote(card, text)
 }
 
 // ── Loading ─────────────────────────────────────────────────────────────────
@@ -1507,6 +1591,12 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   }
 
   if (view === 'voice') {
+    if (agentCard && !recorder) {
+      if (textType === OsEventTypeList.SCROLL_TOP_EVENT) agentGesture('up')
+      else if (textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) agentGesture('down')
+      else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) agentGesture('tap')
+      return
+    }
     if (textType === OsEventTypeList.SCROLL_TOP_EVENT || textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) voiceBack()
     else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) toggleVoice()
     return
@@ -1567,7 +1657,8 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
   onOpenBookmark: openBookmark,
   onRemoveBookmark: removeBookmark,
   onStep: delta => {
-    if (view === 'voice') voiceBack()
+    if (view === 'voice' && agentCard && !recorder) agentGesture(delta > 0 ? 'down' : 'up')
+    else if (view === 'voice') voiceBack()
     else if (view === 'actions' || view === 'recommendations' || isContentView()) step(delta)
     else void showContent()
   },

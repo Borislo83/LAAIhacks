@@ -1,4 +1,4 @@
-import type { DecisionIntent, DisplayState, PageContext, PageSubmission, Preferences, Task } from './types'
+import type { ChatReply, DecisionIntent, DisplayState, MessageSent, PageContext, PageSubmission, Preferences, Task } from './types'
 
 export class BackendError extends Error {
   constructor(message: string, readonly status = 0) { super(message) }
@@ -41,7 +41,8 @@ export class BackendClient {
     const abort = () => controller.abort()
     if (signal?.aborted) abort()
     else signal?.addEventListener('abort', abort, { once: true })
-    const timer = setTimeout(abort, path.endsWith('/dispatch') ? 65_000 : 35_000)
+    // Agents can take a while; the gateway gives up a few seconds before these.
+    const timer = setTimeout(abort, path === '/v1/chat' ? 95_000 : path === '/v1/messages/send' ? 70_000 : path.endsWith('/dispatch') ? 65_000 : 35_000)
     try {
       const transport = this.transport
       const response = await transport(this.base + path, { method, redirect: 'error', cache: 'no-store',
@@ -73,6 +74,15 @@ export class BackendClient {
   savePreferences(p: Preferences, signal?: AbortSignal) {
     const { display_density, shopping_priority, proactive_enabled, notes } = p
     return this.request<Preferences>('/v1/preferences', 'PUT', { display_density, shopping_priority, proactive_enabled, notes }, signal)
+  }
+  /** One voice command; the orchestrator picks and calls the agents. */
+  chat(text: string, signal?: AbortSignal) {
+    return this.request<ChatReply>('/v1/chat', 'POST', { messages: [{ role: 'user', content: text.slice(0, 4000) }] }, signal)
+  }
+  /** Sends a reviewed iMessage draft exactly as drafted; only after the user's tap. */
+  sendMessage(draft_id: string, text: string, signal?: AbortSignal) {
+    this.id(draft_id)
+    return this.request<MessageSent>('/v1/messages/send', 'POST', { draft_id, text }, signal)
   }
   async decide(session: string, intent: DecisionIntent, signal?: AbortSignal) {
     const { request_id, expected_revision } = intent

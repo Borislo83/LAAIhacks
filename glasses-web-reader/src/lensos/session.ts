@@ -31,6 +31,8 @@ export class BackendSession {
   private suspended = false
 
   constructor(private readonly options: Options) {}
+  /** The signed-in account's client, for voice commands to the agents; undefined when signed out. */
+  get agents() { return this.state.connected ? this.client : undefined }
   private changed() { this.options.changed() }
   disconnect() {
     this.generation++; this.pageGeneration++; this.lifetime.abort(); clearTimeout(this.timer)

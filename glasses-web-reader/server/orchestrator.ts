@@ -15,7 +15,7 @@ export function orchestratorGateway(options: Options) {
   const id = '[A-Za-z0-9_.:-]{1,160}'
   const routes: [string, RegExp][] = [
     ['GET', /^\/v1\/(preferences|tasks)$/], ['PUT', /^\/v1\/preferences$/],
-    ['POST', /^\/v1\/(sessions|contexts)$/],
+    ['POST', /^\/v1\/(sessions|contexts|chat|messages\/send)$/],
     ['GET', new RegExp(`^/v1/tasks/${id}$`)], ['POST', new RegExp(`^/v1/tasks/${id}/dispatch$`)],
     ['GET', new RegExp(`^/v1/sessions/${id}/display$`)],
     ['PUT', new RegExp(`^/v1/sessions/${id}/page$`)],
@@ -39,7 +39,7 @@ export function orchestratorGateway(options: Options) {
           // The orchestrator must never mistake a proxied call for a local fixture caller.
           'X-Forwarded-For': 'web-reader-gateway' },
         body: ['POST', 'PUT'].includes(c.req.method) ? await c.req.text() : undefined,
-        redirect: 'error', signal: AbortSignal.timeout(path.endsWith('/dispatch') ? 60_000 : 30_000),
+        redirect: 'error', signal: AbortSignal.timeout(path === '/v1/chat' ? 90_000 : path === '/v1/messages/send' ? 65_000 : path.endsWith('/dispatch') ? 60_000 : 30_000),
       })
       return new Response(response.body, { status: response.status, headers: {
         'Content-Type': response.headers.get('content-type') ?? 'application/json', 'Cache-Control': 'no-store',

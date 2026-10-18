@@ -86,6 +86,17 @@ Claude picks one page from a web search, and that page opens. Hands-free listeni
 on by default and can be switched off in the menu or on the phone. Pages opened by
 voice don't auto-open recommendations; open them from the menu with **Recommendations (3)**.
 
+When your account is connected (LensOS, below), the command first goes to the
+orchestrator's `POST /v1/chat` through `/api/backend`. If chat called an agent, its
+answer shows on the lens instead of a page: a news headline, summary and sources;
+"Playing <title>" or the YouTube link; the Spotify line; or a short shopping summary.
+Swipe pages through it, tap closes; hands-free answers fade back to the page. A
+**message** ask shows the drafted iMessage: read to its last page, then **tap sends**
+it through `POST /v1/messages/send`, and **swipe cancels**. Nothing is sent without that
+tap, and a draft never fades. Dry runs, missing permission, failures and a disabled
+executor (503) are reported as not sent. Signed out, no agent called, or any
+gateway/chat error: the web search above runs as before.
+
 Runs of plain-text screens join into one stream. A swipe scrolls it a few lines at
 a time, and a progress bar replaces the "2 / 5" counter.
 
