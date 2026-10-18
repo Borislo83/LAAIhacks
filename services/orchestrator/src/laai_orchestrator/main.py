@@ -33,6 +33,7 @@ from .predictor import predict
 from .preferences import read_preferences
 from .preferences import router as preferences_router
 from .progress import event_stream
+from .scoped import AgentName, scoped_chat
 from .store import Store
 from .workflow import install_workflow
 
@@ -305,6 +306,29 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
         require_args(kind, body)
         return sse(
             event_stream(lambda emit: call_agent(kind, body, config, request.app.state.http, emit))
+        )
+
+    @app.post("/v1/agents/{agent}/chat/stream", response_class=StreamingResponse)
+    async def stream_agent_chat(agent: AgentName, body: ChatRequest, request: Request, user: User):
+        """Chat with one agent. Specialists call only themselves; the coordinator orchestrates."""
+        if body.messages[-1].role != "user":
+            raise HTTPException(422, "Last message must be from the user")
+        preferences = (
+            await read_preferences(request, user) if agent == AgentName.COORDINATOR else None
+        )
+        return sse(
+            event_stream(
+                lambda emit: scoped_chat(
+                    agent,
+                    body.messages,
+                    config,
+                    request.app.state.http,
+                    emit,
+                    user=user,
+                    purchase_confirmation=body.purchase_confirmation,
+                    preferences=preferences,
+                )
+            )
         )
 
     # open_url only appears for link delivery, so earlier clients see the same shape.

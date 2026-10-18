@@ -115,6 +115,11 @@ def build_memory_agent(port: int | None = None):
     async def on_request(ctx: Context, sender: str, req: MemoryRequest):
         await ctx.send(sender, await handle(ctx, req))
 
+    # REST for the dashboard's scoped Memory chat; the orchestrator passes a hashed-in user key.
+    @agent.on_rest_post("/memory", MemoryRequest, MemoryResponse)
+    async def on_rest(ctx: Context, req: MemoryRequest):
+        return await handle(ctx, req)
+
     async def answer(ctx: Context, text: str) -> str:
         return (await handle(ctx, MemoryRequest(user="chat"))).summary
 
