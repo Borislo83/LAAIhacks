@@ -16,7 +16,7 @@ export const CARD_W = 568
 export const CARD_LINES = 8
 const MAX_PAGES = 12
 
-export interface MessageDraft { draft_id: string; recipient: string; text: string }
+export interface MessageDraft { draft_id: string; recipient: string; text: string; /** Contact name, for re-recording. */ name?: string }
 /** One choice in a side-by-side comparison: a store offer or a rival product. */
 export interface CompareColumn { head: string; price: string; note: string; extra?: string }
 export interface CompareTable { title: string; columns: CompareColumn[] }
@@ -106,10 +106,12 @@ const SHOPPING = new Set(['price', 'alternatives', 'reviews', 'buyer'])
 
 function messageAnswer(call: AgentCall): AgentAnswer {
   const r = call.result ?? {}
-  const draft = { draft_id: str(r.draft_id), recipient: str(r.recipient_masked) || 'your contact', text: typeof r.text === 'string' ? r.text.trim() : '' }
+  const name = str(r.recipient_name)
+  const draft = { draft_id: str(r.draft_id), recipient: str(r.recipient_masked) || 'your contact', text: typeof r.text === 'string' ? r.text.trim() : '', ...(name ? { name } : {}) }
   if (/^[A-Za-z0-9_.:-]{1,160}$/.test(draft.draft_id) && draft.text && draft.text.length <= 1000 && !call.error) {
-    return { kind: 'draft', title: `Message to ${draft.recipient}`, draft,
-      pages: paginate(`Send to ${draft.recipient}?`, `"${draft.text}"`) }
+    const who = name || draft.recipient
+    return { kind: 'draft', title: `Message to ${who}`, draft,
+      pages: paginate(`Send to ${who}?`, `"${draft.text}"${name ? `\n${draft.recipient}` : ''}`) }
   }
   // No draft: the agent asked who or what to send, or couldn't reach Messages.
   return { kind: 'answer', title: 'Messages',
@@ -246,7 +248,9 @@ export async function sendDraft(client: BackendClient, draft: MessageDraft, sign
 
 export type CardGesture = 'tap' | 'up' | 'down' | 'back'
 /** What a gesture on the card asks main.ts to do. Only 'send' sends, and only from a tap. */
-export type CardStep = 'render' | 'close' | 'send' | 'cancel' | 'none'
+export type CardStep = 'render' | 'close' | 'send' | 'rerecord' | 'cancel' | 'none'
+
+export const DRAFT_CHOICES = ['Send', 'Re-record', 'Cancel'] as const
 
 /** A tap this soon after a draft appears was meant for what was on screen before it. */
 export const DRAFT_TAP_GRACE_MS = POPUP_TAP_GRACE_MS
@@ -255,6 +259,8 @@ export const DRAFT_TAP_GRACE_MS = POPUP_TAP_GRACE_MS
 export class AgentCard {
   page = 0
   sending = false
+  /** A draft's choice on its last page: Send, Re-record or Cancel. */
+  choice = 0
   private readonly shownAt: number
   constructor(readonly answer: AgentAnswer, readonly quiet: boolean, private readonly now: () => number = Date.now) {
     this.shownAt = now()
@@ -262,25 +268,49 @@ export class AgentCard {
   /** Hands-free answers fade back to the page; a draft never does, it waits for a tap. */
   get fades() { return this.quiet && this.answer.kind !== 'draft' }
   private get table() { return this.answer.kind === 'answer' ? this.answer.compare : undefined }
-  private get count() { return this.answer.pages.length + (this.table ? 1 : 0) }
+  /** A short draft shows its choices under the text; a long one gets a choices page after it. */
+  private get inlineChoices() { return this.answer.pages.length === 1 && this.answer.pages[0].split('\n').length <= CARD_LINES - 3 }
+  private get count() {
+    if (this.answer.kind === 'draft') return this.answer.pages.length + (this.inlineChoices ? 0 : 1)
+    return this.answer.pages.length + (this.table ? 1 : 0)
+  }
   /** The comparison, when it is the page on screen (it comes first). */
   get compare() { return this.page === 0 ? this.table : undefined }
-  get text() { return this.answer.pages[this.page - (this.table ? 1 : 0)] ?? '' }
+  private choices() { return DRAFT_CHOICES.map((c, i) => `${i === this.choice ? '>' : ' '} ${c}`).join('\n') }
+  get text() {
+    if (this.answer.kind === 'draft' && this.last) {
+      if (this.inlineChoices) return `${this.answer.pages[0]}\n\n${this.choices()}`
+      return `${this.answer.title}\n\n${this.choices()}`
+    }
+    return this.answer.pages[this.page - (this.table ? 1 : 0)] ?? ''
+  }
   private get last() { return this.page >= this.count - 1 }
   footer() {
     const n = this.count
     const hint = this.answer.kind === 'draft'
-      ? this.sending ? 'Sending...' : this.last ? 'Tap: send   Swipe: cancel' : 'Tap: next   Swipe: cancel'
+      ? this.sending ? 'Sending...' : this.last ? 'Swipe: choose   Tap: confirm' : 'Tap: next   Double-tap: cancel'
       : this.last ? 'Tap: close' : 'Swipe: more   Tap: close'
     return pxTruncate(`${n > 1 ? `${this.page + 1}/${n}   ` : ''}${hint}`, CARD_W)
   }
   gesture(g: CardGesture): CardStep {
     if (this.answer.kind === 'draft') {
       if (this.sending) return 'none'
-      if (g !== 'tap') return 'cancel'
+      if (g === 'back') return 'cancel'
+      if (!this.last) {
+        // The whole draft is read before the choices.
+        if (g === 'tap' || g === 'down') { this.page++; return 'render' }
+        if (this.page === 0) return 'none'
+        this.page--; return 'render'
+      }
+      if (g === 'up' || g === 'down') {
+        this.choice = (this.choice + (g === 'down' ? 1 : DRAFT_CHOICES.length - 1)) % DRAFT_CHOICES.length
+        return 'render'
+      }
+      // A tap right as the draft appears was meant for the screen before it.
       if (this.now() - this.shownAt < DRAFT_TAP_GRACE_MS) return 'none'
-      // The whole draft is read before the tap that sends it.
-      if (!this.last) { this.page++; return 'render' }
+      const picked = DRAFT_CHOICES[this.choice]
+      if (picked === 'Cancel') return 'cancel'
+      if (picked === 'Re-record') return 'rerecord'
       this.sending = true
       return 'send'
     }
