@@ -27,8 +27,10 @@ nav.top .links a:hover{color:var(--ink)!important}
 
 .linkbtn:focus-visible,summary:focus-visible{outline:2px solid var(--lens);outline-offset:2px}
 
-header.hero{padding:56px 0 36px;display:flex;justify-content:space-between;align-items:end;gap:32px;flex-wrap:wrap}
-h1{font:400 clamp(44px,5.6vw,80px)/1 var(--serif);letter-spacing:-.02em}
+header.hero{padding:64px 0 40px;display:flex;justify-content:space-between;align-items:end;gap:20px 48px;flex-wrap:wrap}
+h1{font:400 clamp(46px,5.4vw,80px)/1 var(--serif);letter-spacing:-.015em}
+header.hero h1{margin-bottom:18px}
+.aside-tag{font-size:19px;margin:8px 0 16px}
 h2{font:400 28px/1.1 var(--serif);letter-spacing:-.005em}
 h2 em{color:var(--muted)}
 .lede{font-size:16px;line-height:1.55;color:var(--muted);max-width:34em}
@@ -144,22 +146,22 @@ body[data-density="compact"] .agent{padding:8px 10px}
 .src:hover{border-color:var(--ink)}
 .sources .when{font:11px var(--mono);margin-left:2px}
 .picks{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
-.pick{border:1px solid var(--hair);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;background:var(--white)}
-.pick .plabel{font:500 11px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--signal)}
+.pick{border:1px solid var(--hair);border-radius:var(--r);padding:12px 14px;display:flex;flex-direction:column;align-items:flex-start;gap:6px;background:var(--panel)}
+.pick .plabel{font:11px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .pick b{font-weight:500;font-size:14px;line-height:19px}
 .pick .pmeta{font-size:13px;color:var(--muted)}
 .pick .pprice{font-family:var(--mono);color:var(--ink)}
 .pick small{font-size:12px;color:var(--muted);line-height:17px;flex:1}
-.cartbtn,.viewbtn{display:inline-block;text-align:center;border-radius:999px;padding:7px 12px;font-size:13px;text-decoration:none}
-.cartbtn{background:var(--ink);color:var(--white)}
-.cartbtn:hover{background:var(--signal)}
+.cartbtn,.viewbtn{display:inline-block;text-align:center;border:1px solid var(--hair);border-radius:var(--r);padding:8px 12px;font:500 13px/1 var(--sans);text-decoration:none}
+.cartbtn{background:var(--ink);color:var(--sheet);border-color:var(--ink)}
+.cartbtn:hover{background:transparent;color:var(--ink)}
 .viewbtn{border:1px solid var(--hair);color:var(--ink)}
 .viewbtn:hover{border-color:var(--ink)}
 /* sources stay folded until clicked, then show as chips */
 details.sources{display:block}
 details.sources summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px;user-select:none}
 details.sources summary::-webkit-details-marker{display:none}
-details.sources summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+details.sources summary::before{content:"";width:6px;height:6px;border-right:1px solid currentColor;border-bottom:1px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
 details.sources[open] summary::before{transform:rotate(45deg)}
 details.sources summary:hover{color:var(--ink)}
 details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
@@ -190,7 +192,7 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
 @container (max-width:560px){.news{grid-template-columns:1fr}.news-text h3{font-size:21px}}
 /* iMessage draft: nothing leaves without an explicit Send click on the exact drafted text */
 .out-messenger{border-left:0;padding-left:0}
-.draft{padding:16px;border:1px solid var(--ink);border-radius:var(--r);background:var(--panel);display:flex;flex-direction:column;gap:10px;font-size:14px}
+.draft{padding:16px;border:1px solid var(--hair);border-radius:var(--r);background:var(--panel);display:flex;flex-direction:column;gap:10px;font-size:14px}
 .draft textarea{font:15px/1.5 var(--sans);border:1px solid var(--hair);border-radius:var(--r);padding:10px 12px;background:var(--well);color:var(--ink);resize:vertical;width:100%}
 .draft textarea:focus-visible{outline:2px solid var(--lens);outline-offset:1px}
 .draft-foot{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
@@ -202,6 +204,7 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
 .draft[data-state="sent"]{border-color:var(--lens)}
 .draft[data-state="sent"] .draft-status{color:var(--lens);font-weight:500}
 .draft[data-state="cancelled"],.draft[data-state="replaced"]{opacity:.6}
+.draft:not([data-state="sent"],[data-state="cancelled"],[data-state="replaced"]){border-top:2px solid var(--lens)}
 .badge{display:inline-block;margin-left:8px;padding:1px 7px;border:1px solid var(--warn);border-radius:var(--r);background:var(--warn-soft);color:var(--warn);font:11px/18px var(--mono)}
 .draft-cands{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
 .yt-alts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
@@ -234,7 +237,7 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
 .card>.work{padding:0 18px 12px}
 .work-history .log{max-height:180px;overflow:auto}.work-history .log p{margin:3px 0}
 /* cart actions stay separate and prominent: real money is one step away */
-.demo-checkout{padding:16px;border:1px solid var(--lens);border-radius:var(--r);background:var(--panel);display:flex;flex-direction:column;align-items:flex-start;gap:10px;font-size:14px;color:var(--ink)}
+.demo-checkout{padding:16px;border:1px solid var(--hair);border-top:2px solid var(--lens);border-radius:var(--r);background:var(--panel);display:flex;flex-direction:column;align-items:flex-start;gap:10px;font-size:14px;color:var(--ink)}
 .demo-checkout strong{color:var(--lens);font:500 11px var(--mono);letter-spacing:.06em}
 
 @media (max-width:980px){
@@ -268,7 +271,7 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
   </nav>
 
   <header class="hero">
-    <h1>Talk to your <em>agents.</em></h1>
+    <div><h1>The Studio</h1><p class="tagline">Talk to your agents.</p></div>
     <p class="lede">Ask in plain words. The orchestrator picks which Fetch.ai agents to call, then answers from what they return. Each card shows what would land on the lens.</p>
   </header>
 
@@ -297,7 +300,7 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
   <div class="grid" id="workspace" hidden inert>
     <aside>
       <h2>Agents</h2>
-      <p class="muted" style="font-size:13px;margin:6px 0 14px">In chat the orchestrator picks. In Direct, you do.</p>
+      <p class="tagline aside-tag">In chat the orchestrator picks. In Direct, you do.</p>
       <div class="roster" id="roster"></div>
 
       <div class="usage">

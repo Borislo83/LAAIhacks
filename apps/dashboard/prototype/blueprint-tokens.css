@@ -51,6 +51,13 @@ a{color:var(--ink);text-underline-offset:3px}
 
 /* the small technical label: blueprint's sheet numbers and tags */
 .label{font:12px/1.4 var(--mono);color:var(--muted);letter-spacing:.02em}
+/* blueprint's copy hierarchy: big serif name, smaller serif tagline, short muted paragraph */
+.tagline{font:400 clamp(22px,2vw,28px)/1.2 var(--serif);color:var(--ink);opacity:.82;margin:0;max-width:26ch}
+/* "Example case" caption: mono, with a small lens-green square */
+.caption{font:12px/1.2 var(--mono);color:var(--muted);margin:0}
+.caption::before{content:"";display:inline-block;width:6px;height:6px;margin-right:8px;background:var(--lens);vertical-align:1px}
+/* approval gates: drawn with a green bar across the top, like the blueprint's gate arm */
+.gate{border-top:2px solid var(--lens)}
 
 /* agent orbs: off-white marks on a dark disc with a hairline ring (see orb.js) */
 .orb{display:block;flex-shrink:0}
