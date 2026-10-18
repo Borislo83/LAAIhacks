@@ -21,9 +21,17 @@ class SavedPreferences(Preferences):
     updated_at: datetime
 
 
-async def read_preferences(request: Request, user: UUID) -> SavedPreferences:
+async def read_preferences(
+    request: Request, user: UUID, replacement: Preferences | None = None
+) -> SavedPreferences:
+    """Read (initializing defaults once) or, with a replacement, save the user's record."""
     row = await request.app.state.store.request(
-        "POST", "rpc/laai_preferences", json={"p_user_id": str(user), "p_preferences": None}
+        "POST",
+        "rpc/laai_preferences",
+        json={
+            "p_user_id": str(user),
+            "p_preferences": replacement.model_dump(mode="json") if replacement else None,
+        },
     )
     return SavedPreferences.model_validate(row)
 
@@ -63,11 +71,6 @@ def router(current_user):
 
     @routes.put("/v1/preferences", response_model=SavedPreferences)
     async def put_preferences(body: Preferences, request: Request, user: UUID = user_dependency):
-        row = await request.app.state.store.request(
-            "POST",
-            "rpc/laai_preferences",
-            json={"p_user_id": str(user), "p_preferences": body.model_dump(mode="json")},
-        )
-        return SavedPreferences.model_validate(row)
+        return await read_preferences(request, user, body)
 
     return routes

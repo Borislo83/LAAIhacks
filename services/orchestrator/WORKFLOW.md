@@ -25,6 +25,29 @@ Use the configured CORS allowlist and HTTPS when hosting; keep the upstream Bure
 A database-backed bucket limits shared workflow operations to 600 per user per minute across
 API instances; from migration 004, failed requests count too. A deployment gateway can enforce a stricter IP limit before authentication.
 
+## Request and response details
+
+- Session IDs are UUIDs. A path with a non-UUID session ID returns 404 `SESSION_NOT_FOUND`.
+- `schema_version` is optional on every request body and defaults to `"1.0"`; any other
+  value is `INVALID_PAYLOAD`. This includes action results.
+- Approve and reject take the same body:
+  `{"schema_version":"1.0","request_id":"...","expected_revision":7}`. A rejection returns
+  `event_id: null` and emits no event.
+- `confirm` mode is G2-local (the glasses show it while the user confirms); the API never
+  returns it. `reader` is reserved until a `read_article` handler ships. `notice` is
+  currently always `null`.
+- Only `compare_prices` and `find_reviews` are registered. `open_url`, `read_article` and
+  `custom` pass schema validation but are rejected when proposed (422 `INVALID_PAYLOAD`).
+- Every route documents its allowed role(s), typed response and `ErrorEnvelope` errors in
+  `packages/shared/openapi.json` (regenerate with `uv run python export_schema.py`).
+  Responses keep database extension fields such as `consumed_at`, `action_status`,
+  `source_label`, `type`, `expires_at` and `result`.
+- Unknown sub-routes return `NOT_FOUND` and wrong methods `METHOD_NOT_ALLOWED`.
+- If preferences cannot be read, the display is still returned without `preferences`.
+- Verified access tokens are cached in-process for 30 seconds (by SHA-256 hash, at most
+  1,024 entries) so G2 polling does not call Supabase Auth on every request. Failed
+  verifications are never cached; a revoked token can stay usable for up to 30 seconds.
+
 ## Durable state
 
 `laai_workflow` locks the owned session and commits state, revision increments, idempotency
