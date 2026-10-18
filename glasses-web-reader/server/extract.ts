@@ -30,6 +30,14 @@ const NOISE_SELECTOR =
 const BOILERPLATE =
   /^(advertisement|sponsored|share( this)?|tweet|subscribe|sign up|log in|related( articles)?|read more|click here|follow us|cookie|accept|skip to)/i
 
+// Fine print that slips past Readability: legal lines and footer sections.
+const LEGAL_LINE =
+  /(©|\(c\)\s*\d{4}|all rights reserved|by (clicking|continuing|using|signing)[^.]{0,80}\b(agree|accept|consent)|(terms of (service|use)|privacy (policy|notice)|cookie (policy|settings|preferences))\s*[|·•]?\s*$)/i
+const FINE_PRINT_HEADING =
+  /^(terms( of (service|use))?|terms (and|&) conditions|privacy( policy| notice)?|cookies?( policy| settings| notice)?|legal( notice)?|disclaimer|copyright|imprint|newsletter|subscribe|related( (articles|stories|posts))?|you (may|might) also like|more from|recommended( for you)?|follow us|footer)\b/i
+// Opening a terms or privacy page on purpose should still show it.
+const LEGAL_PAGE = /\/(terms|tos|legal|privacy|cookies?|policies|policy|disclaimer|imprint)\b/i
+
 const MAX_BLOCKS = 600
 const MAX_CODE_LINES = 15
 const MAX_LINKS = 40
@@ -564,6 +572,7 @@ export function extract(html: string, finalUrl: string, contentType: string): Ex
     const outline = finalize(b.sections, pageTitle)
     if (words(outline) > words(sections)) sections = outline
   }
+  if (!LEGAL_PAGE.test(new URL(finalUrl).pathname)) sections = dropFinePrint(sections)
   if (links.size < 10) collectLinks(doc.body, finalUrl, links)
   const allLinks = new Map<string, Link>()
   collectLinks(doc.body, finalUrl, allLinks, MAX_ALL_LINKS)
@@ -598,6 +607,15 @@ export function extract(html: string, finalUrl: string, contentType: string): Ex
     allLinks: [...allLinks.values()],
     products,
   }
+}
+
+/** Drops legal/footer sections and short legal lines; keeps the page if that would empty it. */
+function dropFinePrint(sections: Section[]): Section[] {
+  const kept = sections
+    .filter(s => !FINE_PRINT_HEADING.test(s.heading))
+    .map(s => ({ ...s, blocks: s.blocks.filter(b => b.type === 'code' || b.text.length > 240 || !LEGAL_LINE.test(b.text)) }))
+    .filter(s => s.blocks.length)
+  return words(kept) >= 50 ? kept : sections
 }
 
 /** Plain-text rendering used as summarizer input. */

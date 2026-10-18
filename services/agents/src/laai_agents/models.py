@@ -41,6 +41,8 @@ class PriceCompareRequest(Model):
     current_store: str | None = None
     current_price: float | None = None
     max_price: float | None = None
+    # Also run the store-focused search, e.g. when the verifier rejected every lead.
+    deep: bool = False
 
 
 class PriceCompareResponse(EvidenceResponse):
@@ -140,6 +142,8 @@ class ConsiderResponse(Model):
     # Reviews for the top alternative, so the two products can be compared.
     alternative_reviews: ReviewsResponse | None = None
     picks: list[Pick] = Field(default_factory=list)
+    # The verifier agent's audit of the price offers, when a verifier is available.
+    verification: dict | None = None
     errors: dict[str, str] = Field(default_factory=dict)
     timings_ms: dict[str, int] = Field(default_factory=dict)
     summary: str
@@ -168,3 +172,29 @@ class YouTubeResponse(Model):
     summary: str
     error: str | None = None
     data_source: str | None = None
+
+
+class NewsRequest(Model):
+    query: str = Field(min_length=1, max_length=300)
+    max_sources: int = Field(default=8, ge=3, le=12)
+    progress_id: str | None = Field(default=None, min_length=32, max_length=64)
+
+
+class NewsSource(Model):
+    title: str
+    url: str
+    publisher: str
+    published_at: str | None = None
+
+
+class NewsResponse(Model):
+    query: str
+    headline: str | None = None
+    # 2-4 plain sentences, at most 600 characters, drawn only from the sources.
+    summary: str | None = None
+    image_url: str | None = None
+    image_alt: str | None = None
+    image_source_url: str | None = None
+    # Most relevant first.
+    sources: list[NewsSource] = Field(default_factory=list, max_items=8)
+    error: str | None = None

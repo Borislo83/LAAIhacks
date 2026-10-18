@@ -155,6 +155,7 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
         left: `${t.x}px`, top: `${t.y}px`, width: `${t.w}px`, height: `${t.h}px`,
         padding: `${t.pad ?? 4}px`, borderWidth: `${bw}px`,
         borderColor: BORDER[t.color ?? 13] ?? '#3f9f3f', borderRadius: `${t.radius ?? 0}px`,
+        ...(t.scroll ? { overflowY: 'auto' } : {}),
       })
       el.textContent = t.text
       mirror.append(el)

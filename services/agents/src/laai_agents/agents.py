@@ -1,4 +1,4 @@
-"""The three uAgents: price comparison, competitor alternatives, reviews.
+"""The specialist uAgents: shopping research, YouTube, news and messaging.
 
 Each agent speaks a typed request/response protocol (agent-to-agent), a REST
 endpoint (for the orchestrator over plain HTTP) and the Agent Chat Protocol
@@ -15,6 +15,8 @@ from .chat import build_chat_protocol
 from .models import (
     AlternativesRequest,
     AlternativesResponse,
+    NewsRequest,
+    NewsResponse,
     PriceCompareRequest,
     PriceCompareResponse,
     ReviewsRequest,
@@ -29,6 +31,15 @@ ALTERNATIVES_SEED = os.getenv("ALTERNATIVES_AGENT_SEED", "laai alternatives agen
 REVIEWS_SEED = os.getenv("REVIEWS_AGENT_SEED", "laai reviews agent dev seed")
 YOUTUBE_SEED = os.getenv("YOUTUBE_AGENT_SEED", "laai youtube agent dev seed")
 MESSENGER_SEED = os.getenv("MESSENGER_AGENT_SEED", "laai messenger agent dev seed")
+COORDINATOR_SEED = os.getenv("COORDINATOR_AGENT_SEED", "laai coordinator dev seed")
+
+
+def coordinator_address() -> str:
+    """Action agents accept approvals only from this address."""
+    from uagents.crypto import Identity
+
+    return Identity.from_seed(COORDINATOR_SEED, 0).address
+NEWS_SEED = os.getenv("NEWS_AGENT_SEED", "laai news agent dev seed")
 
 
 def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
@@ -58,11 +69,13 @@ def build_specialist(
     handler: Callable[[Model], Awaitable[Model]],
     port: int | None = None,
     chat_request: Callable[[str], Model] | None = None,
+    chat_reply: Callable[[Model], str] | None = None,
 ) -> Agent:
     """One specialist: typed protocol, REST endpoint and chat, all served by `handler`.
 
     Chat extracts a product name by default; `chat_request` builds the request from the
-    raw message text instead.
+    raw message text instead. Chat replies with the response's `summary` unless
+    `chat_reply` formats the response.
     """
     agent = make_agent(name, seed, port)
     proto = Protocol(name=request_type.__name__.removesuffix("Request"), version="0.1.0")
@@ -79,7 +92,8 @@ def build_specialist(
 
     async def answer(ctx: Context, text: str) -> str:
         request = chat_request(text) if chat_request else request_type(product=text)
-        return (await handler(request)).summary
+        result = await handler(request)
+        return chat_reply(result) if chat_reply else result.summary
 
     agent.include(proto, publish_manifest=True)
     agent.include(
@@ -140,6 +154,22 @@ def build_youtube_agent(port: int | None = None) -> Agent:
     )
 
 
+def build_news_agent(port: int | None = None) -> Agent:
+    from . import news
+
+    return build_specialist(
+        "laai-news",
+        NEWS_SEED,
+        "/news",
+        NewsRequest,
+        NewsResponse,
+        news.summarize_news,
+        port,
+        chat_request=lambda text: NewsRequest(query=text[:300]),
+        chat_reply=news.chat_reply,
+    )
+
+
 def build_messenger_agent(port: int | None = None) -> Agent:
     """Typed protocol and chat only prepare drafts; sending needs the executor token."""
     from . import imessage
@@ -158,6 +188,31 @@ def build_messenger_agent(port: int | None = None) -> Agent:
     @agent.on_rest_post("/imessage/send", imessage.MessageSendRequest, imessage.MessageSendResponse)
     async def on_send(ctx: Context, req):
         return await imessage.send(req)
+
+    # The coordinator relays a draft the shopper approved in ASI:One. Only the
+    # coordinator's address is trusted; the executor token never leaves this process.
+    approvals = Protocol(name="MessageApproval", version="0.1.0")
+
+    @approvals.on_message(imessage.MessageApproval, replies=imessage.MessageSendResponse)
+    async def on_approval(ctx: Context, sender: str, req):
+        if sender != coordinator_address():
+            await ctx.send(
+                sender,
+                imessage.MessageSendResponse(status="failed", summary="Only the coordinator can approve sends."),
+            )
+            return
+        await ctx.send(
+            sender,
+            await imessage.send(
+                imessage.MessageSendRequest(
+                    draft_id=req.draft_id,
+                    text=req.text,
+                    executor_token=os.getenv("IMESSAGE_EXECUTOR_TOKEN", ""),
+                )
+            ),
+        )
+
+    agent.include(approvals, publish_manifest=True)
 
     # Dry-run debugging: REST handlers cannot see the caller's address, so this is
     # gated by the executor token instead of loopback, and is off when sending for real.

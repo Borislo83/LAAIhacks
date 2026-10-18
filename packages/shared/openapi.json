@@ -2152,7 +2152,8 @@
           "price",
           "alternatives",
           "reviews",
-          "youtube"
+          "youtube",
+          "news"
         ],
         "title": "AgentKind",
         "description": "Every routable specialist. Only the shopping TaskKinds are persisted as tasks."
@@ -2268,6 +2269,14 @@
             },
             "type": "array",
             "title": "Calls"
+          },
+          "picks": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Picks"
           },
           "source": {
             "type": "string",
@@ -2873,7 +2882,7 @@
           },
           "text": {
             "type": "string",
-            "maxLength": 2000,
+            "maxLength": 1000,
             "minLength": 1,
             "title": "Text"
           }
@@ -2885,7 +2894,7 @@
           "text"
         ],
         "title": "MessageSend",
-        "description": "A draft the signed-in user reviewed and confirmed; text may be edited first."
+        "description": "A draft the signed-in user reviewed and confirmed, exactly as drafted.\n\nThe agent sends only the draft's own text, so an edit must be re-drafted first."
       },
       "MessageSent": {
         "properties": {
@@ -2894,7 +2903,8 @@
             "enum": [
               "sent",
               "failed",
-              "needs_permission"
+              "needs_permission",
+              "open_link"
             ],
             "title": "Status"
           },
@@ -2907,6 +2917,19 @@
             "type": "boolean",
             "title": "Dry Run",
             "default": false
+          },
+          "open_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 3000,
+                "pattern": "^sms:\\+?[0-9A-Za-z@._%+-]+\\?&body="
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Url"
           }
         },
         "type": "object",
@@ -3176,7 +3199,6 @@
             "title": "Updated At"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
           "updated_at"
@@ -3447,6 +3469,13 @@
             ],
             "title": "Kind",
             "default": "auto"
+          },
+          "max_sources": {
+            "type": "integer",
+            "maximum": 12.0,
+            "minimum": 3.0,
+            "title": "Max Sources",
+            "default": 6
           }
         },
         "type": "object",
