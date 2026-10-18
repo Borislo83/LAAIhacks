@@ -1,0 +1,87 @@
+# Web Reader for Even Realities G2
+
+Condense any web page into text that fits the G2's 576x288 display, then read it
+with the temple touchpad or R1 ring.
+
+```
+phone (Even app WebView)            condense server                      the web
+┌──────────────────────┐  /api/condense?url=…   ┌──────────────────┐   fetch   ┌─────┐
+│ URL box + mirror     │ ─────────────────────▶ │ SSRF-guarded fetch│ ────────▶ │site │
+│ glasses renderer     │ ◀───── JSON sections ─ │ Readability → text│           └─────┘
+└──────────┬───────────┘                        │ optional Claude   │
+           │ BLE (Even Hub SDK)                 └──────────────────┘
+      G2 glasses
+```
+
+The server exists because the Even app WebView enforces CORS, so the app
+can't fetch arbitrary sites itself.
+
+## Two modes
+
+- **Smart view** (default, needs `ANTHROPIC_API_KEY`): Claude decides what kind of site the page is
+  and builds a short deck of screens for it:
+
+  | Site kind | Screens |
+  |---|---|
+  | News | headline card with lead photo, key points with a pulled quote, timeline |
+  | Shopping | boxed results list with thumbnails, price, ★ rating and stock (tap opens the product); product card |
+  | Software / creative tools | capability tiles, keyboard-shortcut cards, one-step-per-screen how-tos, plan comparison |
+  | Forums | ranked feed; thread digest (verdict, agree vs pushback) |
+  | Live info | big-number stat (rendered as an image), alert banner, forecast tiles |
+  | Wikis / explainers | gist, fact sheet, timeline, comparison, tagged points |
+
+  Images are converted on the server to 4-bit greyscale at the exact box size. On G2, lit pixels
+  glow and black is see-through, so bright photos become line art, white product backgrounds are
+  knocked out, and dark images stay dithered photos.
+- **Full text** (no API key needed): Readability-based text reader, paginated for the 576x288 display.
+
+## Run it
+
+```bash
+npm install
+cp .env.example .env          # add ANTHROPIC_API_KEY for AI summary mode
+npm run dev                   # condense server :8787 + Vite :5173 (proxied /api)
+npm run simulate              # desktop simulator
+npx evenhub qr --url http://<your-lan-ip>:5173   # real glasses
+npm run qr                    # real glasses on isolated Wi-Fi (tunnel), see QR_TESTING.md
+```
+
+Deep link: `http://localhost:5173/?open=<url-encoded page>` (add `&mode=full` for the text reader)
+(it's `open`, not `url`, because Vite reserves `?url`).
+
+## On the glasses
+
+| Gesture | Reader | Menus |
+|---|---|---|
+| Swipe down / up | next / previous screen (moves the selection on list screens) | move cursor |
+| Tap | open the selected list item, otherwise the menu | select |
+| Double-tap | exit (system confirm) | exit |
+
+Menu: Resume · ◀ back to the previous page · Contents · Links on page · Smart view / Full text ·
+Back to start · Recent pages · Exit.
+
+The last page you read and your recent pages are saved with `bridge.setLocalStorage`
+and restored on the next launch.
+
+## Layout
+
+- `server/safe-fetch.ts`: fetches with a timeout, a 4 MB cap and charset decoding. Every
+  redirect hop is checked against private, loopback and metadata IPs.
+  `ALLOW_PRIVATE_HOSTS=1` turns this off for local testing.
+- `server/extract.ts`: HTML → `{title, sections[{heading, blocks}], links}`. Also maps
+  glyphs the G2 font may lack (smart quotes, dashes, arrows, emoji) to plain equivalents.
+- `server/deck.ts`: Smart view. Claude picks the site kind and fills layout fields with hard character limits; validated and resolved (images, links) on the server.
+- `server/images.ts`: G2 image prep (dither / line art / background knockout) and big-number rendering.
+- `src/screens.ts`: one renderer per layout, within the device limits (8 text, 4 image containers).
+- `src/paginate.ts`: pixel-accurate pagination with `@evenrealities/pretext`. Each section
+  starts a new page, and paragraphs flow across page breaks.
+- `src/main.ts`: the glasses UI (reader = body + footer text containers; menus = list
+  container), with all bridge calls serialized and given timeouts.
+- `src/companion.ts`: the phone UI.
+
+## Shipping a .ehpk
+
+1. Deploy the server anywhere that runs Node (`npx tsx server/index.ts`). It's a plain
+   Hono app, so Fly, Render, Railway or Vercel all work. Set `ANTHROPIC_API_KEY` there.
+2. Build the app against it: `VITE_API_BASE=https://your-server.example.com npm run pack`
+3. Put that same origin in `app.json` → `permissions[0].whitelist` (it is a placeholder now).
