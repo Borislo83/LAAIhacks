@@ -4,18 +4,23 @@ import { safeFetchImage } from './safe-fetch'
 
 // Prepares images for G2 image containers: 4-bit greyscale at the exact box
 // size. On the glasses lit pixels glow green and black is see-through, so a
-// bright photo becomes a glowing slab across the wearer's view. Bright
-// images are therefore turned into line art (edges only); dark ones keep
-// their tones as a dithered photo.
+// bright photo becomes a glowing slab across the wearer's view. Images keep
+// their tones, but a curve pulls the average down to TONE_MEAN: highlights
+// (stars, faces, lettering) stay bright while broad midtones sink, so the
+// picture reads without flooding the view. Mostly-white images (prints,
+// paper, diagrams) are inverted first so the paper goes dark.
 
-export type Treatment = 'auto' | 'photo' | 'lines'
+export type Treatment = 'auto' | 'photo'
 
-const LEVELS = 16
-const STEP = 255 / (LEVELS - 1)
-// Mean brightness (0-255) above which a large image reads as a glowing slab.
+// Mean brightness (0-255) of a small image that is probably a product on white.
 const BRIGHT_MEAN = 105
-// Line art needs room to read; small thumbnails always stay photos.
-const MIN_LINE_ART_W = 160
+// Below this width a bright image is treated as a product shot on white.
+const MIN_TONE_MAP_W = 220
+// Average on-glasses brightness the tone curve aims for; a third keeps it see-through.
+const TONE_MEAN = 85
+// Average (after stretching) above which an image is mostly paper and is inverted.
+const PAPER_MEAN = 150
+const MAX_GAMMA = 3
 
 export function stretch(px: Uint8Array) {
   const hist = new Array(256).fill(0)
@@ -29,16 +34,29 @@ export function stretch(px: Uint8Array) {
   for (let i = 0; i < px.length; i++) px[i] = Math.max(0, Math.min(255, ((px[i] - lo) * 255) / range))
 }
 
-/** Floyd-Steinberg down to the panel's 16 levels. */
-function dither(px: Uint8Array, w: number, h: number): Uint8Array {
+// The glasses read an image's grey value g as level g >> 3 (so 128+ is level
+// 15), and lit levels look far brighter than linear: measured in the
+// simulator, level 1 already shows at 96/255 and level 9 and up at full.
+// SHOWN is that brightness per level; past level 9 nothing gets brighter.
+const SHOWN = [0, 96, 131, 157, 179, 197, 214, 230, 244, 255]
+/** Grey value that lands in the middle of `level`'s range. */
+const greyFor = (level: number) => (level ? level * 8 + 4 : 0)
+
+/**
+ * Maps wanted on-glasses brightness (0-255) to grey values the glasses show
+ * that way. Dithering spreads the error so in-between shades still read.
+ */
+function encodeShown(px: Uint8Array, w: number, h: number): Uint8Array {
   const buf = Float32Array.from(px)
   const out = new Uint8Array(w * h)
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x
-      const level = Math.max(0, Math.min(LEVELS - 1, Math.round(buf[i] / STEP)))
-      const err = buf[i] - level * STEP
-      out[i] = Math.round(level * STEP)
+      const want = buf[i]
+      let level = 0
+      for (let l = 1; l < SHOWN.length; l++) if (Math.abs(SHOWN[l] - want) < Math.abs(SHOWN[level] - want)) level = l
+      out[i] = greyFor(level)
+      const err = want - SHOWN[level]
       if (x + 1 < w) buf[i + 1] += (err * 7) / 16
       if (y + 1 < h) {
         if (x > 0) buf[i + w - 1] += (err * 3) / 16
@@ -50,32 +68,18 @@ function dither(px: Uint8Array, w: number, h: number): Uint8Array {
   return out
 }
 
-/** Sobel edges on a 2x supersampled image, then quantized; the border is cleared. */
-function lineArt(px2: Uint8Array, w: number, h: number): Uint8Array {
-  const W = w * 2
-  const H = h * 2
-  const mag = new Float32Array(W * H)
-  let max = 1
-  for (let y = 1; y < H - 1; y++) {
-    for (let x = 1; x < W - 1; x++) {
-      const p = (dx: number, dy: number) => px2[(y + dy) * W + x + dx]
-      const gx = p(1, -1) + 2 * p(1, 0) + p(1, 1) - p(-1, -1) - 2 * p(-1, 0) - p(-1, 1)
-      const gy = p(-1, 1) + 2 * p(0, 1) + p(1, 1) - p(-1, -1) - 2 * p(0, -1) - p(1, -1)
-      const m = Math.hypot(gx, gy)
-      mag[y * W + x] = m
-      if (m > max) max = m
-    }
+/** Stretched tones, paper inverted, then a gamma curve that lands the average on TONE_MEAN. */
+function toneMap(px: Uint8Array) {
+  stretch(px)
+  let sum = px.reduce((a, v) => a + v, 0)
+  if (sum / px.length > PAPER_MEAN) {
+    for (let i = 0; i < px.length; i++) px[i] = 255 - px[i]
+    sum = px.length * 255 - sum
   }
-  const out = new Uint8Array(w * h)
-  for (let y = 2; y < h - 2; y++) {
-    for (let x = 2; x < w - 2; x++) {
-      const i = 2 * y * W + 2 * x
-      const m = Math.max(mag[i], mag[i + 1], mag[i + W], mag[i + W + 1]) / max
-      const v = Math.min(1, m * 2.2)
-      out[y * w + x] = v < 0.18 ? 0 : Math.round(Math.min(LEVELS - 1, Math.round(v * (LEVELS - 1)) + 3) * STEP)
-    }
-  }
-  return out
+  const mean = Math.max(0.02, sum / px.length / 255)
+  // Already dim images keep their tones (gamma 1).
+  const gamma = Math.max(1, Math.min(MAX_GAMMA, Math.log(TONE_MEAN / 255) / Math.log(mean)))
+  for (let i = 0; i < px.length; i++) px[i] = Math.round(255 * Math.pow(px[i] / 255, gamma))
 }
 
 async function toPng(px: Uint8Array, w: number, h: number): Promise<GlassImage> {
@@ -87,39 +91,30 @@ async function toPng(px: Uint8Array, w: number, h: number): Promise<GlassImage> 
 }
 
 export async function glassImage(bytes: Buffer, w: number, h: number, treatment: Treatment = 'auto'): Promise<GlassImage> {
-  const grey = (scale: number) =>
-    sharp(bytes)
+  const px = new Uint8Array(
+    await sharp(bytes)
       .rotate()
       .flatten({ background: '#000000' })
-      .resize(w * scale, h * scale, { fit: 'cover', position: 'attention' })
+      .resize(w, h, { fit: 'cover', position: 'attention' })
+      // Shrinking softens edges; a light sharpen keeps detail readable at 4 bits.
+      .sharpen({ sigma: 0.8 })
       .toColourspace('b-w')
       .raw()
-      .toBuffer()
-      .then(b => new Uint8Array(b))
-
-  const px = await grey(1)
+      .toBuffer(),
+  )
   const mean = px.reduce((a, v) => a + v, 0) / px.length
-  const useLines = treatment === 'lines' || (treatment === 'auto' && w >= MIN_LINE_ART_W && mean > BRIGHT_MEAN)
 
-  if (useLines) {
-    const px2 = await sharp(Buffer.from(await grey(2)), { raw: { width: w * 2, height: h * 2, channels: 1 } })
-      .blur(1)
-      .toColourspace('b-w')
-      .raw()
-      .toBuffer()
-    return toPng(lineArt(new Uint8Array(px2), w, h), w, h)
-  }
   // Small bright images are usually product shots on white: knock the
-  // background out to black so only the product glows.
-  if (treatment !== 'photo' && mean > BRIGHT_MEAN) {
-    // The background is the brightest broad region; its exact shade varies
-    // (white, off-white, cream), so key the cut-off to the 90th percentile.
+  // background out to black so only the product glows. The background is the
+  // brightest broad region; its exact shade varies (white, off-white, cream),
+  // so key the cut-off to the 90th percentile.
+  if (treatment !== 'photo' && w < MIN_TONE_MAP_W && mean > BRIGHT_MEAN) {
     const p90 = Array.from(px).sort((a, b) => a - b)[Math.floor(px.length * 0.9)]
     const cut = Math.max(170, p90 - 18)
     for (let i = 0; i < px.length; i++) if (px[i] > cut) px[i] = 0
   }
-  stretch(px)
-  return toPng(dither(px, w, h), w, h)
+  toneMap(px)
+  return toPng(encodeShown(px, w, h), w, h)
 }
 
 export async function fetchGlassImage(url: string, w: number, h: number, treatment: Treatment = 'auto') {

@@ -1,7 +1,6 @@
 import sharp from 'sharp'
 import type { CondensedPage, GlassImage, ListItem, MangaStrip } from '../shared/types'
 import { normalizeGlyphs } from './extract'
-import { stretch } from './images'
 import { FetchError, safeFetchImage } from './safe-fetch'
 
 // MangaDex chapters are image-only pages built client-side, so they skip the
@@ -34,9 +33,6 @@ const STEP = 255 / (LEVELS - 1)
 // JPEGs are ~100-300 KB, so a few chapters fit comfortably.
 const SOURCE_CACHE_MAX = 150
 const PREFETCH_CONCURRENCY = 2
-
-/** `natural`: tones; `lines`: bright ink lines over a dim fill, solid lettering (less glare). */
-export type MangaStyle = 'natural' | 'lines'
 
 const CHAPTER_URL = /^https?:\/\/(?:www\.)?mangadex\.org\/chapter\/([0-9a-f-]{36})/i
 const TITLE_URL = /^https?:\/\/(?:www\.)?mangadex\.org\/title\/([0-9a-f-]{36})/i
@@ -224,8 +220,13 @@ function preparedPage(chapterId: string, page: number): Promise<PreparedPage> {
   if (hit) return hit
   const value = (async () => {
     const bytes = await sourceBytes(chapterId, page)
+    // Descreen before shrinking: printed screentone is a fine dot pattern that
+    // turns into blotchy moire at display width. A blur sized to the shrink
+    // factor melts the dots into the grey they stand for; lines survive.
+    const { width = SCREEN_W } = await sharp(bytes).metadata()
     const { data, info } = await sharp(bytes)
       .flatten({ background: '#ffffff' })
+      .blur(Math.max(0.3, (width / SCREEN_W) * DESCREEN))
       .resize({ width: SCREEN_W })
       .toColourspace('b-w')
       .raw()
@@ -266,36 +267,20 @@ function quantise(px: Uint8Array): Uint8Array {
   return px
 }
 
-// Bluetooth time is ~110 ms per compressed KB on the glasses, and the bytes
-// come from grain: screentone noise, soft gradients, faint haze. Measured over
-// 36 screens of a webtoon chapter, denoising + 6 tones + dropping the two
-// dimmest cut LZ4 bytes per screen from 29.9 KB to ~16 KB (~3.3 s -> ~1.7 s)
-// while keeping fine lines (a 5x5 denoise was smaller but erased eyes and
-// hands), and removing the faint haze keeps more of the view see-through.
-const TONES = 6
-const DIMMEST_KEPT = 3
+// Bluetooth time is ~110 ms per compressed KB on the glasses, so tones are
+// traded against bytes. With the page descreened first, 8 tones keep shading
+// smooth: on test pages it cost 13-27 KB of LZ4 per screen against 10-21 KB
+// for the old 6 tones + median filter, which turned screentone into blotches
+// (16 tones was barely smoother at 21-35 KB). Dropping the dimmest tones
+// keeps faint haze off the see-through view.
+const TONES = 8
+const DIMMEST_KEPT = 2
+/** Descreen blur per unit of shrink (source width / display width). */
+const DESCREEN = 0.55
 
-/** 3x3 median: removes speckle that LZ4 can't compress, keeps edges. */
-function median3(px: Uint8Array, w: number, h: number): Uint8Array {
-  const out = new Uint8Array(px.length)
-  const win = new Uint8Array(9)
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let k = 0
-      for (let dy = -1; dy <= 1; dy++) {
-        const yy = Math.min(h - 1, Math.max(0, y + dy))
-        for (let dx = -1; dx <= 1; dx++) win[k++] = px[yy * w + Math.min(w - 1, Math.max(0, x + dx))]
-      }
-      win.sort()
-      out[y * w + x] = win[4]
-    }
-  }
-  return out
-}
-
-/** Fewer, flatter tones (cel-shaded look) that compress well. */
+/** Fewer, flatter tones that compress well. */
 function simplify(px: Uint8Array): Uint8Array {
-  const out = median3(px, SCREEN_W, SCREEN_H)
+  const out = px.slice()
   for (let i = 0; i < out.length; i++) {
     const level = Math.round(out[i] / STEP)
     if (level < DIMMEST_KEPT) {
@@ -410,71 +395,6 @@ function screenPixels(px: Uint8Array, h: number, y: number): Uint8Array {
   return quantise(out)
 }
 
-// 4x4 Bayer thresholds in -0.5..0.5: an even pattern for the dim fill.
-const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map(v => (v + 0.5) / 16 - 0.5)
-const FILL_MAX = 0.34
-const SOLID_INK = 0.9
-
-/**
- * Linework style: the art's lines at full brightness, everything else as a
- * dim fill, so most of the view stays see-through. Solid ink (lettering,
- * black fills) stays solid and gets no outline, which would smear text.
- */
-function linePixels(px: Uint8Array, h: number, y: number): Uint8Array {
-  const raw = new Uint8Array(SCREEN_W * SCREEN_H)
-  const first = Math.max(0, -y)
-  const last = Math.min(SCREEN_H, h - y)
-  raw.set(px.subarray((y + first) * SCREEN_W, (y + last) * SCREEN_W), first * SCREEN_W)
-
-  const fill = raw.slice()
-  const page = fill.subarray(first * SCREEN_W, last * SCREEN_W)
-  stretch(page)
-  const mean = page.reduce((a, v) => a + v, 0) / Math.max(1, page.length)
-  if (mean > BRIGHT_MEAN) for (let i = 0; i < page.length; i++) page[i] = 255 - page[i]
-
-  const edge = new Float32Array(SCREEN_W * SCREEN_H)
-  let maxEdge = 1
-  for (let yy = Math.max(1, first); yy < Math.min(SCREEN_H - 1, last); yy++) {
-    for (let x = 1; x < SCREEN_W - 1; x++) {
-      const p = (dx: number, dy: number) => raw[(yy + dy) * SCREEN_W + x + dx]
-      const gx = p(1, -1) + 2 * p(1, 0) + p(1, 1) - p(-1, -1) - 2 * p(-1, 0) - p(-1, 1)
-      const gy = p(-1, 1) + 2 * p(0, 1) + p(1, 1) - p(-1, -1) - 2 * p(0, -1) - p(1, -1)
-      const m = Math.hypot(gx, gy)
-      edge[yy * SCREEN_W + x] = m
-      if (m > maxEdge) maxEdge = m
-    }
-  }
-
-  // Solid ink grown by 2px: no edge lines drawn around it.
-  const solid = new Uint8Array(SCREEN_W * SCREEN_H)
-  for (let i = first * SCREEN_W; i < last * SCREEN_W; i++) {
-    if (fill[i] / 255 <= SOLID_INK) continue
-    const sx = i % SCREEN_W
-    const sy = (i - sx) / SCREEN_W
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const nx = sx + dx
-        const ny = sy + dy
-        if (nx >= 0 && nx < SCREEN_W && ny >= 0 && ny < SCREEN_H) solid[ny * SCREEN_W + nx] = 1
-      }
-    }
-  }
-
-  const out = new Uint8Array(SCREEN_W * SCREEN_H)
-  for (let i = first * SCREEN_W; i < last * SCREEN_W; i++) {
-    const f = fill[i] / 255
-    const e = Math.min(1, (edge[i] / maxEdge) * 3.2)
-    const line = e < 0.22 || solid[i] ? 0 : 0.45 + 0.55 * e
-    const tone = f > SOLID_INK ? f : Math.max(line, f * FILL_MAX)
-    if (tone < 0.05) continue
-    const x = i % SCREEN_W
-    const row = (i - x) / SCREEN_W
-    const level = Math.max(0, Math.min(LEVELS - 1, Math.round(tone * (LEVELS - 1) + BAYER[(row % 4) * 4 + (x % 4)])))
-    out[i] = Math.round(level * STEP)
-  }
-  return out
-}
-
 async function tile(screen: Uint8Array, x: number, y: number): Promise<GlassImage> {
   const out = new Uint8Array(TILE_W * TILE_H)
   for (let row = 0; row < TILE_H; row++) {
@@ -488,7 +408,7 @@ async function tile(screen: Uint8Array, x: number, y: number): Promise<GlassImag
 }
 
 /** One screen of a page. `strip` -1 means the page's last strip. */
-export async function mangaStrip(chapterId: string, page: number, strip: number, style: MangaStyle = 'natural'): Promise<MangaStrip> {
+export async function mangaStrip(chapterId: string, page: number, strip: number): Promise<MangaStrip> {
   if (!/^[0-9a-f-]{36}$/i.test(chapterId)) throw new FetchError('Bad chapter id')
   const { px, h } = await preparedPage(chapterId, page)
   const tops = stripTops(h)
@@ -496,7 +416,7 @@ export async function mangaStrip(chapterId: string, page: number, strip: number,
   const top = tops[index]
   // Short pages are centred vertically instead of pinned to the top.
   const y = h < SCREEN_H ? -Math.floor((SCREEN_H - h) / 2) : top
-  const screen = style === 'lines' ? linePixels(px, h, y) : simplify(screenPixels(px, h, y))
+  const screen = simplify(screenPixels(px, h, y))
   const tiles = await Promise.all([
     tile(screen, 0, 0),
     tile(screen, TILE_W, 0),

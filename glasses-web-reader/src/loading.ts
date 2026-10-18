@@ -36,6 +36,7 @@ export function loadingSpec(title: string, host: string, step: string, frame: nu
     texts: [
       { x: 0, y: 24, w: 576, h: 62, text: `${centred(title, inner)}\n${centred(title === host ? 'Opening page' : host, inner)}`, pad: 4 },
       { x: 0, y: 178, w: 576, h: 36, text: centred(step, inner), pad: 4 },
+      { x: 0, y: 248, w: 576, h: 36, text: centred('Swipe to cancel', inner), pad: 4 },
     ],
     images: [{ x: SPINNER_X, y: SPINNER_Y, image: spinnerFrame(frame) }],
   }

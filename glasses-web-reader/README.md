@@ -86,8 +86,12 @@ Claude picks one page from a web search, and that page opens. Hands-free listeni
 on by default and can be switched off in the menu or on the phone. Pages opened by
 voice don't auto-open recommendations; open them from the menu with **Recommendations (3)**.
 
+To back out, swipe or double-tap. While it's listening this drops the question; while
+it's searching or a page is loading, this cancels and returns to the page you were
+on. The loading menu also has **Cancel**, and so does the phone's Back button.
+
 Runs of plain-text screens join into one stream. A swipe scrolls it a few lines at
-a time, and a progress bar replaces the "2 / 5" counter.
+a time, and the counter in the top-right corner shows the screen as 1/4.
 
 ## On the glasses
 
@@ -95,10 +99,12 @@ a time, and a progress bar replaces the "2 / 5" counter.
 |---|---|---|
 | Swipe down / up | next / previous screen (moves the selection on list screens) | move cursor |
 | Tap | open the selected list item, otherwise the menu | select |
-| Double-tap | exit (system confirm) | exit |
+| Double-tap | exit (system confirm); cancels while listening, searching or loading | exit |
 
-Menu: Resume · ◀ back to the previous page · Contents · Links on page · Back to start ·
-Recent pages · Exit (manga adds chapter, page and style items).
+Menu: Resume · Recommendations · Voice search · ◀ back to the previous page · Contents ·
+Links on page · Bookmark · Bookmarks · Recent pages · Agent ▸ · Settings ▸ · Exit (manga
+swaps Contents and Links for chapter and page items). Settings holds the recommendation
+and hands-free toggles; Agent holds saved suggestions, session actions and task history.
 
 The last page you read and your recent pages are saved with `bridge.setLocalStorage`
 and restored on the next launch.
