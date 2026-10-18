@@ -36,6 +36,17 @@
         "laai-orchestrator"
       ],
       "port": 8001
+    },
+    {
+      "name": "glasses-condense",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "glasses-web-reader",
+        "run",
+        "server"
+      ],
+      "port": 8787
     }
   ]
 }
