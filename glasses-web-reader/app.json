@@ -9,7 +9,7 @@
   "permissions": [
     {
       "name": "network",
-      "desc": "Sends the page URL you enter to the condense server, which fetches and condenses it for the glasses.",
+      "desc": "Reads pages through the reader server and connects to your account for saved pages, recommendations and explicitly confirmed actions.",
       "whitelist": [
         "https://your-condense-server.example.com"
       ]

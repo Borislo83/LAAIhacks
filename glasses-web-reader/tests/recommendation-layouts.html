@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Glasses recommendation layouts</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:28px;background:#f4f5f1;color:#242820;font:15px/1.5 system-ui,sans-serif}h1{font-size:23px;margin:0 0 4px}p{margin:0 0 22px;color:#60665a}.layouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px}article{background:white;padding:18px;border:1px solid #dce0d6;border-radius:14px}h2{font-size:17px;margin:0 0 4px}article p{min-height:45px;font-size:13px;margin-bottom:14px}.glass{position:relative;width:100%;aspect-ratio:2;background:#000;border-radius:10px;overflow:hidden}.screen{position:absolute;width:576px;height:288px;transform-origin:top left;color:#5cff5c;font:21px/27px Arial,sans-serif}.screen>div{position:absolute;white-space:pre-wrap;overflow:hidden;border-style:solid}footer{margin-top:22px;color:#60665a;font-size:13px}
+</style></head><body>
+<h1>Choose your glasses layout</h1><p>All three show the same actions. Swipe to choose, tap to select, double-tap to close.</p>
+<div class="layouts"></div><footer>In the glasses menu: Recommendation layout. Your choice is saved. Previews use sample recommendations.</footer>
+<script type="module">
+import { glassesRecommendationSpec, RECOMMENDATION_LAYOUTS } from '/src/glasses-recommendations.ts'
+import { renderScreen } from '/src/screens.ts'
+const base=renderScreen({layout:'product',title:'Model A headphones',subtitle:'Wireless audio',price:'$100',rating:'4/5',stock:'In stock',description:'Clear sound and a comfortable fit.'},{position:'1 / 2',selected:0,upcoming:['Key details']})
+const descriptions={corner:'Compact panel on the right. Keeps the page visible above it.',bottom:'A wide, two-column strip. Leaves more vertical room for the page.',full:'A dedicated list with longer labels and more space between choices.'}
+for(const layout of RECOMMENDATION_LAYOUTS){
+ const article=document.createElement('article'),heading=document.createElement('h2'),description=document.createElement('p'),glass=document.createElement('div'),screen=document.createElement('div')
+ heading.textContent=layout.label;description.textContent=descriptions[layout.id];glass.className='glass';screen.className='screen'
+ const spec=glassesRecommendationSpec(base,['Compare prices','Find alternatives','Read owner reviews'],0,false,layout.id)
+ for(const t of spec.texts){const element=document.createElement('div');element.textContent=t.text;Object.assign(element.style,{left:t.x+'px',top:t.y+'px',width:t.w+'px',height:t.h+'px',padding:(t.pad??4)+'px',borderWidth:(t.border??0)+'px',borderColor:'#5cff5c',borderRadius:(t.radius??0)+'px'});screen.append(element)}
+ glass.append(screen);article.append(heading,description,glass);document.querySelector('.layouts').append(article)
+ new ResizeObserver(()=>{screen.style.transform=`scale(${glass.clientWidth/576})`}).observe(glass)
+}
+</script></body></html>

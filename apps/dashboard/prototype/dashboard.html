@@ -147,6 +147,17 @@ body[data-density="compact"] .agent{padding:8px 10px}
 .sources .when{font:11px var(--mono);margin-left:2px}
 .picks{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
 .pick{border:1px solid var(--hair);border-radius:var(--r);padding:12px 14px;display:flex;flex-direction:column;align-items:flex-start;gap:6px;background:var(--panel)}
+.pick .pimg,.intro img{width:100%;max-width:160px;aspect-ratio:1;object-fit:contain;background:#fff;border-radius:var(--r);align-self:center}
+.intro{display:flex;gap:12px;align-items:center}
+.intro img{width:64px;height:64px;flex:none}
+.intro b{font-weight:500;font-size:15px;line-height:20px}
+.out>details>summary{list-style:none;cursor:pointer}
+.out>details>summary::-webkit-details-marker{display:none}
+.out>details>summary header::after{content:"\25B8";color:var(--muted);font-size:11px}
+.out>details[open]>summary header::after{content:"\25BE"}
+.out>details[open] .teaser{display:none}
+.out .teaser{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.out-body{display:flex;flex-direction:column;gap:10px;margin-top:10px}
 .pick .plabel{font:11px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .pick b{font-weight:500;font-size:14px;line-height:19px}
 .pick .pmeta{font-size:13px;color:var(--muted)}
@@ -184,7 +195,8 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
 .story h4{margin:0;font:500 15px/21px var(--sans);overflow-wrap:anywhere}
 .story h4 a{color:var(--ink);text-decoration:none}
 .story h4 a:hover{text-decoration:underline}
-.story p{margin:0;font-size:13px;line-height:20px;color:var(--ink);overflow-wrap:anywhere}
+.story p{margin:0;font-size:14px;line-height:22px;color:var(--ink);overflow-wrap:anywhere}
+.story-read{font-size:11px;color:var(--muted);font-style:italic}
 .story img{width:96px;height:72px;object-fit:cover;border-radius:8px;flex-shrink:0;background:#ECECE8}
 .news{display:grid;grid-template-columns:minmax(0,40%) minmax(0,1fr);gap:14px 18px;align-items:start;max-width:720px}
 .news-img{position:relative;margin:0;aspect-ratio:4/3;border-radius:var(--r);overflow:hidden;background:var(--well);border:1px solid var(--hair)}
@@ -221,6 +233,10 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
 .composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--hair)}
 .composer input{flex:1;min-width:0;font:15px var(--sans);border:1px solid var(--hair);border-radius:var(--r);padding:10px 12px;background:var(--well);color:var(--ink)}
 .starters{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 4px}
+.starters.busy .chip{opacity:.45;pointer-events:none}
+.verdict{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.verdict h4{margin:0;font:500 11px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--signal)}
+.verdict p{margin:0;font-size:14px;line-height:22px}
 /* live agent work: each agent's own orb animates beside a shimmering status line until it finishes */
 .work{display:flex;flex-direction:column;font-size:13px}
 .work-row{display:flex;gap:10px;align-items:center;min-height:30px;padding:3px 0}
@@ -482,10 +498,13 @@ const VIEW={
   },
   price(d){
     const best=d.best;
-    const rows=d.offers.map(o=>`<a href="${esc(o.url)}" target="_blank" rel="noopener" class="${best&&o.store===best.store?"best":""}"><span>${esc(o.store)}</span><span class="p">${money(o.price)}</span></a>`).join("");
+    // Store listings in a category are different products, so each row names its product.
+    const many=new Set(d.offers.map(o=>o.product)).size>1;
+    const label=o=>many?`${o.product.length>64?o.product.slice(0,63)+"…":o.product}${o.rating!=null?` · ${Number(o.rating).toFixed(1)}★`:""}${o.review_count?` (${o.review_count.toLocaleString()})`:""} · ${storeName(o.store)}`:o.store;
+    const rows=d.offers.map(o=>`<a href="${esc(o.url)}" target="_blank" rel="noopener" class="${best&&o.url===best.url?"best":""}"><span>${esc(label(o))}</span><span class="p">${money(o.price)}</span></a>`).join("");
     const main=best?`${money(best.price)} at ${best.store}`:"No offers";
     const sub=d.savings>0?`${money(d.savings)} less than here · tap to open`:d.savings!=null?"already the best price":`${d.offers.length} sellers checked`;
-    return {lens:lens(d.product,main,sub),body:rows?`<div class="list">${rows}</div>`:`<p class="muted">${esc(d.summary)}</p>`};
+    return {lens:lens(d.product,main,sub),body:rows?`<div class="list">${rows}</div>`:""};
   },
   alternatives(d){
     const a=d.alternatives[0];
@@ -520,7 +539,11 @@ const VIEW={
         const u=httpsUrl(s.url),img=httpsUrl(s.image_url),ago=relTime(s.published_at);
         const meta=[esc(s.publisher||(u?u.hostname.replace(/^www\./,""):"")),ago&&`<time datetime="${esc(s.published_at)}">${esc(ago)}</time>`,s.coverage>1&&`${Number(s.coverage)} outlets`].filter(Boolean).join(" · ");
         const head=u?`<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${esc(s.headline)}</a>`:esc(s.headline);
-        return `<li class="story"><div class="story-text"><span class="story-sec">${esc(s.section||"")}</span><h4>${head}</h4>${s.summary?`<p>${esc(s.summary)}</p>`:""}<span class="news-meta">${meta}</span></div>${img?`<img src="${esc(img.href)}" alt="" width="96" height="72" loading="lazy" referrerpolicy="no-referrer">`:""}</li>`}).join("");
+        // Newsletter paragraph from the full articles; the lead line when none could be read.
+        const text=s.body||s.summary;
+        const read=(s.read_from||[]).length?`<span class="story-read">Summarized from ${s.read_from.map(esc).join(" and ")}</span>`:"";
+        const fallback=!text&&u?`<p class="muted">Full story at <a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${esc(s.publisher||u.hostname)}</a>.</p>`:"";
+        return `<li class="story"><div class="story-text"><span class="story-sec">${esc(s.section||"")}</span><h4>${head}</h4>${text?`<p>${esc(text)}</p>`:fallback}<span class="news-meta">${meta}</span>${read}</div>${img?`<img src="${esc(img.href)}" alt="" width="96" height="72" loading="lazy" referrerpolicy="no-referrer">`:""}</li>`}).join("");
       return {lens:lens("NEWS BRIEF",d.headline||"News brief",`${d.stories.length} stories · glance down`),
         body:`<div class="brief"><h3>${esc(d.headline||"News brief")}</h3><ol class="stories">${rows}</ol></div>`};
     }
@@ -542,12 +565,14 @@ const VIEW={
     const rows=rated.length
       ?rated.map(r=>`<a href="${esc(r.url)}" target="_blank" rel="noopener"><span>${esc(r.source)}</span><span class="p">${Number(r.rating).toFixed(1)}★</span></a>`).join("")
       :d.review_url?`<a href="${esc(d.review_url)}" target="_blank" rel="noopener"><span>Read full reviews</span><span class="p">↗</span></a>`:"";
-    const n=(d.sources||[]).length;
+    const n=(d.sources||[]).length,read=d.read_from||[];
     const main=d.rating!=null
       ?`${Number(d.rating).toFixed(1)}★ ${rated.length?`avg of ${d.review_count} expert reviews`:`from ${d.review_count.toLocaleString()} reviews`}`
-      :n?`${n} review sources`:"No reviews found";
-    const sub=d.pros[0]?`“${d.pros[0].toLowerCase()}” · glance down`:d.rating==null&&n?"no published rating · open sources":"";
-    return {lens:lens(d.product,main,sub),body:pc+(rows?`<div class="list">${rows}</div>`:"")};
+      :read.length?`Advice from ${read.length} reviews`:n?`${n} review sources`:"No reviews found";
+    const sub=d.pros[0]?`“${d.pros[0].toLowerCase()}” · glance down`:d.rating==null&&n&&!d.verdict?"no published rating · open sources":"";
+    // The reviewers' verdict first: what they conclude and who it suits.
+    const verdict=d.verdict?`<div class="verdict"><h4>Verdict</h4><p>${esc(d.verdict)}</p>${read.length?`<span class="story-read">From ${read.map(esc).join(", ")}</span>`:""}</div>`:"";
+    return {lens:lens(d.product,main,sub),body:verdict+pc+(rows?`<div class="list">${rows}</div>`:"")};
   },
 };
 
@@ -595,14 +620,31 @@ function fill(k,res){
   el.querySelector(".hd .orb").classList.add("idle");
   el.querySelector(".ms").textContent=Math.round(res.ms)+" ms";
   const box=el.querySelector(".thinking");
-  if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the backend running at ${esc(orch.value)}?</p></div>`;return}
+  if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the backend running at ${esc(orch.value)}?</p><button type="button" class="btn" data-retry-direct="${k}">Retry</button></div>`;return}
   const v=VIEW[k](res.data);
   // The news card carries its own summary and source chips.
   const own=k==="news";
-  box.outerHTML=`<div class="bd"><div>${own?"":`<p class="summary">${esc(res.data.summary)}</p>`}${v.body}</div>${v.lens}${own?"":evidence(res.data)}</div>`;
+  // An agent that answered with an error (search refused, nothing found) can be asked again.
+  const again=res.data.error?`<button type="button" class="btn" data-retry-direct="${k}">Retry</button>`:"";
+  box.outerHTML=`<div class="bd"><div>${own?"":`<p class="summary">${esc(res.data.summary)}</p>`}${v.body}${again}</div>${v.lens}${own?"":evidence(res.data)}</div>`;
 }
 
 /* form */
+let directBodies={};
+async function runDirect(k){
+  const progress=makeProgress($("#card-"+k+" .thinking"));
+  let r;
+  try{r=await call(k,directBodies[k],progress.update)}
+  catch(err){r={ok:false,reachable:false,error:err.message||"Request failed",ms:0}}
+  progress.finish(r.ok);record(k,r);
+  const card=$("#card-"+k);morph(card,()=>{fill(k,r);card.append(progress.el)});
+}
+// Retry asks just that agent again with the same inputs.
+document.addEventListener("click",e=>{
+  const b=e.target.closest("[data-retry-direct]");if(!b)return;
+  const k=b.dataset.retryDirect,card=$("#card-"+k);if(!card||!directBodies[k])return;
+  card.outerHTML=cardShell(k);runDirect(k);
+});
 $(".chips").insertAdjacentHTML("beforeend",TRY.map(t=>`<button type="button" class="chip" data-try="${esc(t)}">${esc(t)}</button>`).join(""));
 document.querySelectorAll("[data-try]").forEach(b=>b.onclick=()=>{$("#product").value=b.dataset.try;$("#ask").requestSubmit()});
 $("#ask").onsubmit=async e=>{
@@ -610,7 +652,7 @@ $("#ask").onsubmit=async e=>{
   const product=$("#product").value.trim(),amazonUrl=$("#amazon-url").value.trim();
   if(!product&&!amazonUrl)return;
   if(!product&&amazonUrl){selected=new Set(["buyer"]);updateRoster()}
-  if(!selected.size)return;
+
   const num=id=>{const v=$(id).value;return v===""?null:Number(v)};
   const bodies={
     price:{product,current_store:$("#store").value.trim()||null,current_price:num("#price")},
@@ -621,11 +663,20 @@ $("#ask").onsubmit=async e=>{
     news:{query:product},
   };
   // Messenger is chat-only: a message needs the conversation's context and a reviewed draft.
-  const ks=KEYS.filter(k=>selected.has(k)&&bodies[k]);
+  // A message needs a reviewed draft, which lives in chat: hand it to the orchestrator there.
+  if(/^\s*(?:(?:hey|hi|ok|okay)[\s,!]+)?(?:please\s+)?(?:(?:send|shoot|drop)\s+\S+\s+(?:an?\s+)?(?:i?message|text|msg)\b|send\s+(?:an?\s+)?(?:i?message|text)\s+to\b|text\s+\S+|message\s+\S+\s+["“'‘]|imessage\b)/i.test(product)){chatAsk(product);return}
+  // What was asked wins over the selection: a song or video goes to YouTube and a news ask
+  // to News, even when those agents aren't selected.
+  const shopping=/\b(?:prices?|cheap\w*|deals?|reviews?|worth|buy|alternatives?|compare)\b|\$/i.test(product);
+  const asked=shopping?null:/\b(?:songs?|music|videos?|play|listen\s+to|youtube)\b/i.test(product)?"youtube":/\b(?:news|headlines?|brief\s+me|current\s+events)\b/i.test(product)?"news":null;
+  const ks=asked?[asked]:KEYS.filter(k=>selected.has(k)&&bodies[k]);
+  if(!ks.length)return;
   $("#results").innerHTML=ks.map(cardShell).join("");
   $("#go").disabled=true;
-  await Promise.all(ks.map(async k=>{const progress=makeProgress($("#card-"+k+" .thinking"));const r=await call(k,bodies[k],progress.update);progress.finish(r.ok);record(k,r);const card=$("#card-"+k);morph(card,()=>{fill(k,r);card.append(progress.el)})}));
-  $("#go").disabled=false;
+  directBodies=bodies;
+  // The button comes back even if a call throws, so the agents can always be asked again.
+  try{await Promise.all(ks.map(runDirect))}
+  finally{$("#go").disabled=false}
 };
 
 /* mode tabs */
@@ -644,11 +695,13 @@ orch.value=store.get("focal.orch","http://127.0.0.1:8001");
 orch.onchange=()=>store.set("focal.orch",orch.value.trim());
 const convo=[];
 let activePurchase=null;
+let autoConfirm=null, convoResult=null;  // the listing an "Add to Amazon cart" click approved; the last chat answer
 // Cart requests are never retried, so nothing can be added to a cart twice.
 const isCartRelated=text=>!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
 const STARTERS=["Brief me on the news today.","Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100","Find the song Blinding Lights","Text Alex that I'm running 10 minutes late"];
 $("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
-document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
+// A click while a reply is still coming in would start a second request; ignore it.
+document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{if($("#send").disabled)return;$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
 
 /* Claude-style scrolling: follow new output only while the reader is at the bottom, so
    scrolling up to reread is never interrupted. One rAF-throttled jump per frame, no smooth
@@ -696,26 +749,41 @@ function picksCard(picks){
   const tiles=picks.map(p=>{
     const cart=CARTS.find(([prefix])=>String(p.cart_url||"").startsWith(prefix));
     const link=/^https:\/\//.test(p.url||"")?p.url:null;
-    const action=cart
+    // Amazon's add-to-cart link no longer adds anything, so Amazon picks go to the cart
+    // agent, which adds the item in its own signed-in Chrome window and checks the cart.
+    const asin=(String(p.cart_url||"").match(/ASIN\.1=([A-Z0-9]{10})/i)||String(p.url||"").match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i)||[])[1];
+    const action=asin&&(p.store==="amazon.com"||cart?.[1]==="Add to Amazon cart")
+      ?`<button type="button" class="cartbtn" data-buy-link="https://www.amazon.com/dp/${esc(asin.toUpperCase())}" data-product="${esc(p.product)}" data-quantity="1" data-auto-confirm>Add to Amazon cart</button>`
+      :cart
       ?`<a class="cartbtn" href="${esc(p.cart_url)}" target="_blank" rel="noopener noreferrer">${cart[1]}</a>`
       :link?`<a class="viewbtn" href="${esc(link)}" target="_blank" rel="noopener noreferrer">View at ${esc(storeName(p.store))} ↗</a>`:"";
-    return `<div class="pick"><span class="plabel">${esc(p.label)}</span><b>${esc(p.product)}</b>
+    const img=/^https:\/\//.test(p.image||"")?`<img class="pimg" src="${esc(p.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:"";
+    // Store titles run long; the tile shows the name (before the first comma), the full title on hover.
+    const short=String(p.product).split(/,|\s[-–|]\s/)[0].trim();
+    return `<div class="pick">${img}<span class="plabel">${esc(p.label)}</span><b title="${esc(p.product)}">${esc(short)}</b>
       <span class="pmeta">${p.price!=null?`<span class="pprice">${money(p.price)}</span>`:"price not shown"}${p.rating!=null?` · ${Number(p.rating).toFixed(1)}★`:""} · ${esc(storeName(p.store))}</span>
       <small>${esc(p.reason||"")}</small>${action}</div>`}).join("");
   return `<div class="picks">${tiles}</div>`;
 }
+// The product the coordinator researched, with its photo, introduced above the picks.
+function introCard(d){
+  if(d.source!=="coordinator"||!d.product||!/^https:\/\//.test(d.image||""))return "";
+  return `<div class="intro"><img src="${esc(d.image)}" alt="" loading="lazy" referrerpolicy="no-referrer"><div><span class="plabel">Researched</span><br><b>${esc(d.product)}</b></div></div>`;
+}
 // Also called with one card for live previews, so `all` may be missing.
-function miniCard(c,i,all=[c]){
+function miniCard(c,i,all=[c],open=true){
   const a=AGENTS[c.kind];
   const tag=c.kind==="reviews"&&all.filter(x=>x.kind==="reviews").length>1?`<span class="tag">${esc(c.result?.product||c.payload?.product||"")}</span>`:"";
-  const head=`<header>${orb(a.v,20,true)}<b>${a.name}</b>${tag}<span class="ms">${Math.round(c.ms)} ms</span></header>`;
-  if(!c.result)return `<section class="out">${head}<p class="err">${esc(c.error||"No result")}</p></section>`;
+  const teaser=`<span class="teaser">${esc(c.result?.summary||c.error||"")}</span>`;
+  const head=`<header>${orb(a.v,20,true)}<b>${a.name}</b>${tag}${teaser}<span class="ms">${Math.round(c.ms)} ms</span></header>`;
+  const fold=(cls,inner)=>`<section class="out${cls}"><details${open?" open":""}><summary>${head}</summary><div class="out-body">${inner}</div></details></section>`;
+  if(!c.result)return fold("",`<p class="err">${esc(c.error||"No result")}</p>`);
   const v=VIEW[c.kind](c.result);
   // Only research agents depend on web search; other agents' errors speak for themselves.
   const searchy=["price","alternatives","reviews","youtube","news"].includes(c.kind);
   const warn=c.result.error?`<p class="warn-note">${esc(c.result.error)}.${searchy?" The agent is fine; the free web search refused this request. Try again in a moment.":""}</p>`:"";
   const summary=c.kind==="buyer"||c.kind==="news"?"":`<p class="summary">${esc(c.result.summary)}</p>`;
-  return `<section class="out out-${c.kind}">${head}${summary}${v.body}${warn}${v.lens}${c.kind==="news"?"":evidence(c.result)}</section>`;
+  return fold(` out-${c.kind}`,`${summary}${v.body}${warn}${v.lens}${c.kind==="news"?"":evidence(c.result)}`);
 }
 // The final reply arrives whole; reveal it word by word so it reads like Claude writing.
 async function streamReply(host,text){
@@ -785,25 +853,28 @@ function makeProgress(container,outs){
 $("#chat-form").onsubmit=async e=>{
   e.preventDefault();
   const input=$("#chat-input"), text=input.value.trim(); if(!text)return;
-  input.value=""; $("#send").disabled=true; $("#starters").hidden=true;
+  // Suggestions stay listed after the first message; they're paused while this runs.
+  input.value=""; $("#send").disabled=true; $("#starters").classList.add("busy");
   bubble(esc(text),"user");
   convo.push({role:"user",content:text});
   const pending=bubble(`${logoOrb()}<div class="body"><div class="progress-host"></div><div class="outs"></div></div>`,"bot");
   const body=pending.querySelector(".body"),outs=pending.querySelector(".outs");
   const progress=makeProgress(pending.querySelector(".progress-host"),outs);
+  convoResult=null;
   progress.update({kind:"coordinator",stage:"connecting",message:"Connecting to the agent workflow"});
   try{
     const cartRelated=isCartRelated(text);
     const d=await withRetry(()=>readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update),
       n=>progress.update({kind:"coordinator",stage:"retrying",message:retryMessage(n)}),!cartRelated);
     d.calls=(d.calls||[]).map(c=>({...c,kind:kindOf(c.kind)}));
+    convoResult=d;
     d.calls.forEach(c=>{if(c.result?.confirmation_token)activePurchase=c.result.confirmation_token;if(c.result?.status==="cart_added")activePurchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
     const by=d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules";
     const via=d.calls.length?`${d.calls.length} agent${d.calls.length>1?"s":""} via ${by}`:d.source==="asi_one"?"ASI:One, no agents needed":by;
     // Live previews become the final blocks in the same frame, so nothing blinks out and back.
-    morph(pending,()=>{progress.finish(true,via);outs.innerHTML=picksCard(d.picks)+d.calls.map(miniCard).join("")});
+    morph(pending,()=>{progress.finish(true,via);outs.innerHTML=introCard(d)+picksCard(d.picks)+d.calls.map((c,i,all)=>miniCard(c,i,all,!d.picks?.length)).join("")});
     tickDrafts();
     await streamReply(body,d.reply||"");
   }catch(err){
@@ -814,7 +885,12 @@ $("#chat-form").onsubmit=async e=>{
       body.insertAdjacentHTML("beforeend",`<p class="err">${esc(err.message)}. ${tried?`Tried ${ATTEMPTS} times; is the orchestrator running?`:"No automatic retry was sent."}</p>`);
     });
   }
-  $("#send").disabled=false; input.focus();
+  $("#send").disabled=false; $("#starters").classList.remove("busy"); input.focus();
+  // After an "Add to Amazon cart" click, the reviewed addition for that listing is
+  // confirmed right away; anything else (sign-in needed, another item) waits for the user.
+  const wanted=autoConfirm; autoConfirm=null;
+  const review=wanted&&convoResult?.calls?.find(c=>c.result?.status==="cart_review"&&c.result?.selected_url===wanted);
+  if(review){activePurchase=review.result.confirmation_token;input.value="confirm add to cart";$("#chat-form").requestSubmit()}
 };
 
 document.addEventListener("click",e=>{
@@ -822,7 +898,10 @@ document.addEventListener("click",e=>{
   if(!listing&&!confirmation)return;if($("#send").disabled)return;
   setMode("chat");
   if(confirmation){activePurchase=confirmation.dataset.confirmBuy;$("#chat-input").value="confirm add to cart"}
-  else{$("#chat-input").value=`Prepare Amazon cart addition for ${listing.dataset.product}, quantity ${listing.dataset.quantity}: ${listing.dataset.buyLink}`}
+  else{
+    // "Add to Amazon cart" is itself the approval for that one listing.
+    autoConfirm=listing.hasAttribute("data-auto-confirm")?listing.dataset.buyLink:null;
+    $("#chat-input").value=`Prepare Amazon cart addition for ${listing.dataset.product}, quantity ${listing.dataset.quantity}: ${listing.dataset.buyLink}`}
   $("#chat-form").requestSubmit();
 });
 

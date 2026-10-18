@@ -166,7 +166,23 @@ NEWS_HEADLINE_MAX = 200
 NEWS_SUMMARY_MAX = 800
 NEWS_SOURCES_MAX = 8
 NEWS_STORIES_MAX = 10  # stories in a news brief
+NEWS_BODY_MAX = 1000  # each brief story's newsletter paragraph
 NEWS_TEXT_MAX = 300  # image_alt and each source's title, publisher and date
+
+
+IMAGE_HOSTS = (".media-amazon.com", ".ssl-images-amazon.com", ".bbystatic.com")
+
+
+def store_image(url: Any) -> str | None:
+    """A product photo, only from the stores' own image CDNs; the dashboard loads it."""
+    url = public_https(url)
+    if url is None or len(url) > 500:
+        return None
+    return url if (urlsplit(url).hostname or "").endswith(IMAGE_HOSTS) else None
+
+
+def safe_pick(pick: dict[str, Any]) -> dict[str, Any]:
+    return {**pick, "image": store_image(pick.get("image"))}
 
 
 def public_https(url: Any) -> str | None:
@@ -226,6 +242,11 @@ def safe_news(result: dict[str, Any]) -> dict[str, Any]:
                     "published_at": _text(story.get("published_at")),
                     "image_url": public_https(story.get("image_url")),
                     "coverage": story.get("coverage") if isinstance(story.get("coverage"), int) else 1,
+                    # The newsletter paragraph, written from the articles' full text.
+                    "body": _text(story.get("body"), NEWS_BODY_MAX) or "",
+                    "read_from": [
+                        name for name in (_text(n) for n in (story.get("read_from") or [])[:3]) if name
+                    ] if isinstance(story.get("read_from"), list) else [],
                 }
             )
     return {
@@ -233,7 +254,8 @@ def safe_news(result: dict[str, Any]) -> dict[str, Any]:
         "brief": bool(result.get("brief")),
         "stories": stories[:NEWS_STORIES_MAX],
         "headline": _text(result.get("headline"), NEWS_HEADLINE_MAX),
-        "summary": result["summary"][:NEWS_SUMMARY_MAX],
+        # A result without a summary is shown empty rather than failing the whole chat.
+        "summary": (result.get("summary") if isinstance(result.get("summary"), str) else "")[:NEWS_SUMMARY_MAX],
         "image_url": image_url,
         # Alt text and credit describe the image, so they go with it.
         "image_alt": _text(result.get("image_alt")) if image_url else None,
@@ -451,6 +473,25 @@ SHOPPING_WORDS = (
     r"|\bvs\b|\bversus\b|\bworth\b|\bbuy\b"
 )
 MEDIA_WORDS = r"\bsongs?\b|\bvideos?\b|\bplay\b|\bmusic\b|\blisten to\b"
+STRONG_MEDIA = r"\bsongs?\b|\bplay\b|\blisten to\b|\bmusic videos?\b"
+
+
+def media_ask(text: str) -> bool:
+    """A song or video request ("a song like the ...", "play Bad Guy"), not shopping."""
+    # "Play", "song" and "music video" are asks for media; bare "music" or "video" next to a
+    # shopping word ("is this music speaker good") is a product.
+    strong = re.search(STRONG_MEDIA, text, re.IGNORECASE)
+    shoppy = any(re.search(p, text, re.IGNORECASE) for p in KEYWORDS.values())
+    return bool(
+        re.search(r"youtube", text, re.IGNORECASE)
+        or (
+            re.search(MEDIA_WORDS, text, re.IGNORECASE)
+            and (strong or not shoppy)
+            and not re.search(SHOPPING_WORDS, text, re.IGNORECASE)
+            # "video doorbells under 100 dollars" is shopping with a budget.
+            and not re.search(r"\b(?:under|below|less than)\s*\$?\s*\d", text, re.IGNORECASE)
+        )
+    )
 # Requests that need all three agents with a budget go to the coordinator:
 # "consider X", "under $100", "like the X", "similar to X", "instead of X".
 COORDINATE = (
@@ -461,10 +502,18 @@ COORDINATE = (
     r"|\bmax(?:imum)?(?: of)?\s*(?:\$\s*\d|\d[\d,.]*\s*(?:dollars|usd|bucks)\b)"
     # "I'd like a ..." / "would like a ..." are wishes, not comparisons.
     r"|(?<!'d )(?<!would )\b(?:like|similar to|instead of|alternatives? to)\s+(?:the|my|a|an|this|that)\b"
+    # A store constraint: "smart watches on Amazon", "AirPods at Best Buy".
+    # "I'm on Best Buy" is where the user is shopping now, not a constraint.
+    r"|(?<!i'm )(?<!im )(?<!i am )(?<!i’m )"
+    r"\b(?:in|at|on|from)\s+(?:the\s+)?(?:amazon|best\s*buy|walmart|target)(?:\.com)?\b"
 )
 # Without an LLM, "Cheaper anywhere?" / "any alternatives?" also get the full
 # comparison; with one, the model routes them and keeps details like the store.
-COORDINATE_WITHOUT_LLM = r"\b(?:cheaper|alternatives?)\b"
+# Typos count ("alteranate", "alterntive"), and so do "better option"/"replacement for".
+COORDINATE_WITHOUT_LLM = (
+    r"\b(?:cheaper|alt[ae]r[an]+\w*|replacements?\s+(?:for|to)|substitutes?\s+(?:for|to)|"
+    r"competitors?\s+(?:to|of)|better\s+(?:option|choice|one|pick)s?)\b"
+)
 KEYWORDS = {
     TaskKind.PRICE: r"price|cheap|deal|cost|buy|sale|store|\$",
     TaskKind.ALTERNATIVES: r"alternative|instead|similar|other|cheaper|\bvs\b|versus|compare",
@@ -487,6 +536,28 @@ def rules_reply(calls: list[AgentCall]) -> ChatReply:
     return ChatReply(reply=reply, calls=calls, source="rules")
 
 
+CANCEL = r"(?:never\s*mind|nvm|cancel|stop|forget\s+it|no(?:\s+thanks)?|don'?t\s+send(?:\s+it)?)[.!]*"
+
+
+REQUEST_START = (
+    r"^\s*(?:hey\s+|ok\s+|please\s+|can\s+you\s+|could\s+you\s+)*(?:find|search|show|play|brief|"
+    r"summarize|consider|compare|add|put|get|give\s+me|tell\s+me|what'?s|what\s+is|what\s+are|"
+    r"are\s+there|is\s+there|look\s+up|any)\b"
+)
+
+
+def _other_request(text: str) -> bool:
+    """A request for another agent, not the text of a message being drafted. It must read
+    like a request and match an agent, so "Big news, I got the job!" stays a message."""
+    if not re.search(REQUEST_START, text, re.IGNORECASE):
+        return False
+    return any(
+        re.search(pattern, text, re.IGNORECASE)
+        for pattern in (NEWS_WORDS, CART_REQUEST, REVIEWS_REQUEST, COORDINATE, MEDIA_WORDS,
+                        r"\byoutube\b|\b(?:find|play)\s+(?:the\s+)?(?:song|video)\b")
+    )
+
+
 def _is_message_request(text: str) -> bool:
     # A capitalized name keeps "tell me about..." and "text scale" out of messaging.
     if re.search(r"\bimessage\b", text, re.IGNORECASE):
@@ -498,7 +569,27 @@ def _is_message_request(text: str) -> bool:
         re.IGNORECASE,
     )
     # "send a message to jonathan" is explicit in any case; a bare verb needs a Name.
-    return bool(verb and (verb[1] or verb[2][:1].isupper()))
+    if verb and (verb[1] or verb[2][:1].isupper()):
+        return True
+    # "Send jonathan a message "lol"", "shoot Alex a text saying ...": explicit too.
+    if re.match(
+        r"(?:(?:hey|hi|ok|okay|yo)[\s,!]+)?(?:please\s+|can you\s+|could you\s+)?"
+        r"(?:send|shoot|drop|write)\s+\S+\s+(?:an?\s+)?(?:quick\s+)?(?:i?message|text|msg|note)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return True
+    # A lowercase name is fine when the message itself follows: text jonathan "lol",
+    # tell jonathan that I'm late, message alex saying hi.
+    return bool(
+        verb
+        and verb[2].isalpha()
+        and re.match(
+            r"\s*(?:[\"“'‘]|that\b|saying\b|to\s+(?!me\b))",
+            text[verb.end():],
+            re.IGNORECASE,
+        )
+    )
 
 
 async def chat_with_rules(
@@ -517,9 +608,9 @@ async def chat_with_rules(
     ):
         args = ToolArgs(query=text[:300])
         return rules_reply([await call_agent(AgentKind.NEWS, args, config, http, emit)])
-    if youtube or (
-        not kinds and re.search(MEDIA_WORDS, text, re.IGNORECASE)
-    ):
+    # A song or video ask goes to YouTube even when a title word looks like shopping
+    # ("Play Bad Guy"); real shopping words keep "video doorbell reviews" a product.
+    if youtube or media_ask(text):
         # Media requests go to YouTube alone; "video doorbell reviews" stays shopping.
         media = (
             "video" if re.search(r"video", text, re.IGNORECASE)
@@ -664,9 +755,16 @@ async def chat(
     awaiting = asked and re.fullmatch(
         r"What would you like to say to (.{1,80})\?", asked.content.strip()
     )
-    if awaiting and not _is_message_request(text):
+    if awaiting and re.fullmatch(CANCEL, text.strip(), re.IGNORECASE):
+        return ChatReply(reply="OK, nothing will be sent.", calls=[], source="rules")
+    # Only a plain reply is the message; another request ("find the song...") runs normally.
+    if awaiting and not _is_message_request(text) and not _other_request(text):
         call = await prepare_message(f"text {awaiting[1]} {text}", config, http, emit)
         return rules_reply([call])
+    # A message ask goes to the messenger agent before any shopping rule sees it
+    # ("send Jonathan a message about the cheaper AirPods" is a message, not a search).
+    if _is_message_request(text) and not re.search(CART_REQUEST, text, re.IGNORECASE):
+        return rules_reply([await prepare_message(text, config, http, emit)])
     normalized = re.sub(r"[^a-z ]", "", text.lower()).replace("kart", "cart").strip()
     normalized = re.sub(r"\s+", " ", normalized)
     confirming = normalized in {
@@ -725,9 +823,12 @@ async def chat(
             calls=[],
             source="buyer",
         )
-    coordinate = re.search(COORDINATE, text, re.IGNORECASE) or (
-        not config.asi_one_api_key.get_secret_value()
-        and re.search(COORDINATE_WITHOUT_LLM, text, re.IGNORECASE)
+    coordinate = not media_ask(text) and (
+        re.search(COORDINATE, text, re.IGNORECASE)
+        or (
+            not config.asi_one_api_key.get_secret_value()
+            and re.search(COORDINATE_WITHOUT_LLM, text, re.IGNORECASE)
+        )
     )
     if coordinate or all(
         re.search(pattern, text, re.IGNORECASE) for pattern in (r"price", r"review", r"alternative")
@@ -741,7 +842,8 @@ async def chat(
                 ("alternatives", TaskKind.ALTERNATIVES),
                 ("alternative_reviews", TaskKind.REVIEWS),
             ):
-                if field == "alternative_reviews" and not data.get(field):
+                # A browse answer only has listings; agents that weren't asked show nothing.
+                if not data.get(field) and field not in data.get("errors", {}):
                     continue
                 payload = {"product": (data.get(field) or {}).get("product", data["product"])}
                 if kind == TaskKind.ALTERNATIVES:
@@ -762,7 +864,9 @@ async def chat(
                 reply=data["summary"],
                 calls=calls,
                 source="coordinator",
-                picks=[p for p in data.get("picks") or [] if isinstance(p, dict)],
+                picks=[safe_pick(p) for p in data.get("picks") or [] if isinstance(p, dict)],
+                product=str(data.get("product") or "")[:200] or None,
+                image=store_image(data.get("image")),
             )
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             return ChatReply(
