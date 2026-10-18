@@ -64,7 +64,8 @@
       "env": {
         "VITE_PORT": "5180",
         "ORCHESTRATOR_ALLOWED_ORIGINS": "http://localhost:5180,http://127.0.0.1:5180,http://172.26.73.253:5180",
-        "CONDENSE_PORT": "8797"
+        "CONDENSE_PORT": "8797",
+        "GATEWAY_DEV_TOKEN": "demo-all"
       },
       "port": 5180,
       "autoPort": false
