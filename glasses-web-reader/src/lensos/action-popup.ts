@@ -1,3 +1,4 @@
+import { CAPABILITIES, sessionCapability } from '../../shared/recommendations'
 import type { DisplayAction, DisplayState, Gesture } from './types'
 
 // Proposed session actions are offered on the one "Focal can help" strip (shared/
@@ -19,6 +20,12 @@ export function popupLabel(label: string) {
   return out
 }
 
+/** An action's name on the lens: the strip's catalog title ("Compare prices"), else its label. */
+export const actionTitle = (action: Pick<DisplayAction, 'action_id' | 'label' | 'status' | 'type'>) => {
+  const capability = sessionCapability(action)
+  return capability ? CAPABILITIES[capability].title : action.label
+}
+
 export interface PopupView { kind: 'result'; heading: string; items: { action_id: string; label: string }[] }
 export type PopupStep = { kind: 'render' } | { kind: 'close' } | { kind: 'review'; action_id: string } | { kind: 'none' }
 
@@ -28,7 +35,6 @@ export const popupAllowed = (s: Screen) =>
   s.page && !s.loading && !s.status && !s.recording && !s.card && ['reader', 'deck', 'manga'].includes(s.view)
 
 export class ActionPopup {
-  enabled = true
   /** Queued or on screen; null when there's nothing to show. */
   view: PopupView | null = null
   cursor = 0
@@ -45,11 +51,10 @@ export class ActionPopup {
       if (a.status === 'approved' || a.status === 'running') this.waiting.add(a.action_id)
       else if ((a.status === 'completed' || a.status === 'failed') && this.waiting.delete(a.action_id)) finished ??= a
     }
-    if (!this.enabled) return false
     if (finished) {
       // The result of an action approved on this page, while still on it.
       this.show({ kind: 'result', heading: finished.status === 'completed' ? 'Focal finished' : "Focal couldn't finish",
-        items: [{ action_id: finished.action_id, label: popupLabel(`View: ${finished.label}`) }] })
+        items: [{ action_id: finished.action_id, label: popupLabel(`View: ${actionTitle(finished)}`) }] })
       return true
     }
     return false
@@ -72,7 +77,6 @@ export class ActionPopup {
   dismiss() { this.view = null }
   /** An approval sent from this page: its result pops up even if it finishes between polls. */
   expect(actionId: string) { this.waiting.add(actionId) }
-  setEnabled(on: boolean) { this.enabled = on; if (!on) this.view = null }
   private show(view: PopupView) { this.view = view; this.cursor = 0 }
   private reset(pageId: string) {
     this.pageId = pageId; this.waiting.clear(); this.view = null; this.cursor = 0

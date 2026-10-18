@@ -97,7 +97,7 @@ test('a message draft shows Send / Re-record / Cancel and sends exactly the draf
   let now = 1000
   const card = new AgentCard(answer, true, () => now)
   assert.equal(card.fades, false)
-  assert.equal(card.footer(), 'Swipe: choose   Tap: confirm')
+  assert.equal(card.footer(), 'Swipe: choose | Tap: confirm | Double: cancel')
   assert.match(card.text, /\n> Send\n  Re-record\n  Cancel$/)
   // A tap right as the draft appears was meant for the screen before it.
   assert.equal(card.gesture('tap'), 'none')
@@ -117,7 +117,7 @@ test('a message draft shows Send / Re-record / Cancel and sends exactly the draf
   later = DRAFT_TAP_GRACE_MS
   assert.ok(long.pages.length > 1)
   assert.equal(paged.gesture('tap'), 'render')
-  assert.match(paged.footer(), /^2\/\d+   /)
+  assert.match(paged.footer(), /^2\/\d+  Tap: next \| Double: cancel$/)
   while (!/choose/.test(paged.footer())) paged.gesture('down')
   assert.match(paged.text, /^Message to J•••\n\n> Send/)
 })
@@ -163,7 +163,7 @@ test('answers page with swipes, close on tap, and only hands-free answers fade',
   const card = new AgentCard(answer, true)
   assert.equal(card.fades, true)
   assert.equal(new AgentCard(answer, false).fades, false)
-  assert.equal(card.footer(), '1/2   Swipe: more   Tap: close')
+  assert.equal(card.footer(), '1/2  Swipe: more | Tap: close')
   assert.equal(card.gesture('up'), 'none')
   assert.equal(card.gesture('down'), 'render')
   assert.equal(card.text, 'two')

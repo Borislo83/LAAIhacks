@@ -25,6 +25,7 @@ import { VoiceRecorder, WakeListener, concat } from './voice'
 import { BackendClient } from './lensos/client'
 import { BackendSession, type ActionGroup } from './lensos/session'
 import { apiActionCards } from './lensos/action-cards'
+import { guardGlyphs } from './lensos/glyphs'
 import { ActionPopup, POPUP_TAP_GRACE_MS, popupAllowed } from './lensos/action-popup'
 import { AgentCard, askAgents, compareSpec, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
@@ -50,7 +51,6 @@ const RECOMMENDATION_LAYOUT_KEY = 'webreader.v2.recommendationLayout'
 const SESSION_KEY = 'webreader.lensos.session'
 const HANDS_FREE_KEY = 'webreader.v1.handsFree'
 const RECOMMENDATIONS_KEY = 'webreader.v1.recommendations'
-const ACTION_POPUPS_KEY = 'webreader.v1.actionPopups'
 /** Must match the server's WAKE_NAME. Not "Hey Even": that wakes the system assistant. */
 const WAKE_PHRASE = 'Hey Search'
 /** The assistant's name on the glasses card and spinner. */
@@ -209,13 +209,17 @@ const backend = new BackendSession({
     }
     // Proposed actions join the one "Focal can help" strip; results pop up on their own.
     if (recommendationsOn) companion.sessionActions(doc && !loading ? doc : null, backend.state.display)
-    if (actionPopup.update(backend.state.display) && popupFree()) void showActionPopup()
-    else if (view === 'action-popup' && !actionPopup.view) void showContent()
+    if (actionPopup.update(backend.state.display)) {
+      // The session card on screen already shows the result: no popup after it closes.
+      if (view === 'actions' && actionGroup === 'session') actionPopup.dismiss()
+      else if (popupFree()) void showActionPopup()
+    } else if (view === 'action-popup' && !actionPopup.view) void showContent()
     companion.update()
   },
 })
 
-const bridge = await waitForEvenAppBridge()
+// Symbols the G2 font lacks would draw as blanks; every lens string is made safe here.
+const bridge = guardGlyphs(await waitForEvenAppBridge())
 
 // Every bridge call goes through one queue: concurrent render + storage calls
 // can drop the BLE link, and a single flaky hop can hang for ~30s.
@@ -229,6 +233,18 @@ function enqueue<T>(fn: () => Promise<T>, timeoutMs = 6000): Promise<T> {
   )
   chain = run.catch(err => console.error('[bridge]', err))
   return run
+}
+
+/**
+ * Rewrites one text container in place, for the layout of render `seq`. Skipped once a
+ * newer render has replaced that layout: the same container ID there belongs to another
+ * box (a deck footer would land in a strip cell, a strip cell in a card's hint).
+ */
+function upgradeText(seq: number, id: number, name: string, content: string) {
+  if (seq !== renderSeq) return Promise.resolve()
+  return enqueue(async () => {
+    if (seq === renderSeq) await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: name, content }))
+  })
 }
 
 const isManga = () => !!doc?.manga
@@ -269,7 +285,7 @@ function bodyText() {
 }
 
 function footerText() {
-  const mic = wake ? '◉ ' : ''
+  const mic = wake ? '● ' : ''
   if (doc) return pxTruncate(mic + doc.title, INNER_W)
   return mic + (status ? 'Web Reader' : 'Web Reader · waiting for a URL')
 }
@@ -284,7 +300,8 @@ if (created !== 0) console.error('createStartUpPageContainer failed:', created)
 function showContent() {
   if (loading && !status) return renderLoading()
   if (glassRecommendations && recommendationsOpen && !status) return renderGlassesRecommendations()
-  if (actionPopup.view && popupFree()) return showActionPopup()
+  // Whatever was on screen (menu, card, list) is being replaced by the page.
+  if (actionPopup.view && popupFree(true)) return showActionPopup()
   if (!status && doc && isManga()) return showStrip(mangaPage, mangaStrip)
   if (!status && doc && isDeck()) return renderDeck()
   return renderReader()
@@ -297,7 +314,7 @@ async function renderReader() {
 
 /** Body + footer text on the reader layout, shared by the reader and voice screens. */
 async function showText(body: string, footer: string) {
-  renderSeq++
+  const seq = ++renderSeq
   mirror = readerSpec(body, footer)
   companion.update()
   if (onScreen !== 'reader') {
@@ -310,12 +327,8 @@ async function showText(body: string, footer: string) {
     return
   }
   // In-place upgrades are flicker-free; the page doesn't redraw.
-  await enqueue(() =>
-    bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 1, containerName: 'body', content: body })),
-  )
-  await enqueue(() =>
-    bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 2, containerName: 'footer', content: footer })),
-  )
+  await upgradeText(seq, 1, 'body', body)
+  await upgradeText(seq, 2, 'footer', footer)
 }
 
 // Loading screen: capture layer (1), title (2), step (3), spinner image (4).
@@ -373,11 +386,14 @@ function spin() {
   mirror.images = [{ ...mirror.images[0], image }]
   companion.update()
   const t0 = performance.now()
-  enqueue(() =>
-    bridge.updateImageRawData(
+  const seq = renderSeq
+  enqueue(async () => {
+    // The loading screen may have been replaced while this frame waited in the queue.
+    if (seq !== renderSeq) return
+    await bridge.updateImageRawData(
       new ImageRawDataUpdate({ containerID: SPINNER_ID, containerName: `i${SPINNER_ID}`, imageData: base64ToBytes(image.png) }),
-    ),
-  )
+    )
+  })
     .then(() => {
       // Real-device frame time, printed by the dev server as [telemetry].
       spinTimes.push(Math.round(performance.now() - t0))
@@ -400,10 +416,8 @@ function loadingProgress(step: string, title?: string) {
   const spec = loadingSpec(loading.title, loading.host, loading.step, loading.frame)
   mirror = spec
   companion.update()
-  spec.texts.forEach((t, i) => {
-    const id = i + 2
-    void enqueue(() => bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: `t${id}`, content: t.text })))
-  })
+  const seq = renderSeq
+  spec.texts.forEach((t, i) => { void upgradeText(seq, i + 2, `t${i + 2}`, t.text).catch(console.error) })
 }
 
 function stopLoading() {
@@ -636,13 +650,12 @@ async function refreshDeck() {
   if (!sameBoxes) return
   mirror = spec
   companion.update()
+  const seq = renderSeq
   for (const [i, t] of spec.texts.entries()) {
     // Upgrading a scrolling box jumps it back to the top, so only changed text is sent.
     if (t.text === before.texts[i].text) continue
     const id = i + deckTextId
-    await enqueue(() =>
-      bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: `t${id}`, content: t.text || ' ' })),
-    )
+    await upgradeText(seq, id, `t${id}`, t.text || ' ')
   }
 }
 
@@ -960,8 +973,8 @@ function openMenu() {
   }
   if (bookmarks.length) items.push({ label: `Bookmarks (${bookmarks.length})`, run: openBookmarks })
   if (recent.length) items.push({ label: `Recent pages (${recent.length})`, run: openRecent })
-  if (backend.state.connected) items.push({ label: 'Agent ▸', run: openAgentMenu })
-  items.push({ label: 'Settings ▸', run: openSettings })
+  if (backend.state.connected) items.push({ label: 'Agent ▶', run: openAgentMenu })
+  items.push({ label: 'Settings ▶', run: openSettings })
   items.push({ label: 'Exit', run: () => void bridge.shutDownPageContainer(1) })
   renderList('menu', doc ? `Menu · ${doc.site}` : 'Menu', items).catch(console.error)
 }
@@ -1093,7 +1106,7 @@ const GREETING = 'Hey! What can I find for you?'
 function assistantSpec(card: string, status: string): PageSpec {
   return {
     texts: [
-      { x: 32, y: 14, w: 512, h: 36, text: `◉ ${ASSISTANT}`, pad: 4 },
+      { x: 32, y: 14, w: 512, h: 36, text: `● ${ASSISTANT}`, pad: 4 },
       { x: 32, y: 56, w: 512, h: 160, text: card, pad: 16, border: 2, color: 13, radius: 12 },
       { x: 32, y: 226, w: 512, h: 36, text: status, pad: 4 },
     ],
@@ -1124,10 +1137,8 @@ async function renderAssistant(card: string, status: string) {
     )
     return
   }
-  for (const id of [3, 4]) {
-    const content = spec.texts[id - 2].text || ' '
-    await enqueue(() => bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: `t${id}`, content })))
-  }
+  const seq = renderSeq
+  for (const id of [3, 4]) await upgradeText(seq, id, `t${id}`, spec.texts[id - 2].text || ' ')
 }
 
 /** Processing: the page-loading spinner, titled with the command, until the page opens. */
@@ -1653,7 +1664,6 @@ async function restore() {
     if (RECOMMENDATION_LAYOUTS.some(layout => layout.id === savedLayout)) recommendationLayout = savedLayout as RecommendationLayout
     if ((await enqueue(() => bridge.getLocalStorage(HANDS_FREE_KEY)).catch(() => '')) === '0') handsFree = false
     if ((await enqueue(() => bridge.getLocalStorage(RECOMMENDATIONS_KEY)).catch(() => '')) === '0') recommendationsOn = false
-    if ((await enqueue(() => bridge.getLocalStorage(ACTION_POPUPS_KEY)).catch(() => '')) === '0') actionPopup.setEnabled(false)
     void armWake()
     companion.update()
     // Deep link: index.html?open=<page> opens straight into a page.
@@ -1864,6 +1874,8 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
       if (!glassRecommendations || glassRecommendations.page.url !== doc?.url || cleanedUp) return
       recommendationsOpen = true
       recommendationIndex = 0
+      // A strip reopened from the menu offers its options again, not "Starting...".
+      recommendationSelected = false
       recommendationBase = undefined
       void renderGlassesRecommendations()
     },
@@ -1892,12 +1904,11 @@ async function renderGlassesRecommendations() {
   // Swiping only updates the small text panel; do not resend images over BLE.
   mirror = spec
   companion.update()
+  const seq = renderSeq
   for (const [index, box] of spec.texts.entries()) {
     if (previous.texts[index]?.text === box.text) continue
     const id = index + 2 // Full-screen capture is container 1.
-    await enqueue(() => bridge.textContainerUpgrade(new TextContainerUpgrade({
-      containerID: id, containerName: `t${id}`, content: box.text,
-    }))).catch(console.error)
+    await upgradeText(seq, id, `t${id}`, box.text).catch(console.error)
   }
 }
 
@@ -1938,11 +1949,12 @@ function openActions(group: ActionGroup, focus?: string) {
 }
 
 /** Only the page is on screen: no voice, answer card, menu, list, loading or other popup. */
-function popupFree() {
+function popupFree(returning = false) {
   // The "Focal can help" strip goes first; a result popup follows when it closes.
-  // A strip that just closed still has view === 'recommendations' while the page redraws.
+  // A strip that just closed still has view === 'recommendations' while the page redraws,
+  // and on the way back to the page (`returning`) the old screen is about to go.
   const shown = glassRecommendations && recommendationsOpen ? 'recommendations'
-    : view === 'action-popup' || view === 'recommendations' ? 'reader' : view
+    : returning || view === 'action-popup' || view === 'recommendations' ? 'reader' : view
   return popupAllowed({ view: shown, loading: !!loading, status: !!status,
     recording: !!recorder, card: !!agentCard, page: !!doc && backend.state.connected })
 }
@@ -1953,8 +1965,9 @@ async function showActionPopup() {
   const already = view === 'action-popup'
   // The page under the strip: the deck screen, or the reader text (a manga page gives way).
   const base = isDeck() ? currentSpec() : isManga() ? { texts: [], images: [] } : readerSpec(bodyText(), footerText())
-  const spec = glassesRecommendationSpec(base, popup.items.map(i => i.label), actionPopup.cursor, false, 'bottom',
-    { heading: popup.heading, close: 'Dismiss' })
+  const labels = actionPopup.labels()
+  const spec = glassesRecommendationSpec(base, labels.slice(0, -1), actionPopup.cursor, false, 'bottom',
+    { heading: popup.heading, close: labels.at(-1) })
   view = 'action-popup'
   // New contents restart the tap grace, so a tap meant for the old list can't pick from the new one.
   if (!already || actionPopupShown !== popup) { actionPopupShown = popup; actionPopupAt = Date.now() }
@@ -1963,12 +1976,11 @@ async function showActionPopup() {
   // Moving the cursor only rewrites the changed cells, like the recommendations strip.
   mirror = spec
   companion.update()
+  const seq = renderSeq
   for (const [index, box] of spec.texts.entries()) {
     if (previous.texts[index]?.text === box.text) continue
     const id = index + 2 // Full-screen capture is container 1.
-    await enqueue(() => bridge.textContainerUpgrade(new TextContainerUpgrade({
-      containerID: id, containerName: `t${id}`, content: box.text,
-    }))).catch(console.error)
+    await upgradeText(seq, id, `t${id}`, box.text).catch(console.error)
   }
 }
 
