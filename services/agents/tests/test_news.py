@@ -606,3 +606,113 @@ async def test_rest_route(world):
     assert isinstance(result, NewsResponse)
     assert result.headline == "Mars rover finds water"
     assert result.sources[0].url == "https://n.example/a"
+
+
+def test_site_name_page_titles_keep_the_search_headline():
+    from laai_agents.news import generic_text
+
+    assert generic_text("MSN", "https://www.msn.com/en-us/news/x", "MSN", "AI startups raise record funding")
+    assert generic_text("Yahoo Sports", "https://sports.yahoo.com/x", "Yahoo Sports", "UCLA tops Wisconsin at home")
+    assert not generic_text("AI startups raise record funding", "https://www.msn.com/x", "MSN", "AI startups")
+
+
+async def test_unreadable_shell_page_keeps_search_title(monkeypatch):
+    from laai_agents import news
+
+    shell = '<title>MSN</title><meta property="og:title" content="MSN"><meta property="og:description" content="MSN">'
+
+    async def fetch(url):
+        return shell
+
+    monkeypatch.setattr(news, "fetch_page", fetch)
+    hit = {"url": "https://www.msn.com/en-us/news/technology/ai-funding/ar-AA1", "title": "AI startups raise record funding",
+           "lead": "Investors poured money into AI startups this quarter.", "publisher": "MSN", "published_at": None}
+    article = await news.read_article(hit)
+    assert article["title"] == "AI startups raise record funding"
+    assert article["lead"] == "Investors poured money into AI startups this quarter."
+
+
+def test_newest_on_topic_story_leads():
+    from datetime import UTC, datetime
+
+    from laai_agents.news import rank
+
+    def art(title, lead, date, url):
+        return {"title": title, "lead": lead, "published_at": date, "url": url, "publisher": None}
+
+    preview = art("UCLA Bruins football seeks first win over Wisconsin since 1982",
+                  "The UCLA Bruins host Wisconsin.", "2026-10-16T12:00:00+00:00", "https://a.example/1")
+    recap = art("No. 12 UCLA tops Wisconsin in low-scoring showdown",
+                "UCLA Bruins beat Wisconsin on Saturday.", "2026-10-18T03:00:00+00:00", "https://b.example/2")
+    unrelated = art("Stock market closes higher", "Stocks rose.", "2026-10-18T05:00:00+00:00", "https://c.example/3")
+    ranked = rank([preview, recap, unrelated], "UCLA Bruins", now=datetime(2026, 10, 18, 12, tzinfo=UTC))
+    assert ranked[0] is recap
+
+
+def test_abbreviations_do_not_end_sentences():
+    from laai_agents.news import sentences
+
+    assert sentences("UCLA plays Wisconsin on Saturday, Oct. 18 at the Rose Bowl. No. 12 UCLA won.") == [
+        "UCLA plays Wisconsin on Saturday, Oct. 18 at the Rose Bowl.",
+        "No. 12 UCLA won.",
+    ]
+    assert len(sentences("The U.S. economy grew. Dr. Smith agreed.")) == 2
+
+
+GN_FEED = """<?xml version="1.0"?><rss><channel>
+<item><title>Boy and man killed after truck drives through youth soccer game in Wichita - NBC News</title>
+ <link>https://news.google.com/rss/articles/AAA</link><source url="https://www.nbcnews.com">NBC News</source>
+ <pubDate>Sun, 18 Oct 2026 00:09:00 GMT</pubDate><description>&lt;ol&gt;&lt;li&gt;a&lt;/li&gt;&lt;li&gt;b&lt;/li&gt;&lt;li&gt;c&lt;/li&gt;&lt;/ol&gt;</description></item>
+<item><title>Japan to launch Martian moon mission on Tuesday | NHK WORLD-JAPAN News - NHK</title>
+ <link>https://news.google.com/rss/articles/BBB</link><source url="https://nhk.or.jp">NHK</source>
+ <pubDate>Sat, 17 Oct 2026 21:39:00 GMT</pubDate><description></description></item>
+<item><title>Spam - Evil</title><link>https://evil.example/x</link><source>Evil</source>
+ <pubDate>Sat, 17 Oct 2026 21:39:00 GMT</pubDate></item>
+</channel></rss>"""
+
+
+def test_brief_requests_are_recognized_and_scoped():
+    assert news.brief_scope("Brief me on the news today.") == "all"
+    assert news.brief_scope("summarize to me everything that happened in United States yesterday") == "us"
+    assert news.brief_scope("what happened in the world today") == "world"
+    for topic in ("What's the latest on SpaceX Starship?", "news about the UCLA Bruins",
+                  "what happened in Ukraine yesterday", "headlines in AI today"):
+        assert news.brief_scope(topic) is None
+
+
+def test_google_news_feed_parsing():
+    items = news.parse_gnews(GN_FEED)
+    assert [i["publisher"] for i in items] == ["NBC News", "NHK"]  # off-site links dropped
+    assert items[0]["title"].startswith("Boy and man killed") and not items[0]["title"].endswith("NBC News")
+    assert items[0]["coverage"] == 3 and items[0]["published_at"].startswith("2026-10-18T00:09")
+    assert items[1]["title"] == "Japan to launch Martian moon mission on Tuesday"
+
+
+def test_feed_stories_are_balanced_and_not_repeated():
+    now = datetime(2026, 10, 18, 4, tzinfo=UTC)
+
+    def item(title, hours):
+        return {"title": title, "url": f"https://news.google.com/rss/articles/{abs(hash(title))}", "lead": "",
+                "publisher": "AP", "published_at": (now - timedelta(hours=hours)).isoformat(), "coverage": 5}
+
+    feeds = [
+        ("Top stories", [item("France protests turn violent as students join rallies", 3),
+                         item("No Kings rallies focus on getting out the vote", 4),
+                         item("Trump Russia waiver draws bipartisan backlash", 5)]),
+        ("U.S.", [item("No Kings rallies focus on getting out the vote nationwide", 4),
+                  item("Wichita youth soccer game crash kills two", 2)]),
+        ("Sports", [item("Ohio State quarterback out several weeks", 6),
+                    item("Old story from last month", 24 * 30)]),
+    ]
+    picked = news.pick_feed_stories(feeds, now, 36)
+    titles = [p["item"]["title"] for p in picked]
+    assert sum("No Kings" in t for t in titles) == 1  # one story, whichever section had it
+    assert "Wichita youth soccer game crash kills two" in titles
+    assert "Ohio State quarterback out several weeks" in titles
+    assert "Old story from last month" not in titles
+    assert sum(p["section"] == "Top stories" for p in picked) <= 3
+
+
+def test_story_summary_drops_snippet_age_prefix():
+    summary = news.story_summary({"lead": "3 hours ago · With midterm elections approaching, organizers urge people to vote early."})
+    assert summary == "With midterm elections approaching, organizers urge people to vote early."

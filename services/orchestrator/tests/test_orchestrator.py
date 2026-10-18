@@ -729,3 +729,31 @@ async def test_buyer_non_object_reply_is_an_agent_error():
     config = SimpleNamespace(agents_url="http://agents.test")
     call = await buyer_call({"product": "Sony XM5"}, config, Http())
     assert call.result is None and call.error == "Amazon cart agent unavailable"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Brief me on the news today.", "summarize to me everything that happened in United States yesterday",
+     "give me a rundown of current events"],
+)
+def test_general_news_requests_route_to_news(text):
+    import re
+
+    from laai_orchestrator.chat import NEWS_WORDS
+
+    assert re.search(NEWS_WORDS, text, re.IGNORECASE)
+
+
+def test_brief_stories_are_sanitized():
+    from laai_orchestrator.chat import safe_news
+
+    result = safe_news({
+        "summary": "News brief.", "brief": True, "headline": "News brief: Sunday",
+        "stories": [
+            {"section": "U.S.", "headline": "Real story", "summary": "Lead.", "url": "https://www.nbcnews.com/a",
+             "publisher": "NBC News", "image_url": "javascript:alert(1)", "coverage": 5},
+            {"section": "U.S.", "headline": "Bad link", "summary": "x", "url": "http://127.0.0.1/a"},
+        ],
+    })
+    assert result["brief"] is True and [s["headline"] for s in result["stories"]] == ["Real story"]
+    assert result["stories"][0]["image_url"] is None and result["stories"][0]["coverage"] == 5

@@ -33,6 +33,8 @@ Tools:
 - summarize_news: one headline, one image and a short sourced summary of recent news. Use it,
   not the shopping tools, for news, headlines, "what's happening with", "latest on" or
   "what happened" questions. Name the outlets it cites; never add facts it did not return.
+  For a general request with no topic ("brief me on the news", "everything that happened in
+  the US yesterday"), pass the user's words as the query: it returns a multi-story brief.
 - find_youtube: a YouTube link for a song or video. Use it, not the shopping tools, whenever the
   user wants to play, watch, listen to or find a song, music video or other video.
 - message_friend: drafts an iMessage for the user to review. It never sends; the user confirms
@@ -163,6 +165,7 @@ def safe_youtube(result: dict[str, Any]) -> dict[str, Any]:
 NEWS_HEADLINE_MAX = 200
 NEWS_SUMMARY_MAX = 800
 NEWS_SOURCES_MAX = 8
+NEWS_STORIES_MAX = 10  # stories in a news brief
 NEWS_TEXT_MAX = 300  # image_alt and each source's title, publisher and date
 
 
@@ -208,8 +211,27 @@ def safe_news(result: dict[str, Any]) -> dict[str, Any]:
                     "published_at": _text(source.get("published_at")),
                 }
             )
+    raw_stories = result.get("stories")
+    stories = []
+    for story in raw_stories if isinstance(raw_stories, list) else []:
+        url = public_https(story.get("url")) if isinstance(story, dict) else None
+        if url and isinstance(story.get("headline"), str):
+            stories.append(
+                {
+                    "section": _text(story.get("section")),
+                    "headline": _text(story.get("headline"), NEWS_HEADLINE_MAX),
+                    "summary": _text(story.get("summary"), NEWS_SUMMARY_MAX) or "",
+                    "url": url,
+                    "publisher": _text(story.get("publisher")),
+                    "published_at": _text(story.get("published_at")),
+                    "image_url": public_https(story.get("image_url")),
+                    "coverage": story.get("coverage") if isinstance(story.get("coverage"), int) else 1,
+                }
+            )
     return {
         **result,
+        "brief": bool(result.get("brief")),
+        "stories": stories[:NEWS_STORIES_MAX],
         "headline": _text(result.get("headline"), NEWS_HEADLINE_MAX),
         "summary": result["summary"][:NEWS_SUMMARY_MAX],
         "image_url": image_url,
@@ -419,6 +441,9 @@ NEWS_WORDS = (
     r"\bnews\b|\bheadlines?\b|\bwhat(?:'|’)?s (?:happening|going on) (?:with|in)\b"
     r"|\bwhat is (?:happening|going on) (?:with|in)\b"
     r"|\blatest (?:on|about|with)\b|\bwhat happened\b"
+    # General briefs: "brief me", "everything that happened yesterday", "current events".
+    r"|\bbrief(?:ing)?\s+me\b|\bnews\s+brief\b|\brundown\b|\bcurrent\s+events\b"
+    r"|\beverything\s+(?:that\s+)?happened\b|\btop\s+(?:stories|headlines)\b"
 )
 # A news word does not win over a clear shopping question ("latest on iPhone prices").
 SHOPPING_WORDS = (
