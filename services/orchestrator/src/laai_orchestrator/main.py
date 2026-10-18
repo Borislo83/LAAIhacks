@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .chat import buyer_call, call_agent, chat
-from .config import DEMO_TOKENS, LOOPBACK_CLIENTS, Config
+from .config import DEMO_TOKENS, LOOPBACK_CLIENTS, PROXY_HEADERS, Config
 from .models import (
     BuyerPreparation,
     ChatReply,
@@ -42,7 +42,8 @@ async def current_user(
     if config.demo_auth_mode and credentials.credentials in DEMO_TOKENS:
         # Proxied requests carry forwarding headers; never trust fixtures through them.
         local = request.client and request.client.host in LOOPBACK_CLIENTS
-        if not local or "x-forwarded-for" in request.headers or "forwarded" in request.headers:
+        proxied = PROXY_HEADERS.intersection(request.headers.keys())
+        if not local or proxied:
             raise HTTPException(401, "Demo tokens are accepted only from this machine")
         request.state.actor_roles = set(DEMO_TOKENS[credentials.credentials])
         return config.demo_user_id

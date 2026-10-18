@@ -39,3 +39,5 @@ DEMO_TOKENS = {
     "demo-all": {"web", "g2", "agent", "executor"},
 }
 LOOPBACK_CLIENTS = {"127.0.0.1", "::1", "localhost"}
+# Local tunnels and proxies (ngrok, Cloudflare, nginx) connect from loopback but add these.
+PROXY_HEADERS = {"x-forwarded-for", "forwarded", "x-real-ip", "cf-connecting-ip"}
