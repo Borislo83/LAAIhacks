@@ -1,15 +1,15 @@
 """Focal coordinator: actual typed messages to three specialist uAgents."""
 
 import asyncio
-import os
 import re
 import time
+from collections import defaultdict
+from collections.abc import Awaitable, Callable
 
 from uagents import Context
 
 from . import catalog, llm
-from .agents import make_agent
-from .chat import build_chat_protocol
+from .agents import COORDINATOR_SEED, make_agent
 from .models import (
     AlternativesRequest,
     AlternativesResponse,
@@ -21,6 +21,9 @@ from .models import (
     ReviewsResponse,
 )
 from .progress import ProgressBatch, ProgressQuery, publish, read
+from .verifier import VerifyRequest, VerifyResponse
+
+VERIFIER = "focal-price-verifier"
 
 ATTEMPTS = 3
 RETRY_DELAY = 1.0
@@ -65,8 +68,15 @@ def compare_reviews(main: ReviewsResponse, alt: ReviewsResponse) -> str:
     return f"Reviews compared: {line(main)} vs {line(alt)}.{verdict}"
 
 
+# Called with each finished step so a chat can narrate the orchestration live.
+Update = Callable[[str, object, int], Awaitable[None]]
+
+
 async def consider(
-    ctx: Context, addresses: dict[str, str], req: ConsiderRequest
+    ctx: Context,
+    addresses: dict[str, str],
+    req: ConsiderRequest,
+    on_update: Update | None = None,
 ) -> ConsiderResponse:
     specs = [
         (
@@ -93,8 +103,16 @@ async def consider(
         ),
     ]
 
+    # uAgents matches a reply by (sender, destination, session), so two requests in
+    # flight to the same specialist would steal each other's answer. One at a time each.
+    locks = defaultdict(asyncio.Lock)
+
     async def delegate(spec):
         field, name, request, response_type = spec
+        async with locks[name]:
+            return await _delegate(field, name, request, response_type)
+
+    async def _delegate(field, name, request, response_type):
         started = time.perf_counter()
         publish(
             req.progress_id, field, "delegated", "Coordinator sent work to specialist"
@@ -123,7 +141,10 @@ async def consider(
             if isinstance(answer, response_type):
                 result = answer
                 break
-        return field, result, round((time.perf_counter() - started) * 1000)
+        elapsed = round((time.perf_counter() - started) * 1000)
+        if on_update:
+            await on_update(field, result, elapsed)
+        return field, result, elapsed
 
     async def alternatives_then_reviews():
         # Reviews for the top alternative start as soon as alternatives are known.
@@ -144,18 +165,55 @@ async def consider(
     *direct, chained = await asyncio.gather(
         delegate(specs[0]), delegate(specs[1]), alternatives_then_reviews()
     )
+    finished = [*direct, *chained]
+    price = direct[0][1]
+    if price is not None and VERIFIER in addresses:
+        audit = await delegate(
+            (
+                "verification",
+                VERIFIER,
+                VerifyRequest(price=price, max_price=req.max_price),
+                VerifyResponse,
+            )
+        )
+        if audit[1] is not None and audit[1].needs_retry and not price.error:
+            # Recovery: nothing trustworthy survived, so ask for a deeper store search.
+            retried = await delegate(
+                (
+                    "price_retry",
+                    "laai-price-compare",
+                    PriceCompareRequest(
+                        product=req.product, progress_id=req.progress_id, deep=True
+                    ),
+                    PriceCompareResponse,
+                )
+            )
+            if retried[1] is not None and not retried[1].error:
+                direct[0] = ("price", retried[1], direct[0][2] + retried[2])
+                audit = await delegate(
+                    (
+                        "verification",
+                        VERIFIER,
+                        VerifyRequest(price=retried[1], max_price=req.max_price),
+                        VerifyResponse,
+                    )
+                )
+        finished = [*direct, *chained, audit]
     values, errors, timings = {}, {}, {}
-    for field, result, elapsed in [*direct, *chained]:
+    for field, result, elapsed in finished:
         timings[field] = elapsed
         if result is None:
             errors[field] = "Specialist unavailable; no result was fabricated."
         else:
             values[field] = result
-            if result.error:
+            if getattr(result, "error", None):
                 errors[field] = result.error
+    verification = values.pop("verification", None)
     sections = [
         result.summary for field, result in values.items() if field != "alternative_reviews"
     ]
+    if verification is not None:
+        sections.append(verification.summary)
     if "reviews" in values and "alternative_reviews" in values:
         sections.append(compare_reviews(values["reviews"], values["alternative_reviews"]))
     sections.extend(f"{field}: {error}" for field, error in errors.items())
@@ -169,28 +227,13 @@ async def consider(
         errors=errors,
         timings_ms=timings,
         summary="\n\n".join(sections),
+        verification=verification.model_dump() if verification else None,
         **values,
     )
 
 
 def build_coordinator(addresses: dict[str, str]):
-    agent = make_agent(
-        "focal-shopping-assistant",
-        os.getenv("COORDINATOR_AGENT_SEED", "laai coordinator dev seed"),
-    )
-
-    async def answer(ctx: Context, text: str) -> str:
-        req = await parse_request(text)
-        if req is None:
-            return "Which product should I consider? Include its name and optional budget."
-        result = await consider(ctx, addresses, req)
-        reply = result.summary
-        for section in (result.price, result.reviews, result.alternatives):
-            if section:
-                reply += "\n" + "\n".join(
-                    f"{s.title}: {s.url}" for s in section.sources[:3]
-                )
-        return reply
+    agent = make_agent("focal-shopping-assistant", COORDINATOR_SEED)
 
     @agent.on_rest_post("/consider", ConsiderRequest, ConsiderResponse)
     async def on_rest(ctx: Context, req: ConsiderRequest) -> ConsiderResponse:
@@ -211,5 +254,10 @@ def build_coordinator(addresses: dict[str, str]):
     async def progress(ctx: Context, req: ProgressQuery) -> ProgressBatch:
         return ProgressBatch(events=read(req.progress_id, req.after))
 
-    agent.include(build_chat_protocol(answer, extract_product=False), publish_manifest=True)
+    # ASI:One gets the full narrated flow with Interactive Cards and the Payment Protocol.
+    from .asi_flow import add_watch_loop, build_asi_protocols
+
+    for protocol in build_asi_protocols(addresses):
+        agent.include(protocol, publish_manifest=True)
+    add_watch_loop(agent, addresses)
     return agent

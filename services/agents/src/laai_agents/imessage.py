@@ -87,6 +87,13 @@ class MessageSendResponse(Model):
     dry_run: bool = False
 
 
+class MessageApproval(Model):
+    """Agent-to-agent send approval; accepted only from the coordinator."""
+
+    draft_id: str = Field(min_length=32, max_length=64)
+    text: str = Field(min_length=1, max_length=1000)
+
+
 class DryRunLogRequest(Model):
     executor_token: SecretStr = SecretStr("")
 

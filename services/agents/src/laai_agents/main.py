@@ -22,6 +22,8 @@ from .agents import (
     build_youtube_agent,
 )
 from .buyer import build_buyer_agent
+from .memory import build_memory_agent
+from .verifier import build_verifier_agent
 
 BUILDERS = {
     "price": build_price_agent,
@@ -31,6 +33,8 @@ BUILDERS = {
     "messenger": build_messenger_agent,
     "news": build_news_agent,
     "buyer": build_buyer_agent,
+    "verifier": build_verifier_agent,
+    "memory": build_memory_agent,
 }
 
 
