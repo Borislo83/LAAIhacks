@@ -22,10 +22,15 @@ nav.top .links{display:flex;gap:28px;font:12px var(--mono);color:var(--muted)}
 .replay{font:12px var(--mono);background:none;border:1px solid var(--hair);border-radius:var(--r);padding:9px 12px;cursor:pointer;color:var(--ink)}
 .replay:hover{border-color:var(--ink)}
 nav.top .cta{display:flex;gap:16px;align-items:center;font-size:14px;color:var(--muted)}
-h1{font:400 clamp(56px,8vw,118px)/.95 var(--serif);letter-spacing:-.02em}
+h1{font:400 clamp(46px,5.4vw,80px)/1 var(--serif);letter-spacing:-.015em}
 h2{font:400 clamp(34px,4vw,52px)/1.02 var(--serif);letter-spacing:-.01em}
 h2 em{color:var(--muted)}
-.lede{font-size:17px;line-height:1.55;color:var(--body);max-width:34ch}
+.lede{font-size:17px;line-height:1.55;color:var(--body);max-width:40ch}
+.copy{display:flex;flex-direction:column;gap:0}
+.copy .kicker{margin-bottom:22px}
+.copy h1{margin-bottom:18px}
+.copy .tagline{margin-bottom:14px}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .kicker{display:flex;gap:10px;align-items:center;font:12px var(--mono);color:var(--muted)}
 .note{font:12px var(--mono);color:var(--muted)}
 section{padding:72px 0;border-top:1px solid var(--hair)}
@@ -47,7 +52,8 @@ svg .gaze{opacity:0;transition:opacity .3s}
 svg .gaze.on{opacity:1}
 
 /* ---------- anatomy stage ---------- */
-.e2-hero{padding:64px 0 24px;display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:end}
+.e2-hero{padding:72px 0 40px;display:grid;grid-template-columns:1fr auto;gap:32px 48px;align-items:end}
+.caption{margin-top:8px}
 .e2-stage{position:relative;margin-top:24px}
 [data-glasses]>svg{width:100%;height:auto;display:block}
 .pin{position:absolute;display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--hair);border-radius:var(--r);padding:5px 12px 5px 5px;font:12px var(--mono);transform:translate(-50%,-50%);transition:border-color .3s,color .3s;color:var(--muted)}
@@ -58,8 +64,7 @@ svg .gaze.on{opacity:1}
 .strip .cell{background:var(--lens-bg);border:1px solid var(--hair);border-radius:var(--r);padding:22px;color:var(--ink);display:flex;flex-direction:column;gap:18px}
 .strip .cell p{font-size:13px;color:var(--muted);margin-top:4px}
 .strip .cell .m{font-family:var(--mono);font-size:11px;color:var(--lens)}
-.sec-head{display:flex;justify-content:space-between;align-items:end;gap:24px;flex-wrap:wrap}
-.sec-head .note{max-width:36ch;text-align:right}
+.sec-head{display:flex;flex-direction:column;gap:14px}
 
 @media (max-width:1180px){
   .e2-hero,.e2-foot{grid-template-columns:1fr}
@@ -71,7 +76,6 @@ svg .gaze.on{opacity:1}
   nav.top .cta>span{display:none}
   .strip,.seq{grid-template-columns:1fr}
   .counter .n{font-size:88px}
-  .sec-head .note{text-align:left}
   section{padding:56px 0}
 }
 </style>
@@ -81,15 +85,15 @@ svg .gaze.on{opacity:1}
 <main id="e2"><div class="wrap">
   <nav class="top"><div class="logo" data-logo></div><div class="links"><span>Agents</span><span>Lens</span><span>How it works</span></div><div class="cta"><span>Sign in</span><button class="btn dark">Open Studio</button></div></nav>
   <div class="e2-hero">
-    <div style="display:flex;flex-direction:column;gap:24px">
+    <div class="copy">
       <div class="kicker"><span data-orb="2" data-size="20"></span>Smart glasses with agents that act on what you see</div>
-      <h1>Look once.<br>See it <em>clearly.</em></h1>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:20px;align-items:flex-start">
+      <h1>Look once.</h1>
+      <p class="tagline">See it clearly.</p>
       <p class="lede">Every part of Focal has one job. Your eyes pick the page, the orchestrator reads your intent, and one agent answers on the lens in under a second.</p>
-      <div style="display:flex;gap:10px;align-items:center"><button class="btn dark">Pair your G2</button><button class="replay" data-replay="e2">Replay the glance</button></div>
     </div>
+    <div class="actions"><button class="btn dark">Pair your G2</button><button class="replay" data-replay="e2">Replay the glance</button></div>
   </div>
+  <p class="caption">Example case: researching a product</p>
   <div class="e2-stage" id="e2-stage"><div data-glasses="e2"></div></div>
   <div class="e2-foot">
     <div class="seq" data-seq="e2"></div>
@@ -99,7 +103,7 @@ svg .gaze.on{opacity:1}
     </div>
   </div>
   <section style="margin-top:72px">
-    <div class="sec-head"><h2>Agents, <em>thinking</em></h2><span class="note">Each agent has its own iris, so you can tell who's working at a glance</span></div>
+    <div class="sec-head"><h2>Agents, thinking</h2><p class="tagline">Each agent has its own iris, so you can tell who's working at a glance.</p></div>
     <div class="strip" data-strip></div>
   </section>
 </div></main>
