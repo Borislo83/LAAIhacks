@@ -61,6 +61,10 @@ const server = await createServer({ configFile: false, root: fileURLToPath(new U
         const action = actions.find(a => path.includes(a.action_id))
         if (!action) return send({ error: 'No action' }, 404)
         action.status = path.endsWith('/approve') ? 'approved' : 'rejected'; revision++
+        // An approved action finishes a moment later, like a real agent run.
+        if (action.status === 'approved') setTimeout(() => {
+          action.status = 'completed'; action.result = { message: 'Fixture: best offer $89 at Example Store.' }; revision++
+        }, 3000)
         return send({ action_id: action.action_id, status: action.status, event_id: action.status === 'approved' ? 'event-fixture' : null })
       }
       send({ error: 'Unknown fixture route' }, 404)
