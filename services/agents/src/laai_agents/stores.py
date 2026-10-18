@@ -253,9 +253,11 @@ def amazon_search_url(query: str, max_price: float | None = None) -> str:
 def parse_amazon_results(page: str, max_price: float | None = None) -> list[Offer]:
     from lxml import html
 
+    from .merchants import MALFORMED
+
     try:
         doc = html.fromstring(page)
-    except ValueError:
+    except MALFORMED:
         return []
     offers, seen = [], set()
     for card in doc.xpath('//div[@data-component-type="s-search-result"]'):

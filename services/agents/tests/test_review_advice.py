@@ -123,3 +123,38 @@ def test_close_spellings_match_but_model_numbers_do_not():
     assert names_product("Garmin Forerunner 265 review", "Garmin Forerunning")
     assert not matches_product("Sony WH-1000XM6 Headphones", "Sony WH-1000XM5")
     assert not matches_product("Garmin Fenix 8", "Garmin Forerunning")
+
+
+def test_accessories_are_not_the_product():
+    from laai_agents.merchants import is_accessory
+
+    assert is_accessory("ESR for AirPods Pro 2 Case, Compatible with MagSafe, Black", "Apple AirPods Pro 2")
+    assert is_accessory("Band Compatible with Garmin Forerunner 55, Silicone", "Garmin Forerunner 55")
+    assert is_accessory("Case for AirPods Pro 2", "earbuds")
+    assert not is_accessory("Apple AirPods Pro 2 Wireless Earbuds, Active Noise Cancellation", "Apple AirPods Pro 2")
+    assert not is_accessory("Wireless Earbuds for iPhone with Charging Case, 40H Playtime", "earbuds")
+    assert not is_accessory("Garmin Forerunner 55, GPS Running Watch", "Garmin Forerunner 55")
+
+
+def test_headline_titles_are_not_products():
+    from laai_agents.live import versus_titles
+    from laai_agents.models import Source
+
+    titles = [
+        "Battle of the Buds: Galaxy Buds2 vs Pixel Buds Pro",
+        "Galaxy Buds2 vs Galaxy Buds2 Pro: which should you buy?",
+        "Samsung Galaxy Buds2 vs Nothing Ear (a) review",
+    ]
+    sources = [Source(title=t, url=f"https://example.com/{i}") for i, t in enumerate(titles)]
+    canonical, rivals = versus_titles(sources, "Galaxy Buds2")
+    names = [r for r, _ in rivals]
+    assert "Battle of the Buds" not in names and "Pixel Buds Pro" in names
+
+
+def test_a_model_number_inside_the_name_is_another_product():
+    from laai_agents.live import matches_product
+
+    assert not matches_product("Samsung Galaxy Buds 3 Pro AI True Wireless Earbuds", "Galaxy Buds Pro")
+    assert not matches_product("Samsung Galaxy Buds3 Pro (2024, ANC)", "Galaxy Buds Pro")
+    assert matches_product("Samsung Galaxy Buds Pro True Wireless Earbuds", "Galaxy Buds Pro")
+    assert matches_product("Garmin Forerunner 55, GPS Running Watch", "Garmin Forerunning")

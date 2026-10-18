@@ -109,9 +109,22 @@ def _name_words(product: str) -> tuple[frozenset[str], ...]:
 
 def matches_product(title: str, product: str) -> bool:
     tokens = set(re.findall(r"[a-z0-9]+", title.lower()))
+    if _model_inside(title, product):
+        return False
     return any(
         words <= tokens or all(has_word(w, tokens) for w in words) for words in _name_words(product)
     )
+
+
+def _model_inside(title: str, product: str) -> bool:
+    """A model number inside the name is another product: "Galaxy Buds 3 Pro" is not the
+    "Galaxy Buds Pro". A number after the name ("Forerunner 55") still matches."""
+    words = re.findall(r"[a-z0-9]+", product.lower())
+    low = title.lower()
+    for a, b in zip(words, words[1:]):
+        if a.isalpha() and b.isalpha() and re.search(rf"\b{a}\s*\d+[a-z]*\s+{b}\b", low):
+            return True
+    return False
 
 
 async def _candidates(sources, name):
@@ -138,7 +151,7 @@ STORE_SOURCES = {"bestbuy_api", "serpapi_amazon", "serpapi_shopping", "amazon_se
 
 async def store_listings(name: str, budget: float | None = None):
     """Official store listings for `name` within budget, cheapest first."""
-    from .merchants import WRONG_ITEM
+    from .merchants import is_accessory
     from .stores import store_offers
 
     offers = await store_offers(name, budget)
@@ -147,7 +160,7 @@ async def store_listings(name: str, budget: float | None = None):
     keep = [
         o
         for o in offers
-        if not WRONG_ITEM.search(o.product) and (not specific or matches_product(o.product, name))
+        if not is_accessory(o.product, name) and (not specific or matches_product(o.product, name))
     ]
     if keep:
         report("store_listings", f"Found {len(keep)} store listings from official sources")
@@ -166,7 +179,7 @@ def _popularity(offer) -> float:
 
 async def browse(req):
     """What a store lists in a category within budget: "smart watches under $50 at Amazon"."""
-    from .merchants import WRONG_ITEM
+    from .merchants import is_accessory
     from .models import Source
     from .stores import amazon_search, amazon_search_url, bestbuy_search
 
@@ -193,7 +206,7 @@ async def browse(req):
     found = [o for group in await asyncio.gather(*searches) for o in group]
     offers = [
         o for o in found
-        if not WRONG_ITEM.search(o.product) and (budget is None or o.price < budget)
+        if not is_accessory(o.product, category) and (budget is None or o.price < budget)
     ]  # fmt: skip
     offers.sort(key=_popularity, reverse=True)
     offers = offers[:8]
@@ -307,7 +320,7 @@ async def compare(req):
 
 async def store_alternatives(name, known, max_price):
     """Other brands in the same category from store listings, best rated first."""
-    from .merchants import WRONG_ITEM
+    from .merchants import is_accessory
     from .stores import has_store_keys, store_offers
 
     if not has_store_keys():
@@ -320,7 +333,7 @@ async def store_alternatives(name, known, max_price):
     picked = [
         o
         for o in offers
-        if not WRONG_ITEM.search(o.product)
+        if not is_accessory(o.product, query)
         and brand not in o.product.lower()
         and not matches_product(o.product, name)
     ]
@@ -443,6 +456,15 @@ HEADLINE_CLUTTER = re.compile(
 )
 
 
+# Product names don't read like sentences: "Battle of the Buds", "Best Earbuds for Running"
+# and "How to Choose" are headlines, not products.
+HEADLINE_WORDS = re.compile(
+    r"\b(?:of|the|for|and|with|to|my|your|our|how|why|what|when|top|battle|showdown|"
+    r"face[- ]?off|ultimate|budget|cheap|vs)\b",
+    re.IGNORECASE,
+)
+
+
 def _same_product(a: str, b: str) -> bool:
     from difflib import SequenceMatcher
 
@@ -468,10 +490,16 @@ def versus_titles(sources, name: str) -> tuple[str | None, list[tuple[str, int]]
         title = " ".join(source.title.split())
         if not VERSUS.search(title):
             continue
-        for part in VERSUS.split(title):
-            part = re.split(r"\s*[:|–—?(,]\s*|\s+-\s+", part)[0]
+        sides = VERSUS.split(title)
+        for i, part in enumerate(sides):
+            # The product is the piece touching "vs": "Battle of the Buds: Galaxy Buds2 vs
+            # Pixel Buds" names Galaxy Buds2 last on the left and Pixel Buds first on the right.
+            pieces = re.split(r"\s*[:|–—?(,]\s*|\s+-\s+", part)
+            part = pieces[-1] if i < len(sides) - 1 else pieces[0]
             part = HEADLINE_CLUTTER.sub("", part).strip(" .-'\"")
             if not 2 <= len(part.split()) <= 6 or not re.search(r"[A-Za-z]", part):
+                continue
+            if HEADLINE_WORDS.search(part):
                 continue
             key = re.sub(r"[^a-z0-9]", "", part.lower())
             entry = counts.setdefault(key, [part, 0])

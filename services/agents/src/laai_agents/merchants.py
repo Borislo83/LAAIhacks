@@ -59,6 +59,40 @@ WRONG_ITEM = re.compile(
     r"charger|cable|adapter|refurbished|renewed|pre-?owned",
     re.IGNORECASE,
 )
+ACCESSORY = re.compile(
+    r"\b(?:screen\s+protectors?|protectors?|keychains?|stickers?|decals?|straps?|lanyards?|"
+    r"skins?|sleeves?|pouch(?:es)?)\b",
+    re.IGNORECASE,
+)
+
+
+def is_accessory(title: str, product: str) -> bool:
+    """A listing made *for* the product ("ESR Case for AirPods Pro 2", "Band compatible
+    with Forerunner 55"), not the product. "Earbuds with charging case" is the product."""
+    if WRONG_ITEM.search(title) or ACCESSORY.search(title):
+        return True
+    # "Case for AirPods", "Band compatible with Galaxy Watch", "for AirPods Pro 2 Case".
+    if not re.search(r"charging\s+case", title, re.IGNORECASE) and re.search(
+        r"\b(?:cases?|bands?|covers?|stands?|holders?|docks?|mounts?|tips|hooks?)\b.{0,40}"
+        r"\b(?:for|compatible\s+with)\b|\b(?:for|compatible\s+with)\b.{0,40}\b(?:cases?|bands?)\b",
+        title,
+        re.IGNORECASE,
+    ):
+        return True
+    from .live import GENERIC_WORDS
+
+    words = [w for w in re.findall(r"[a-z0-9]+", product.lower()) if w not in GENERIC_WORDS]
+    for word in words[:3]:
+        if re.search(
+            rf"\b(?:for|compatible\s+with|fits|designed\s+for|made\s+for)\s+"
+            rf"(?:[\w-]+\s+){{0,2}}{re.escape(word)}\b",
+            title,
+            re.IGNORECASE,
+        ):
+            return True
+    return False
+
+
 DOLLARS = re.compile(r"(?<![\w$])\$\s?(\d{1,3}(?:,\d{3})+|\d+)(\.\d{2})?")
 INSTALLMENT = re.compile(r"\s*(?:/|per\s+|a\s+)\s*mo(?:nth)?\b", re.IGNORECASE)
 # "$35 orders", "save $50", "under $300": thresholds, discounts and budgets, not prices.
@@ -178,7 +212,7 @@ def parse_offers(page: str, url: str, product: str) -> list[Offer]:
             continue
         for node in nodes:
             name = str(node.get("name", ""))
-            if not matches_product(name, product) or WRONG_ITEM.search(name):
+            if not matches_product(name, product) or is_accessory(name, product):
                 continue
             offers = node.get("offers", [])
             for offer in [offers] if isinstance(offers, dict) else offers:
@@ -191,7 +225,7 @@ def parse_offers(page: str, url: str, product: str) -> list[Offer]:
     title = " ".join(
         doc.xpath('//meta[@property="og:title"]/@content') + doc.xpath("//title/text()")
     )
-    if not matches_product(title, product) or WRONG_ITEM.search(title):
+    if not matches_product(title, product) or is_accessory(title, product):
         return []
     currency = doc.xpath(
         '//meta[@property="product:price:currency" or @property="og:price:currency"]'

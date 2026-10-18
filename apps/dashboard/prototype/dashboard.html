@@ -758,7 +758,9 @@ function picksCard(picks){
       ?`<a class="cartbtn" href="${esc(p.cart_url)}" target="_blank" rel="noopener noreferrer">${cart[1]}</a>`
       :link?`<a class="viewbtn" href="${esc(link)}" target="_blank" rel="noopener noreferrer">View at ${esc(storeName(p.store))} ↗</a>`:"";
     const img=/^https:\/\//.test(p.image||"")?`<img class="pimg" src="${esc(p.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:"";
-    return `<div class="pick">${img}<span class="plabel">${esc(p.label)}</span><b>${esc(p.product)}</b>
+    // Store titles run long; the tile shows the name (before the first comma), the full title on hover.
+    const short=String(p.product).split(/,|\s[-–|]\s/)[0].trim();
+    return `<div class="pick">${img}<span class="plabel">${esc(p.label)}</span><b title="${esc(p.product)}">${esc(short)}</b>
       <span class="pmeta">${p.price!=null?`<span class="pprice">${money(p.price)}</span>`:"price not shown"}${p.rating!=null?` · ${Number(p.rating).toFixed(1)}★`:""} · ${esc(storeName(p.store))}</span>
       <small>${esc(p.reason||"")}</small>${action}</div>`}).join("");
   return `<div class="picks">${tiles}</div>`;
