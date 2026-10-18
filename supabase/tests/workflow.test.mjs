@@ -9,7 +9,8 @@ test('shared session contract persists approvals, outbox, results and retries',a
  await db.exec(`create role anon; create role authenticated; create role service_role bypassrls;
  create schema auth; create table auth.users(id uuid primary key);
  grant usage on schema public,auth to anon,authenticated,service_role;`);
- await db.exec(await readFile(new URL('../migrations/202610170002_shared_workflow.sql',import.meta.url),'utf8'));
+ // Production state is 002 followed by 004; 004 replaces the workflow entry point.
+ for(const name of ['202610170002_shared_workflow.sql','202610170004_workflow_v1_1.sql'])await db.exec(await readFile(new URL('../migrations/'+name,import.meta.url),'utf8'));
  await db.query('insert into auth.users values ($1),($2)',[alice,bob]);
  await db.exec('set role service_role');
  const rpc=async(op,sid=null,p={},user=alice)=>(await db.query('select public.laai_workflow($1,$2,$3,$4) value',[user,op,sid,JSON.stringify(p)])).rows[0].value;

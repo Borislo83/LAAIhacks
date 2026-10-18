@@ -133,3 +133,95 @@ def test_action_and_url_validation_prevents_unapproved_operations():
             == 422
         )
         assert calls == []
+
+
+def test_executor_acknowledges_events_and_g2_registers_devices():
+    event_id, device_id = str(uuid4()), str(uuid4())
+    client, calls = client_for(["executor", "g2", "web"])
+    with client:
+        client.headers["Authorization"] = "Bearer valid"
+        assert client.post(f"/v1/sessions/{SESSION}/events/{event_id}/ack").status_code == 200
+        assert calls[-1]["p_operation"] == "ack"
+        assert calls[-1]["p_payload"] == {"event_id": event_id}
+        assert client.post(f"/v1/sessions/{SESSION}/events/junk/ack").status_code == 422
+        assert client.post("/v1/devices").status_code == 201
+        assert calls[-1]["p_operation"] == "device" and calls[-1]["p_payload"] == {}
+        client.post("/v1/devices", json={"device_id": device_id})
+        assert calls[-1]["p_payload"] == {"device_id": device_id}
+        assert client.post("/v1/sessions", json={"device_id": device_id}).status_code == 201
+        assert calls[-1]["p_operation"] == "create"
+        assert calls[-1]["p_payload"] == {"device_id": device_id}
+        response = client.post("/v1/devices", json={"device_id": "nope"})
+        assert response.json()["error"]["code"] == "INVALID_PAYLOAD"
+
+
+def test_ack_and_device_registration_are_role_scoped():
+    client, calls = client_for(["web"])
+    with client:
+        client.headers["Authorization"] = "Bearer valid"
+        assert client.post(f"/v1/sessions/{SESSION}/events/{uuid4()}/ack").status_code == 403
+        assert client.post("/v1/devices").json()["error"]["code"] == "FORBIDDEN"
+        assert calls == []
+
+
+def demo_client(host="127.0.0.1", **overrides):
+    calls = []
+
+    def handle(request):
+        if request.url.path == "/rest/v1/rpc/laai_workflow":
+            import json
+
+            calls.append(json.loads(request.content))
+            return httpx.Response(200, json={"session_id": SESSION, "revision": 1})
+        # Demo tokens must never reach Supabase Auth.
+        raise AssertionError(str(request.url))
+
+    app = create_app(
+        config(demo_auth_mode=True, demo_user_id=USER, **overrides),
+        httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+    )
+    return TestClient(app, client=(host, 50000)), calls
+
+
+def test_demo_auth_maps_fixture_tokens_to_roles_on_loopback_only():
+    client, calls = demo_client()
+    with client:
+        web = {"Authorization": "Bearer demo-web"}
+        assert client.post("/v1/sessions", headers=web).status_code == 201
+        assert calls[-1]["p_user_id"] == str(USER)
+        approve = client.post(
+            f"/v1/sessions/{SESSION}/actions/a1/approve",
+            headers=web,
+            json={"request_id": "tap-1", "expected_revision": 1},
+        )
+        assert approve.json()["error"]["code"] == "FORBIDDEN"
+        approve = client.post(
+            f"/v1/sessions/{SESSION}/actions/a1/approve",
+            headers={"Authorization": "Bearer demo-g2"},
+            json={"request_id": "tap-1", "expected_revision": 1},
+        )
+        assert approve.status_code == 200
+        proxied = client.post(
+            "/v1/sessions", headers={**web, "X-Forwarded-For": "203.0.113.9"}
+        )
+        assert proxied.json()["error"]["code"] == "UNAUTHORIZED"
+        tunneled = client.post("/v1/sessions", headers={**web, "CF-Connecting-IP": "203.0.113.9"})
+        assert tunneled.status_code == 401
+    remote, calls = demo_client(host="203.0.113.9")
+    with remote:
+        response = remote.post("/v1/sessions", headers={"Authorization": "Bearer demo-all"})
+        assert response.status_code == 401 and calls == []
+
+
+def test_demo_tokens_are_rejected_when_demo_mode_is_off():
+    client, calls = client_for()
+    with client:
+        response = client.post("/v1/sessions", headers={"Authorization": "Bearer demo-all"})
+        assert response.status_code == 401 and calls == []
+
+
+def test_demo_mode_requires_a_real_auth_user():
+    import pytest
+
+    with pytest.raises(ValueError):
+        config(demo_auth_mode=True)
