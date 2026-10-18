@@ -51,10 +51,8 @@ export async function condense(url: string, signal: AbortSignal, onEvent: (e: Co
   }
 }
 
-export type MangaStyle = 'natural' | 'lines'
-
-export async function fetchStrip(chapter: string, page: number, strip: number, style: MangaStyle = 'natural'): Promise<MangaStrip> {
-  const qs = new URLSearchParams({ chapter, page: String(page), strip: String(strip), style })
+export async function fetchStrip(chapter: string, page: number, strip: number): Promise<MangaStrip> {
+  const qs = new URLSearchParams({ chapter, page: String(page), strip: String(strip) })
   const res = await fetch(`${API_BASE}/api/manga/strip?${qs}`, { signal: AbortSignal.timeout(30_000) })
   const body = (await res.json().catch(() => ({ error: `Server error ${res.status}` }))) as MangaStrip | CondenseError
   if (!res.ok || 'error' in body) throw new Error('error' in body ? body.error : `Server error ${res.status}`)
