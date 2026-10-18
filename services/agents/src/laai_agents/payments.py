@@ -1,6 +1,6 @@
 """Agent Payment Protocol (seller role) with Stripe embedded Checkout in test mode.
 
-The price watch is the paid feature (Focal Pro). With sk_test_/pk_test_ keys no real
+FOCAL takes payment for the product the shopper approved. With sk_test_/pk_test_ keys no real
 money moves: pay with Stripe's test card 4242 4242 4242 4242. Live keys are refused
 unless FOCAL_ALLOW_LIVE_PAYMENTS=1. The seller verifies the Checkout Session is paid with
 Stripe before it sends CompletePayment.
@@ -41,7 +41,10 @@ def _auth() -> aiohttp.BasicAuth:
     return aiohttp.BasicAuth(os.getenv("STRIPE_SECRET_KEY", ""), "")
 
 
-async def create_checkout(description: str, reference: str) -> dict:
+async def create_checkout(
+    description: str, reference: str, cents: int | None = None, name: str = "Focal purchase"
+) -> dict:
+    cents = cents or amount_cents()
     return_url = os.getenv("STRIPE_RETURN_URL", "https://asi1.ai/") + "?session_id={CHECKOUT_SESSION_ID}"
     form = {
         "ui_mode": "embedded",
@@ -51,11 +54,11 @@ async def create_checkout(description: str, reference: str) -> dict:
         "expires_at": str(int(time.time()) + 1800),
         "line_items[0][quantity]": "1",
         "line_items[0][price_data][currency]": "usd",
-        "line_items[0][price_data][unit_amount]": str(amount_cents()),
-        "line_items[0][price_data][product_data][name]": "Focal Pro price watch",
+        "line_items[0][price_data][unit_amount]": str(cents),
+        "line_items[0][price_data][product_data][name]": name[:200],
         "line_items[0][price_data][product_data][description]": description[:300],
         "metadata[reference]": reference,
-        "metadata[service]": "focal_price_watch",
+        "metadata[service]": "focal_purchase",
     }
     async with net.session().post(
         f"{STRIPE_API}/checkout/sessions",
@@ -74,7 +77,7 @@ async def create_checkout(description: str, reference: str) -> dict:
         "publishable_key": os.getenv("STRIPE_PUBLISHABLE_KEY", ""),
         "currency": "usd",
         # RequestPayment metadata values must be strings.
-        "amount_cents": str(amount_cents()),
+        "amount_cents": str(cents),
         "ui_mode": "embedded",
     }
 
@@ -95,13 +98,14 @@ async def is_paid(checkout_session_id: str) -> bool:
 
 
 def payment_request(recipient: str, reference: str, description: str, checkout: dict) -> RequestPayment:
+    cents = int(checkout.get("amount_cents") or amount_cents())
     return RequestPayment(
         accepted_funds=[
-            Funds(currency="USD", amount=f"{amount_cents() / 100:.2f}", payment_method="stripe")
+            Funds(currency="USD", amount=f"{cents / 100:.2f}", payment_method="stripe")
         ],
         recipient=recipient,
         deadline_seconds=900,
         reference=reference,
         description=description,
-        metadata={"stripe": checkout, "service": "focal_price_watch"},
+        metadata={"stripe": checkout, "service": "focal_purchase"},
     )

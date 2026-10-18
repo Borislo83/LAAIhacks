@@ -8,4 +8,4 @@ Summarizes independent expert reviews of a product. It normalizes each site's sc
 - "Reviews of the Sony WH-1000XM5"
 - "Is the Samsung Galaxy Buds3 Pro any good?"
 
-Part of the Focal team; the coordinator is `focal-shopping-assistant`.
+Part of the Focal team; the coordinator is `FOCAL`.

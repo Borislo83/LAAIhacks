@@ -176,6 +176,7 @@ async def consider(
     addresses: dict[str, str],
     req: ConsiderRequest,
     on_update: Update | None = None,
+    on_dispatch: Callable[[str], Awaitable[None]] | None = None,
 ) -> ConsiderResponse:
     specs = [
         (
@@ -214,6 +215,8 @@ async def consider(
             return await _delegate(field, name, request, response_type)
 
     async def _delegate(field, name, request, response_type):
+        if on_dispatch:
+            await on_dispatch(field)
         started = time.perf_counter()
         publish(
             req.progress_id, field, "delegated", "Coordinator sent work to specialist"
@@ -350,7 +353,10 @@ async def consider(
 
 
 def build_coordinator(addresses: dict[str, str]):
-    agent = make_agent("focal-shopping-assistant", COORDINATOR_SEED)
+    agent = make_agent("FOCAL", COORDINATOR_SEED)
+    # ASI:One messages reach FOCAL through its mailbox: poll it faster than the default 1s.
+    if getattr(agent, "_mailbox_client", None) is not None:
+        agent._mailbox_client._poll_interval = 0.3
 
     @agent.on_rest_post("/consider", ConsiderRequest, ConsiderResponse)
     async def on_rest(ctx: Context, req: ConsiderRequest) -> ConsiderResponse:

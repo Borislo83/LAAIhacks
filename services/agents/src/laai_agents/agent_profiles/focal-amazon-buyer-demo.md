@@ -9,4 +9,4 @@ Turns "buy this" into an Amazon cart addition. It finds candidate amazon.com lis
 ## Try it
 - "Find the Amazon listing for the Anker Soundcore Space Q45"
 
-Part of the Focal team; the coordinator is `focal-shopping-assistant`.
+Part of the Focal team; the coordinator is `FOCAL`.

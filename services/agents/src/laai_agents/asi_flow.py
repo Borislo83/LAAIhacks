@@ -45,9 +45,14 @@ from .models import (
     CartLink,
     CartRequest,
     ConsiderRequest,
+    NewsRequest,
+    NewsResponse,
     PriceCompareRequest,
     PriceCompareResponse,
+    YouTubeRequest,
+    YouTubeResponse,
 )
+from .news import chat_reply
 from .progress import read
 from .verifier import VerifyRequest, VerifyResponse
 
@@ -69,9 +74,24 @@ AGENTS = {
     "cart_link": ("🔗", "Amazon cart-link agent", "laai-amazon-cart"),
     "messenger": ("💬", "Messenger agent", MESSENGER),
     "watch": ("👀", "Watch (coordinator)", None),
+    "news": ("📰", "News agent", "laai-news"),
+    "stripe": ("💳", "Stripe", None),
+    "youtube": ("▶️", "YouTube agent", "laai-youtube"),
 }
-# Progress stages from inside the specialists worth narrating, once per agent.
-LIVE_STAGES = {"fallback", "retrying", "sources_found"}
+
+# FOCAL routes each request to the agents that own it; shopping is the deepest flow.
+ROUTES = (
+    ("message", re.compile(r"^\s*(?:please\s+)?(?:text|message|imessage|tell)\s+\w+|\bsend (?:a |an )?(?:message|text|imessage)\b", re.IGNORECASE)),
+    ("youtube", re.compile(r"\b(?:youtube|song|music|video|play|listen to|watch)\b", re.IGNORECASE)),
+    ("news", re.compile(r"\b(?:news|latest on|what'?s happening|headlines?|update me)\b", re.IGNORECASE)),
+)
+
+
+CHUNK_GAP = float(os.getenv("FOCAL_CHUNK_GAP", "1.0"))
+
+
+def route_of(body: str) -> str:
+    return next((name for name, pattern in ROUTES if pattern.search(body)), "shopping")
 
 
 def owners() -> set[str]:
@@ -99,8 +119,12 @@ class Conversation:
         self.state = ctx.storage.get(self.key) or {}
         # ASI:One shows only an agent's latest message per turn, so every update carries
         # the whole running log: the bubble grows as each agent reports.
-        self.log: list[str] = []
+        self.log: list[str] = []  # everything said this turn (tests and the recap read it)
+        self.pending: list[str] = []  # notes not yet sent; the next message carries them
         self.last_send = 0.0
+        # Parallel agents report at the same instant; ASI:One drops chunks that land
+        # together, so every send goes through one queue with a small gap.
+        self.sending = asyncio.Lock()
 
     @property
     def shopper(self) -> str:
@@ -117,36 +141,63 @@ class Conversation:
         self.save()
 
     def note(self, body: str):
-        """Add to the running log without sending: the card that follows carries it.
-        ASI:One drops a card that closely follows another message from the same step."""
+        """Queue a line without sending it: the next message or card carries it."""
         self.log.append(body)
+        self.pending.append(body)
 
     async def pace(self):
-        """ASI:One keeps one of two messages that arrive within moments of each other,
-        so a card or payment request waits a beat after the previous update."""
+        """Cards and payment requests wait a beat after the previous chunk."""
         wait = 1.2 - (time.monotonic() - self.last_send)
         if wait > 0:
             await asyncio.sleep(wait)
 
     async def send(self, msg):
-        await self.ctx.send(self.sender, msg)
-        self.last_send = time.monotonic()
+        async with self.sending:
+            wait = CHUNK_GAP - (time.monotonic() - self.last_send)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            await self.ctx.send(self.sender, msg)
+            self.last_send = time.monotonic()
+
+    async def end_stream(self):
+        """Kept for callers; FOCAL sends whole messages, not streams (see say)."""
 
     async def say(self, body: str, end: bool = False):
+        """Send the turn's whole conversation so far. ASI:One keeps an agent's latest
+        message per turn, so each update carries every line said before it; the send
+        queue spaces messages so none of them land together."""
         self.log.append(body)
+        self.pending = []
         await self.send(cards.text("\n\n".join(self.log), end_session=end))
 
     async def show(self, msg: ChatMessage):
-        """Send a card whose narration is the running log; nothing follows it this turn."""
+        """Send a card whose narration is the whole conversation so far."""
         for item in msg.content:
             if isinstance(item, TextContent):
                 self.log.append(item.text)
                 item.text = "\n\n".join(self.log)
+        self.pending = []
         await self.pace()
         await self.send(msg)
 
     def credit(self, field: str, did: str, ms: int | None = None):
         self.state.setdefault("team", []).append([field, did, ms])
+
+    def who(self, field: str) -> str:
+        if field == "focal":
+            return "🎯 **FOCAL**"
+        if field == "you":
+            return "👤 **you**"
+        emoji, name, _ = AGENTS[field]
+        return f"{emoji} **{name.split(' (')[0]}**"
+
+    def said(self, src: str, dst: str, text: str, ms: int | None = None) -> str:
+        """One line of agent-to-agent conversation: sender → recipient: message."""
+        took = f" _({secs(ms)})_" if ms is not None else ""
+        return f"{self.who(src)} → {self.who(dst)}: {text}{took}"
+
+    async def talk(self, src: str, dst: str, text: str, ms: int | None = None):
+        await self.say(self.said(src, dst, text, ms))
 
     def line(self, field: str) -> str:
         emoji, name, agent = AGENTS[field]
@@ -167,6 +218,13 @@ class Conversation:
     async def handle(self, body: str):
         reply = parse_reply(body)
         action = reply.get("focal_action")
+        # ASI:One's payment card answers "Confirm Payment" with this token in chat.
+        if confirm := re.search(r"stripe:payment_id:([\w-]+):CONFIRM", body, re.IGNORECASE):
+            action, reply["asi_payment_id"] = "focal_payment_confirm", confirm[1]
+        # Answer typed messages at once so the chat never sits blank. Card clicks skip
+        # it: the card already shows "Submitted" and the first agent line follows.
+        if not action:
+            await self.say("⚡ Got it! Thinking it through…")
         if action and self.state.get("stage") in {None, "done"}:
             # ASI:One sometimes relays a card click from its own agent, with a new sender
             # and session: continue the conversation that is waiting for a click.
@@ -190,10 +248,19 @@ class Conversation:
             return await self.on_cart(action == "focal_approve_cart")
         if stage == "message" and action in {"focal_send_message", "focal_skip_message"}:
             return await self.on_message(action == "focal_send_message")
-        if stage == "watch_offer" and action == "focal_start_watch":
-            return await self.on_watch()
+        if stage == "checkout" and action in {"focal_checkout", "focal_skip_checkout"}:
+            return await (self.on_checkout() if action == "focal_checkout" else self.offer_watch())
+        if stage == "wrapup" and (action == "focal_wrapup" or (
+            action is None and len(body) < 80
+            and re.search(r"\b(watch|alert|updat|message|text|tell|memory|remember|save)", body, re.IGNORECASE)
+        )):
+            return await self.on_wrapup(reply, body)
         if action == "focal_finish":
             return await self.finish()
+        if stage == "awaiting_payment" and action == "focal_payment_confirm":
+            return await self.check_payment(asi_payment_id=reply["asi_payment_id"])
+        if stage == "awaiting_payment" and re.search(r"\b(paid|confirm(?:ed)?|done|payment|cs_test_\w+)", body, re.IGNORECASE):
+            return await self.check_payment()
         active = stage not in {None, "done", "researching"}
         if active and re.match(r"\s*(yes|yep|yeah|sure|ok(ay)?|approve|confirm|go ahead|do it|start|send)\b", body, re.IGNORECASE):
             return await self.on_yes(stage)
@@ -205,21 +272,49 @@ class Conversation:
         routes = {
             "decide": lambda: self.on_buy(False),
             "cart": lambda: self.on_cart(True),
+            "checkout": self.on_checkout,
+            "awaiting_payment": self.check_payment,
             "message": lambda: self.on_message(True),
-            "watch_offer": self.on_watch,
+            "wrapup": lambda: self.on_wrapup({"watch": True, "remember": True}, ""),
         }
         return await routes.get(stage, self.finish)()
 
     async def on_no(self, stage: str):
         routes = {
             "cart": lambda: self.on_cart(False),
+            "checkout": self.offer_watch,
             "message": lambda: self.on_message(False),
         }
         return await routes.get(stage, self.finish)()
 
     # ---- 1. memory + brief -------------------------------------------------------
 
+    async def recall(self) -> str:
+        """Ask the memory agent for the shopper's profile; show the API call it made."""
+        await self.talk("focal", "memory", "what do you know about this person?")
+        started = time.perf_counter()
+        memory = await self.ask("memory", MemoryRequest(user=self.shopper), MemoryResponse, timeout=15)
+        ms = round((time.perf_counter() - started) * 1000)
+        if not memory:
+            await self.talk("focal", "you", "the memory agent didn't answer, so I'll use default preferences.")
+            return "balanced"
+        self.credit("memory", memory.summary, ms)
+        status = f"HTTP {memory.status}" if memory.status else "local"
+        await self.say(
+            self.said("memory", "focal", f"I called `{memory.request}` → {status}. {memory.summary}", ms)
+            + "\n" + code_block(memory.response)
+        )
+        return memory.preferences.get("shopping_priority", "balanced")
+
+    async def remember(self, entry: dict):
+        self.note(self.said("focal", "memory", "remember this for next time."))
+        await self.ask("memory", MemoryRequest(user=self.shopper, remember=entry), MemoryResponse, timeout=10)
+        self.note(self.said("memory", "focal", "saved to the profile."))
+
     async def start(self, body: str):
+        route = route_of(body)
+        if route != "shopping":
+            return await getattr(self, f"run_{route}")(body)
         from .coordinator import budget_from, parse_request
 
         req = await parse_request(body)
@@ -227,39 +322,87 @@ class Conversation:
             req = None
         if req is None:
             return await self.say(
-                "I'm **Focal**, a team of shopping agents. Tell me a product, e.g. "
-                "*\"Should I buy the Sony WH-1000XM5 under $350?\"* and I'll research, verify, "
-                "add it to your cart, tell a friend and watch the price."
+                "I'm **FOCAL**, a team of 12 agents that turns what you ask into something done. Try:\n"
+                "- *\"Should I buy the Apple AirPods Pro 2?\"* — research, verify, cart, tell a friend, watch the price\n"
+                "- *\"What's the latest on SpaceX Starship?\"* — a sourced news brief\n"
+                "- *\"Play Blinding Lights on YouTube\"* — the right video link\n"
+                "- *\"Text Alex I'm running late\"* — a draft you approve before it's sent"
             )
         self.reset()
         self.state.update(product=req.product, budget=req.max_price or budget_from(body))
-        await self.say(
-            f"🎯 **Intent:** research and decide on **{req.product}**"
+        await self.talk(
+            "focal",
+            "you",
+            f"you want to decide on **{req.product}**"
             + (f" under {money(self.state['budget'])}" if self.state["budget"] else "")
-            + ".\nAsking the memory agent what it knows about you…"
+            + ". Let me check with the team.",
         )
-        started = time.perf_counter()
-        memory = await self.ask("memory", MemoryRequest(user=self.shopper), MemoryResponse, timeout=15)
-        ms = round((time.perf_counter() - started) * 1000)
-        priority = "balanced"
-        if memory:
-            priority = memory.preferences.get("shopping_priority", "balanced")
-            self.credit("memory", memory.summary, ms)
-            status = f"HTTP {memory.status}" if memory.status else "local"
-            await self.say(
-                f"{self.line('memory')} · {secs(ms)}\n`{memory.request}` → {status}\n"
-                + code_block(memory.response)
-                + f"\n{memory.summary}"
-            )
-        else:
-            await self.say("🧠 Memory agent unavailable; continuing with default preferences.")
-        self.state["priority"] = priority
+        self.state["priority"] = await self.recall()
         if self.state["budget"] is None:
             self.state["stage"] = "brief"
             self.save()
-            return await self.show(cards.brief_form(req.product, priority))
+            return await self.show(cards.brief_form(req.product, self.state["priority"]))
         self.save()
         await self.research()
+
+    # ---- other routes: news, YouTube, messages -------------------------------------
+
+    async def run_news(self, body: str):
+        self.reset()
+        await self.talk("focal", "you", f"you want the latest on *{body[:120]}*. On it.")
+        await self.recall()
+        await self.talk("focal", "news", f"read recent coverage of *{body[:120]}* and brief me, with sources.")
+        started = time.perf_counter()
+        result = await self.ask("news", NewsRequest(query=body[:300]), NewsResponse, timeout=120)
+        ms = round((time.perf_counter() - started) * 1000)
+        if result is None or result.error:
+            self.credit("news", result.error if result else "no answer", ms)
+            await self.talk("news", "focal", f"⚠️ {result.error if result else 'no answer'}. Nothing was made up.", ms)
+        else:
+            self.credit("news", f"{len(result.sources)} sources", ms)
+            sources = "\n".join(f"- [{s.publisher}]({s.url})" for s in result.sources[:4])
+            await self.say(
+                self.said("news", "focal", f"read {len(result.sources)} articles. Here's the brief:", ms)
+                + f"\n\n**{result.headline or 'News brief'}**\n\n"
+                + chat_reply(result).split("\n", 1)[-1].split("\nhttp")[0]
+                + (f"\n\n**Sources**\n{sources}" if sources else "")
+            )
+            await self.remember({"topic": body[:120], "kind": "news"})
+        await self.finish()
+
+    async def run_youtube(self, body: str):
+        self.reset()
+        await self.talk("focal", "you", f"you want a video: *{body[:120]}*. On it.")
+        await self.recall()
+        await self.talk("focal", "youtube", f"find the best single video for *{body[:120]}*.")
+        started = time.perf_counter()
+        result = await self.ask("youtube", YouTubeRequest(query=body[:300]), YouTubeResponse, timeout=60)
+        ms = round((time.perf_counter() - started) * 1000)
+        if result is None or not result.url:
+            self.credit("youtube", result.error if result and result.error else "no match", ms)
+            await self.talk("youtube", "focal", f"⚠️ {result.summary if result else 'no answer'}", ms)
+        else:
+            self.credit("youtube", result.title or "video", ms)
+            more = "\n".join(f"- [{v.title}]({v.url})" for v in result.alternatives)
+            await self.say(
+                self.said("youtube", "focal", "found it:", ms)
+                + f"\n▶️ **{result.title}**"
+                + (f" · {result.channel}" if result.channel else "")
+                + f"\n{result.url}"
+                + (f"\n\n**Also**\n{more}" if more else "")
+            )
+            await self.remember({"topic": result.title, "kind": "youtube"})
+        await self.finish()
+
+    async def run_message(self, body: str):
+        self.reset()
+        self.state["standalone"] = True
+        await self.talk("focal", "you", "you want to message a friend. I'll have it drafted for your approval.")
+        await self.recall()
+        await self.talk("focal", "messenger", f"draft this for me: *{body[:160]}*")
+        started = time.perf_counter()
+        draft = await self.ask("messenger", MessageDraftRequest(request=body[:1200]), MessageDraftResponse, timeout=30)
+        await self.show_draft(draft, round((time.perf_counter() - started) * 1000))
 
     async def on_brief(self, reply: dict, body: str):
         budget = reply.get("budget")
@@ -282,15 +425,12 @@ class Conversation:
         self.state["stage"] = "researching"
         self.save()
         await self.say(
-            f"🗺️ **Plan for {product}**"
-            + (f" · budget {money(budget)}" if budget else "")
-            + f" · priority **{self.state.get('priority', 'balanced')}**\n"
-            f"1. {self.line('price')}: search every store, read prices from product pages\n"
-            f"2. {self.line('reviews')}: average expert ratings *(parallel)*\n"
-            f"3. {self.line('alternatives')} → ⭐ Reviews: rivals under budget, then review the top rival\n"
-            f"4. {self.line('verification')}: audit every price; re-dispatch if nothing is trustworthy\n"
-            "5. You decide → 🛒 Buyer → 💬 Messenger → 👀 Price watch *(only after you approve)*\n\n"
-            "Dispatching 3 agents in parallel now…"
+            self.said("focal", "you", f"here's the plan for **{product}**"
+                      + (f" (budget {money(budget)}, priority {self.state.get('priority', 'balanced')})" if budget else "")
+                      + ". The team:")
+            + f"\n- {self.line('price')} · {self.line('reviews')} · {self.line('alternatives')} work in parallel"
+            + f"\n- {self.line('verification')} audits the prices before anyone acts"
+            + "\n- then you decide → 🛒 Buyer → 💬 Messenger → 👀 Price watch, each only after you approve"
         )
         progress_id = uuid4().hex
         stop = asyncio.Event()
@@ -301,38 +441,57 @@ class Conversation:
                 self.addresses,
                 ConsiderRequest(product=product, max_price=budget, progress_id=progress_id),
                 on_update=self.on_update,
+                on_dispatch=self.on_dispatch,
             )
         finally:
             stop.set()
             await forwarder
         await self.present(result)
 
+    def request_for(self, field: str) -> str | None:
+        product, budget = self.state.get("product", "it"), self.state.get("budget")
+        return {
+            "price": f"find current prices for **{product}** across stores; read them off the product pages.",
+            "reviews": f"what do the experts say about **{product}**?",
+            "alternatives": f"find rivals to **{product}**" + (f" under {money(budget)}" if budget else "") + ", and price-check them.",
+            "alternative_reviews": "you found a top rival; I need expert reviews of it too.",
+            "verification": "audit these prices before anyone acts on them.",
+        }.get(field)
+
+    async def on_dispatch(self, field: str):
+        """Called just before a request goes out, so the ask always precedes the answer."""
+        if ask := self.request_for(field):
+            await self.talk("focal", field, ask)
+
     async def forward_progress(self, progress_id: str, stop: asyncio.Event):
+        """Turn the agents' live progress into conversation lines as it happens."""
         after, said = 0, set()
         while True:
             for event in read(progress_id, after):
                 after = event["seq"]
-                key = (event["kind"], event["stage"])
-                if event["stage"] in LIVE_STAGES and (key not in said or event["stage"] == "fallback"):
-                    said.add(key)
-                    field = event["kind"] if event["kind"] in AGENTS else None
-                    who = f"{AGENTS[field][0]} {AGENTS[field][1]}" if field else event["kind"]
-                    icon = {"fallback": "↪️", "retrying": "🔁"}.get(event["stage"], "🔎")
-                    await self.say(f"{icon} {who}: {event['message']}")
+                field, stage = event["kind"], event["stage"]
+                if field not in AGENTS or ((field, stage) in said and stage != "fallback"):
+                    continue
+                said.add((field, stage))
+                if stage == "sources_found":
+                    await self.talk(field, "focal", f"{event['message'].lower()}, reading them now…")
+                elif stage == "fallback":
+                    await self.talk(field, "focal", "ASI web search is down, so I switched to the free search fallback.")
+                elif stage == "retrying":
+                    await self.talk("focal", field, f"no answer yet, asking again ({event['message'].split('(')[-1].rstrip(')')}).")
             if stop.is_set():
                 return
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(0.3)
 
     async def on_update(self, field: str, result, ms: int):
         if field not in AGENTS:
             return
-        head = f"{self.line(field)} · {secs(ms)}"
         if result is None:
             self.credit(field, "no answer", ms)
-            return await self.say(f"⚠️ {head}\nNo answer after 3 attempts; continuing without it. Nothing was made up.")
+            return await self.talk("focal", "you", f"{self.who(field)} didn't answer after 3 tries, so I'm going on without it. Nothing was made up.")
         if getattr(result, "error", None):
             self.credit(field, result.error, ms)
-            return await self.say(f"⚠️ {head}\n{result.error}")
+            return await self.talk(field, "focal", f"⚠️ {result.error}. I won't guess.", ms)
         if field in {"price", "price_retry"}:
             stores = len({o.store for o in result.offers})
             did = f"{len(result.offers)} offers from {stores} stores"
@@ -354,12 +513,12 @@ class Conversation:
             dropped = "\n".join(f"✗ {d.store} {money(d.price)}: {d.reason}" for d in result.dropped[:4])
             flags = "\n".join(f"⚑ {f}" for f in result.flags)
             body = result.summary + (f"\n{dropped}" if dropped else "") + (f"\n{flags}" if flags else "")
-            if result.needs_retry:
-                body += "\n🔁 **Recovery:** re-dispatching the price agent with a deeper store search…"
         else:
             did, body = "done", getattr(result, "summary", "")
         self.credit(field, did, ms)
-        await self.say(f"{head}\n{body}")
+        await self.talk(field, "focal", body, ms)
+        if field == "verification" and result.needs_retry:
+            await self.talk("verification", "price", "none of these are trustworthy. Search the stores again, deeper.")
 
     # ---- 3. decision card ----------------------------------------------------------
 
@@ -431,25 +590,10 @@ class Conversation:
         for section in (price, reviews):
             if section:
                 sources += [f"- [{s.title[:60]}]({s.url})" for s in section.sources[:2]]
-        await self.ask(
-            "memory",
-            MemoryRequest(
-                user=self.shopper,
-                remember={
-                    "product": result.product,
-                    "budget": result.max_price,
-                    "priority": self.state.get("priority"),
-                    "best_price": best["price"] if best else None,
-                },
-            ),
-            MemoryResponse,
-            timeout=10,
-        )
-        self.log.append(f"{self.line('memory')}: saved this research to your profile.")
         await self.show(
             card(
-                "✅ **Research complete.** Here's the verified comparison. Pick one and the "
-                "buyer agent takes it from here.\n\n" + result.summary[:1500]
+                self.said("focal", "you", "research is done and the prices are verified. Pick one and the buyer agent takes it from here.")
+                + "\n\n" + result.summary[:1500]
                 + ("\n\n**Sources**\n" + "\n".join(sources) if sources else ""),
                 "custom",
                 payload,
@@ -483,7 +627,7 @@ class Conversation:
         target = self.state.get("alt") if alternative else None
         product = target["product"] if target else self.state.get("product", "")
         self.state["buy_product"] = product
-        await self.say(f"{self.line('buyer')}: finding Amazon listings for **{product}**…")
+        await self.talk("focal", "buyer", f"find the Amazon listing for **{product}**. Cart only, no checkout.")
         started = time.perf_counter()
         result = await self.ask("buyer", BuyRequest(product=product[:500]), BuyResponse, timeout=60)
         ms = round((time.perf_counter() - started) * 1000)
@@ -493,16 +637,16 @@ class Conversation:
             # Recovery: the buyer's own search came back empty, so reuse the Amazon
             # product pages the research agents already cited.
             candidates = leads
-            self.note("🛒 Buyer search found nothing new; reusing Amazon listings the research agents cited.")
+            self.note(self.said("buyer", "focal", "my search came back empty, so I'm reusing the Amazon pages the research agents cited."))
         if not candidates:
             self.credit("buyer", "no listing", ms)
             link = result.search_url if result else None
-            await self.say(
-                "🛒 No direct Amazon listing found"
-                + (f"; search here: {link}" if link else "")
-                + ". Skipping the cart step."
+            await self.talk(
+                "buyer", "focal",
+                "no direct Amazon listing found" + (f"; here's a search link: {link}" if link else "") + ". Skipping the cart.",
+                ms,
             )
-            return await self.offer_message(added=False)
+            return await self.offer_checkout()
         self.credit("buyer", f"{len(candidates)} listings", ms)
         self.state["stage"] = "listing"
         self.save()
@@ -518,8 +662,8 @@ class Conversation:
         ]
         await self.show(
             card(
-                f"{self.line('buyer')} · {secs(ms)}\nFound {len(candidates)} Amazon listings. "
-                "Pick the exact one; nothing is added yet.",
+                self.said("buyer", "focal", f"found {len(candidates)} Amazon listing(s).", ms)
+                + "\n" + self.said("focal", "you", "pick the exact one. Nothing is added yet."),
                 "custom",
                 {"root": {"type": "section", "title": f"Amazon listings · {product[:60]}",
                           "subtitle": "Cart only. Checkout is disabled.",
@@ -531,6 +675,7 @@ class Conversation:
         url = reply.get("url")
         if not url:
             return await self.say("Pick one of the listings above.")
+        self.note(self.said("focal", "buyer", f"prepare a cart addition for {url}"))
         result = await self.ask(
             "buyer", BuyRequest(product=self.state.get("buy_product", "")[:500] or None, url=url), BuyResponse, timeout=30
         )
@@ -541,7 +686,8 @@ class Conversation:
         real = self.sender in owners()
         await self.show(
             card(
-                f"{self.line('buyer')}: cart addition prepared. Approve to add it.",
+                self.said("buyer", "focal", "cart addition ready, waiting for approval.")
+                + "\n" + self.said("focal", "you", "approve it?"),
                 "review",
                 {
                     "title": "Approve cart addition",
@@ -561,8 +707,8 @@ class Conversation:
 
     async def on_cart(self, approved: bool):
         if not approved:
-            await self.say("🛒 Cart step skipped. Nothing was added.")
-            return await self.offer_message(added=False)
+            await self.talk("focal", "buyer", "cancel that; nothing gets added.")
+            return await self.offer_watch()
         if self.sender in owners():
             started = time.perf_counter()
             result = await self.ask(
@@ -579,10 +725,12 @@ class Conversation:
         else:
             # Everyone else gets Amazon's own add-to-cart link: they open it and confirm.
             added = await self.cart_link()
-        await self.offer_message(added=added)
+        await self.offer_checkout()
 
     async def cart_link(self) -> bool:
         asin = re.search(r"/dp/([A-Z0-9]{10})", self.state.get("listing") or "", re.IGNORECASE)
+        if asin:
+            await self.talk("focal", "cart_link", f"approved: build Amazon's add-to-cart link for ASIN {asin[1].upper()}.")
         started = time.perf_counter()
         link = (
             await self.ask("cart_link", CartRequest(product_id=asin[1].upper()), CartLink, timeout=20)
@@ -595,37 +743,86 @@ class Conversation:
             await self.say(f"🛒 Approval recorded; open the listing to add it yourself: {self.state.get('listing')}")
             return False
         self.credit("cart_link", f"add-to-cart link for {link.product_id}", ms)
-        await self.say(
-            f"{self.line('cart_link')} · {secs(ms)}\n✅ Approved. Amazon's official add-to-cart link "
-            f"(you confirm on Amazon; nothing is bought):\n{link.cart_url}"
+        await self.talk(
+            "cart_link", "focal",
+            f"here's Amazon's official add-to-cart link (you confirm on Amazon; nothing is bought): {link.cart_url}",
+            ms,
         )
         return True
 
     # ---- 5. messenger --------------------------------------------------------------
 
-    async def offer_message(self, added: bool):
-        friend = os.getenv("FOCAL_SHARE_CONTACT", "").strip()
+    # ---- 5. checkout: Agent Payment Protocol (Stripe) ------------------------------
+
+    def purchase(self) -> tuple[str, float | None]:
         product = self.state.get("buy_product") or self.state.get("product", "")
-        if not friend:
-            self.note("💬 Messenger skipped: set FOCAL_SHARE_CONTACT to tell a friend.")
+        alt = self.state.get("alt") or {}
+        if alt and alt.get("product") == product and alt.get("price"):
+            return product, alt["price"]
+        return product, (self.state.get("best") or {}).get("price")
+
+    async def offer_checkout(self):
+        product, price = self.purchase()
+        if not price or not payments.configured():
+            self.note(self.said("focal", "you", "no verified price to charge, so I'll skip checkout." if not price
+                                else "payments aren't configured, so I'll skip checkout."))
             return await self.offer_watch()
-        price = (self.state.get("best") or {}).get("price")
-        note = f"just {'added' if added else 'picked'} the {product}" + (f" for {money(price)}" if price else "") + " (Focal found it)"
-        started = time.perf_counter()
-        draft = await self.ask(
-            "messenger", MessageDraftRequest(request=f"text {friend} {note}"[:1200]), MessageDraftResponse, timeout=30
+        self.state["stage"] = "checkout"
+        self.save()
+        test = " (test mode: card 4242 4242 4242 4242, no real money moves)" if payments.test_mode() else ""
+        await self.show(
+            card(
+                self.said("focal", "you", f"ready to check out **{product}** for **{money(price)}**?"),
+                "review",
+                {
+                    "title": f"Checkout · {product[:60]}",
+                    "summary_rows": [
+                        {"label": "Item", "value": product[:80]},
+                        {"label": "Price", "value": money(price)},
+                        {"label": "Verified by", "value": "🛡️ Verifier agent"},
+                        {"label": "Payment", "value": f"Stripe via the Agent Payment Protocol{test}"},
+                    ],
+                    "approve_cta": {"label": f"Pay {money(price)}", "primary": True, "selection": selection("focal_checkout")},
+                    "reject_cta": {"label": "Not now", "selection": selection("focal_skip_checkout")},
+                },
+            )
         )
-        ms = round((time.perf_counter() - started) * 1000)
+
+    async def on_checkout(self):
+        product, price = self.purchase()
+        reference = uuid4().hex
+        await self.talk("focal", "stripe", f"open a checkout for **{product}**, {money(price)}.")
+        try:
+            checkout = await payments.create_checkout(
+                f"{product} via FOCAL", reference, cents=round(price * 100), name=product
+            )
+        except Exception as error:  # noqa: BLE001 -- payment errors are shown, never hidden
+            await self.talk("stripe", "focal", f"⚠️ checkout could not start ({error}).")
+            return await self.offer_watch()
+        self.state.update(stage="awaiting_payment", payment_ref=reference, checkout_id=checkout["id"], paid_amount=price)
+        self.save()
+        await self.say(
+            self.said("stripe", "focal", f"checkout session `{checkout['id'][:18]}…` is ready.")
+            + "\n" + self.said("focal", "you", "here's the payment request. Pay in the card below"
+                                + (" with test card 4242 4242 4242 4242, any future date, any CVC." if payments.test_mode() else "."))
+        )
+        # The payment request goes last: ASI:One shows an agent's latest message per turn.
+        await self.pace()
+        await self.end_stream()
+        await self.send(payments.payment_request(str(self.ctx.agent.address), reference, f"{product} via FOCAL", checkout))
+
+    async def show_draft(self, draft, ms: int):
         if draft is None or draft.status != "ready":
             self.credit("messenger", draft.status if draft else "no answer", ms)
-            await self.say(f"💬 {draft.summary if draft else 'Messenger agent unavailable.'}")
-            return await self.offer_watch()
+            self.note(self.said("messenger", "focal", draft.summary if draft else "unavailable.", ms))
+            return await self.finish()
         self.credit("messenger", "draft ready", ms)
         self.state.update(stage="message", draft={"id": draft.draft_id, "text": draft.text})
         self.save()
         await self.show(
             card(
-                f"{self.line('messenger')} · {secs(ms)}\nDrafted a message. Nothing is sent until you approve.",
+                self.said("messenger", "focal", "draft ready. I won't send it without approval.", ms)
+                + "\n" + self.said("focal", "you", "send this?"),
                 "review",
                 {
                     "title": "Send iMessage?",
@@ -643,92 +840,130 @@ class Conversation:
     async def on_message(self, approved: bool):
         draft = self.state.get("draft") or {}
         if not approved:
-            self.note("💬 Message discarded. Nothing was sent.")
+            self.note(self.said("focal", "messenger", "discard it; don't send."))
         elif self.sender in owners() or imessage_dry_run():
             # In dry-run mode the messenger records the exact send without running it,
             # so anyone can take the real path.
+            self.note(self.said("focal", "messenger", "approved, send it."))
             result = await self.ask(
                 "messenger", MessageApproval(draft_id=draft["id"], text=draft["text"]), MessageSendResponse, timeout=30
             )
             self.credit("messenger", result.status if result else "no answer")
             dry = " *(dry run: the exact send was recorded, not executed)*" if result and result.dry_run else ""
-            self.note(f"{self.line('messenger')}\n{result.summary if result else 'No answer.'}{dry}")
+            self.note(self.said("messenger", "focal", f"{result.summary if result else 'no answer.'}{dry}"))
         else:
             self.credit("messenger", "simulated send")
             self.note(f"{self.line('messenger')}\n🧪 **Simulated:** approval recorded; real sends run only for the owner.")
-        await self.offer_watch()
+        await self.finish()
 
-    # ---- 6. paid price watch (last) ----------------------------------------------
+    # ---- 6. wrap-up: watch, message, memory (the shopper picks) ---------------------
 
-    async def offer_watch(self):
+    def watch_target(self) -> float | None:
         best = (self.state.get("best") or {}).get("price")
         budget = self.state.get("budget")
-        target = round(min(x for x in (best and best * 0.95, budget) if x), 2) if (best or budget) else None
-        if target is None:
-            return await self.finish()
-        self.state.update(stage="watch_offer", watch_target=target)
+        return round(min(x for x in (best and best * 0.95, budget) if x), 2) if (best or budget) else None
+
+    async def offer_watch(self):
+        """Last step: one card with the three follow-ups; FOCAL does the ones ticked."""
+        product = self.state.get("buy_product") or self.state.get("product", "")
+        target = self.watch_target()
+        self.state.update(stage="wrapup", watch_target=target)
         self.save()
-        paid = payments.configured()
-        fee = f"${payments.amount_cents() / 100:.2f}"
+        bought = "just got" if self.state.get("paid_amount") else "picked"
+        fields = []
+        if target:
+            fields.append({"kind": "checkbox", "name": "watch",
+                           "label": f"Keep me updated: alert me if {product[:40]} drops below {money(target)}"})
+        fields += [
+            {"kind": "checkbox", "name": "message", "label": "Send a message to a friend about it"},
+            {"kind": "text", "name": "friend", "label": "Who should I message? (e.g. John)"},
+            {"kind": "checkbox", "name": "remember", "label": "Save this to memory for better help next time"},
+        ]
         await self.show(
             card(
-                "👀 **Last step:** want me to keep watching the price after this chat ends?",
-                "review",
+                self.said("focal", "you", f"all set. Anything else for the {product}?"),
+                "form",
                 {
-                    "title": "Focal Pro price watch",
-                    "summary_rows": [
-                        {"label": "Product", "value": self.state.get("buy_product") or self.state.get("product", "")},
-                        {"label": "Alert me below", "value": money(target)},
-                        {"label": "Checks", "value": f"Every {watch_interval() // 60 or 1} min via the price + verifier agents"},
-                        {"label": "Price", "value": f"{fee} one-time via Stripe" + (" (test mode, card 4242 4242 4242 4242)" if payments.test_mode() else "") if paid else "Free (payments not configured)"},
-                    ],
-                    "approve_cta": {"label": f"Start watch ({fee})" if paid else "Start watch", "primary": True,
-                                    "selection": selection("focal_start_watch")},
-                    "reject_cta": {"label": "No thanks", "selection": selection("focal_finish")},
+                    "title": "Before you go",
+                    "fields": fields,
+                    "submit_cta": {"label": "Do it", "selection": selection("focal_wrapup", bought=bought)},
                 },
             )
         )
 
-    async def on_watch(self):
-        if not payments.configured():
-            await self.arm_watch()
-            return await self.finish()
-        reference = uuid4().hex
+    async def on_wrapup(self, reply: dict, body: str):
+        def ticked(name: str) -> bool:
+            value = reply.get(name)
+            if value is None:  # planner prose instead of JSON
+                return bool(re.search({"watch": r"\b(watch|updat|alert|price)", "message": r"\b(message|text|tell)",
+                                       "remember": r"\b(memory|remember|save)"}[name], body, re.IGNORECASE))
+            return str(value).lower() in {"true", "on", "yes", "1"}
+
         product = self.state.get("buy_product") or self.state.get("product", "")
-        try:
-            checkout = await payments.create_checkout(f"Price watch for {product}", reference)
-        except Exception as error:  # noqa: BLE001 -- payment errors are shown, never hidden
-            await self.say(f"💳 Stripe checkout could not start ({error}). Starting the watch free instead.")
+        if ticked("remember"):
+            await self.remember({
+                "product": product,
+                "budget": self.state.get("budget"),
+                "priority": self.state.get("priority"),
+                "best_price": (self.state.get("best") or {}).get("price"),
+                "bought_for": self.state.get("paid_amount"),
+            })
+        if ticked("watch") and self.state.get("watch_target"):
             await self.arm_watch()
-            return await self.finish()
-        self.state.update(stage="awaiting_payment", payment_ref=reference, checkout_id=checkout["id"])
-        self.save()
-        self.ctx.storage.set(f"payment:{reference}", self.sender)
-        # The payment request goes last: ASI:One shows an agent's latest message per turn.
-        await self.say(
-            "💳 **Payment Protocol:** sending a Stripe payment request"
-            + (" in **test mode**. Use card 4242 4242 4242 4242, any future date and any CVC." if payments.test_mode() else ".")
-            + " The watch starts as soon as Stripe confirms."
-        )
-        await self.pace()
-        await self.send(
-            payments.payment_request(
-                str(self.ctx.agent.address), reference, f"Focal Pro price watch for {product}", checkout
-            ),
-        )
+        if ticked("message"):
+            friend = str(reply.get("friend") or "").strip() or os.getenv("FOCAL_SHARE_CONTACT", "John")
+            what = "I just got" if self.state.get("paid_amount") else "I'm getting"
+            note = f"{what} the {product}! FOCAL found it"
+            self.state["standalone"] = True
+            await self.talk("focal", "messenger", f"draft a note to {friend}: *{note}*")
+            started = time.perf_counter()
+            draft = await self.ask("messenger", MessageDraftRequest(request=f"text {friend} {note}"[:1200]),
+                                   MessageDraftResponse, timeout=30)
+            return await self.show_draft(draft, round((time.perf_counter() - started) * 1000))
+        await self.finish()
 
     async def on_commit(self, msg: CommitPayment):
-        """Payment Protocol: verify with Stripe before CompletePayment and the watch."""
+        """Payment Protocol: verify with Stripe before CompletePayment and the receipt."""
         if self.state.get("stage") != "awaiting_payment" or self.state.get("checkout_id") != msg.transaction_id:
-            await self.ctx.send(self.sender, RejectPayment(reason="This payment does not match the pending watch."))
+            await self.ctx.send(self.sender, RejectPayment(reason="This payment does not match the pending checkout."))
             return
         if msg.funds.payment_method != "stripe" or not await payments.is_paid(msg.transaction_id):
             await self.ctx.send(self.sender, RejectPayment(reason="Stripe has not confirmed this payment yet."))
-            return await self.say("💳 Stripe hasn't confirmed the payment yet. Finish checkout, then approve again.")
-        await self.ctx.send(self.sender, CompletePayment(transaction_id=msg.transaction_id))
-        await self.say("💳 **Payment verified with Stripe.** CompletePayment sent.")
-        await self.arm_watch(paid=True)
-        await self.finish()
+            return await self.talk("stripe", "focal", "this session isn't paid yet. Finish checkout, then confirm again.")
+        await self.complete_purchase(msg.transaction_id)
+
+    async def check_payment(self, asi_payment_id: str | None = None):
+        """ASI:One's confirmation or "I paid": ask Stripe directly, without waiting for
+        CommitPayment. In test mode ASI:One's own confirmation is accepted too."""
+        session = self.state.get("checkout_id", "")
+        await self.talk("focal", "stripe", f"has checkout `{session[:18]}…` been paid?")
+        if await payments.is_paid(session):
+            return await self.complete_purchase(session)
+        if payments.test_mode():
+            await self.talk("stripe", "focal", "no card payment recorded on the session yet.")
+            return await self.complete_purchase(
+                f"asi:{asi_payment_id}" if asi_payment_id else f"confirm:{session}",
+                confirmed_by="your confirmation in ASI:One (test mode)",
+            )
+        await self.talk("stripe", "focal", "not yet. Complete the card form above (test card 4242 4242 4242 4242), then tell me.")
+
+    async def complete_purchase(self, transaction_id: str, confirmed_by: str = "Stripe"):
+        # CompletePayment needs an id ASI:One knows: a Stripe session or its payment id.
+        if not transaction_id.startswith("confirm:"):
+            payment_id = transaction_id.removeprefix("asi:")
+            await self.ctx.send(self.sender, CompletePayment(transaction_id=payment_id))
+        product, price = self.purchase()
+        self.credit("stripe", f"paid {money(price)}")
+        await self.talk(
+            "stripe" if confirmed_by == "Stripe" else "focal", "focal" if confirmed_by == "Stripe" else "you",
+            f"payment `{transaction_id[:22]}…` confirmed by {confirmed_by}: {money(price)}.",
+        )
+        await self.say(
+            self.said("focal", "you", f"🧾 **Purchase complete.** {product} · {money(price)} · paid via the Agent Payment Protocol.")
+            + ("\n_Stripe test mode: no real money moved and no real store order was placed._" if payments.test_mode() else "")
+        )
+        await self.remember({"product": product, "bought_for": price, "kind": "purchase"})
+        await self.offer_watch()
 
     async def arm_watch(self, paid: bool = False):
         watches = self.ctx.storage.get("watches") or {}
@@ -742,7 +977,7 @@ class Conversation:
         self.ctx.storage.set("watches", watches)
         self.credit("watch", f"armed below {money(self.state.get('watch_target'))}")
         await self.say(
-            f"👀 **Watch armed** for {watches[self.sender]['product']} below {money(self.state.get('watch_target'))}. "
+            f"{self.said('focal', 'you', 'watch armed')} for {watches[self.sender]['product']} below {money(self.state.get('watch_target'))}. "
             f"The coordinator re-runs the price and verifier agents every {watch_interval() // 60 or 1} min and "
             "messages you here when it drops."
         )
@@ -760,8 +995,8 @@ class Conversation:
         agents_used = len({AGENTS.get(f, (0, f, 0))[1].split(" (")[0] for f, _, _ in team})
         await self.show(
             card(
-                f"🏁 **Done.** {agents_used} agents, {len(team)} steps, one conversation. "
-                "Ask about another product any time.",
+                f"{self.said('focal', 'you', 'done.')} {agents_used} agents, {len(team)} steps, one conversation. "
+                "Ask FOCAL for anything else any time.",
                 "custom",
                 {"root": {"type": "section", "title": "Team recap",
                           "children": [
@@ -793,6 +1028,7 @@ def build_asi_protocols(addresses: dict[str, str]) -> list[Protocol]:
         conversation = Conversation(ctx, sender, addresses)
         try:
             await conversation.handle(body)
+            await conversation.end_stream()
         except Exception:
             ctx.logger.exception("Conversation step failed")
             await conversation.say("⚠️ Something went wrong on my side. Please ask again.", end=True)

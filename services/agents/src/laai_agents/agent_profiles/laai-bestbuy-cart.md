@@ -4,4 +4,4 @@
 
 Turns a Best Buy SKU into Best Buy's own **add-to-cart link**. You open it yourself. There's no browser automation, no account access, and nothing is bought.
 
-Part of the Focal team; the coordinator is `focal-shopping-assistant`.
+Part of the Focal team; the coordinator is `FOCAL`.

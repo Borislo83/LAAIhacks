@@ -32,6 +32,7 @@ def offline(monkeypatch):
     monkeypatch.setenv("IMESSAGE_CONTACTS", "Alex=+15551234567")
     monkeypatch.setenv("FOCAL_SHARE_CONTACT", "Alex")
     monkeypatch.setenv("FOCAL_OWNER_ADDRESSES", OWNER)
+    monkeypatch.setattr(asi_flow, "CHUNK_GAP", 0)
 
 
 class Storage(dict):
@@ -143,13 +144,17 @@ async def test_full_flow_from_intent_to_watch_with_cards():
     await step(ctx, SHOPPER, "The user approved: focal_approve_cart")
     assert not ctx.cart_approvals, "non-owners never trigger the real cart"
     assert "add-to-cart link" in ctx.texts()
-    assert ctx.card_kinds()[-1] == "review"  # iMessage draft
+    # Payments are not configured here, so checkout is skipped straight to the wrap-up form.
+    assert ctx.card_kinds()[-1] == "form"
+
+    await step(ctx, SHOPPER, json.dumps(
+        {"focal_action": "focal_wrapup", "watch": True, "message": True, "friend": "Alex", "remember": True}
+    ))
+    assert SHOPPER in ctx.storage["watches"]
+    assert "saved to the profile" in ctx.texts()
+    assert ctx.card_kinds()[-1] == "review"  # iMessage draft, only because it was asked for
 
     await step(ctx, SHOPPER, json.dumps({"focal_action": "focal_send_message"}))
-    assert ctx.card_kinds()[-1] == "review"  # price watch offer, last
-
-    await step(ctx, SHOPPER, json.dumps({"focal_action": "focal_start_watch"}))
-    assert SHOPPER in ctx.storage["watches"]
     last = ctx.sent[-1]
     assert any(isinstance(i, EndSessionContent) for i in last.content)
     assert ctx.card_kinds()[-1] == "custom"  # team recap
@@ -201,7 +206,7 @@ def test_card_metadata_values_are_strings():
     assert meta["card_protocol_version"] == "1" and json.loads(meta["card_payload"])["fields"]
 
 
-async def test_paid_watch_uses_payment_protocol_and_verifies_with_stripe(monkeypatch):
+async def test_checkout_charges_the_product_price_and_verifies_with_stripe(monkeypatch):
     from uagents_core.contrib.protocols.payment import (
         CommitPayment,
         CompletePayment,
@@ -213,9 +218,11 @@ async def test_paid_watch_uses_payment_protocol_and_verifies_with_stripe(monkeyp
 
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_x")
     monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_x")
+    created = {}
 
-    async def checkout(description, reference):
-        return {"id": "cs_test_1", "checkout_session_id": "cs_test_1", "client_secret": "s", "publishable_key": "pk_test_x"}
+    async def checkout(description, reference, cents=None, name=""):
+        created.update(cents=cents, name=name)
+        return {"id": "cs_test_1", "client_secret": "s", "publishable_key": "pk_test_x", "amount_cents": str(cents)}
 
     paid = {"cs_test_1": False}
 
@@ -226,17 +233,41 @@ async def test_paid_watch_uses_payment_protocol_and_verifies_with_stripe(monkeyp
     monkeypatch.setattr(payments, "is_paid", is_paid)
     ctx = Context()
     conversation = asi_flow.Conversation(ctx, SHOPPER, ADDRESSES)
-    conversation.state = {"stage": "watch_offer", "watch_target": 300.0, "product": "Sony", "team": []}
-    await conversation.handle(json.dumps({"focal_action": "focal_start_watch"}))
+    conversation.state = {"stage": "checkout", "product": "Apple AirPods Pro 2", "team": [],
+                          "best": {"price": 249.31}}
+    await conversation.handle(json.dumps({"focal_action": "focal_checkout"}))
     request = next(m for m in ctx.sent if isinstance(m, RequestPayment))
-    assert request.accepted_funds[0].payment_method == "stripe" and request.metadata["stripe"]["id"] == "cs_test_1"
-    assert "test mode" in ctx.texts()
+    assert created == {"cents": 24931, "name": "Apple AirPods Pro 2"}
+    assert request.accepted_funds[0].amount == "249.31" and request.metadata["stripe"]["id"] == "cs_test_1"
+    assert isinstance(ctx.sent[-1], RequestPayment), "the payment request must be the last message"
 
-    commit = CommitPayment(funds=Funds(amount="0.99", currency="USD", payment_method="stripe"), recipient="x", transaction_id="cs_test_1")
+    commit = CommitPayment(funds=Funds(amount="249.31", currency="USD", payment_method="stripe"),
+                           recipient="x", transaction_id="cs_test_1")
     await asi_flow.Conversation(ctx, SHOPPER, ADDRESSES).on_commit(commit)
-    assert "watches" not in ctx.storage, "unpaid checkout must not start the watch"
+    assert not any(isinstance(m, CompletePayment) for m in ctx.sent), "unpaid checkout must not complete"
 
     paid["cs_test_1"] = True
     await asi_flow.Conversation(ctx, SHOPPER, ADDRESSES).on_commit(commit)
     assert any(isinstance(m, CompletePayment) for m in ctx.sent)
-    assert ctx.storage["watches"][SHOPPER]["paid"] is True
+    assert "Purchase complete" in ctx.texts() and ctx.card_kinds()[-1] == "form"
+
+
+async def test_typed_confirmation_passes_in_test_mode(monkeypatch):
+    from uagents_core.contrib.protocols.payment import CompletePayment
+
+    from laai_agents import payments
+
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_x")
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_x")
+
+    async def unpaid(session_id):
+        return False
+
+    monkeypatch.setattr(payments, "is_paid", unpaid)
+    ctx = Context()
+    conversation = asi_flow.Conversation(ctx, SHOPPER, ADDRESSES)
+    conversation.state = {"stage": "awaiting_payment", "checkout_id": "cs_test_9", "product": "Apple AirPods Pro 2",
+                          "team": [], "best": {"price": 249.31}}
+    await conversation.handle("stripe:payment_id:1b949186-eb30-465b-a9d6-7091abe4779d:CONFIRM")
+    assert any(isinstance(m, CompletePayment) for m in ctx.sent)
+    assert "test mode" in ctx.texts()

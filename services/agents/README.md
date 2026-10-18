@@ -187,7 +187,7 @@ available in Direct mode. No buyer execution is implied by a research recommenda
 
 ## Coordinator workflow
 
-The Bureau also starts `focal-shopping-assistant`, a fourth uAgent with ACP and
+The Bureau also starts `FOCAL` (the coordinator), a fourth uAgent with ACP and
 `POST /consider`. It sends typed messages to the three specialist uAgents concurrently,
 waits for their responses, and combines results, sources and individual failures.
 
@@ -283,7 +283,7 @@ curl -X POST http://127.0.0.1:8000/price -H 'content-type: application/json' -d 
 
 For the complete workflow, set a private `COORDINATOR_AGENT_SEED` and
 `COORDINATOR_AGENTVERSE_MAILBOX=1`, then start the normal Bureau (all four agents).
-Connect **focal-shopping-assistant** to your Agentverse account using its inspector link,
+Connect **FOCAL** to your Agentverse account using its inspector link,
 publish its shopping capabilities, and test the full request from ASI:One. Specialists can
 remain in the local Bureau; the coordinator delegates typed messages to them.
 Mailbox/account connection and ASI:One discovery require a real end-to-end account test;
@@ -309,7 +309,7 @@ description and README from `src/laai_agents/agent_profiles/`):
 
 ## ASI:One flow (coordinator)
 
-In ASI:One, **focal-shopping-assistant** runs the whole job in one conversation. Every
+In ASI:One, **FOCAL** runs the whole job in one conversation. Every
 agent hop is posted to the chat as it happens, and decisions are made on
 [Interactive Cards](https://innovationlab.fetch.ai/resources/docs/interactive-cards/asi-interactive-cards):
 

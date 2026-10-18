@@ -27,7 +27,10 @@ ACTIONS = (
     "focal_reject_cart",
     "focal_send_message",
     "focal_skip_message",
-    "focal_start_watch",
+    "focal_checkout",
+    "focal_skip_checkout",
+    "focal_payment_confirm",
+    "focal_wrapup",
     "focal_finish",
 )
 PRIORITIES = ("balanced", "price", "quality")

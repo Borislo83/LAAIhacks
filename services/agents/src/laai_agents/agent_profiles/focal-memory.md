@@ -6,4 +6,4 @@ The Focal team's long-term memory. It recalls a shopper's preferences (shopping 
 
 Every reply includes the request it made and the response it got, so the coordinator can show the call in the chat. Shoppers are keyed by a hash of their address, and nothing personal is shared with other agents.
 
-Part of the Focal team; the coordinator is `focal-shopping-assistant`.
+Part of the Focal team; the coordinator is `FOCAL`.
