@@ -3,7 +3,7 @@
 ## Quick start (every time)
 
 ```bash
-cd ~/Code/lahacks/glasses-web-reader
+cd glasses-web-reader    # from the LAAIhacks repo root
 npm run dev    # terminal 1: leave running (server :8787 + Vite :5173)
 npm run qr     # terminal 2: starts/reuses the tunnel, checks it, prints the QR
 ```

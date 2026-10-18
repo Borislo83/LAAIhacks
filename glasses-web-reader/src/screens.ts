@@ -474,8 +474,3 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
   // Hard device limits: 7 visible text boxes (+1 event layer), 4 images.
   return { texts: texts.slice(0, MAX_TEXTS), images: images.slice(0, MAX_IMAGES) }
 }
-
-/** Plain-text version for the phone mirror's accessibility label. */
-export function specText(spec: PageSpec): string {
-  return spec.texts.map(t => t.text.trim()).filter(Boolean).join('\n')
-}

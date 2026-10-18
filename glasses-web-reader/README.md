@@ -130,7 +130,7 @@ Back / cancel button follows the same review navigation.
 - `server/deck.ts`: Smart view. Claude picks the site kind and fills layout fields with hard character limits; validated and resolved (images, links) on the server.
 - `server/images.ts`: G2 image prep (dither / line art / background knockout) and big-number rendering.
 - `src/screens.ts`: one renderer per layout, within the device limits (8 text, 4 image containers).
-- `src/paginate.ts`: pixel-accurate pagination with `@evenrealities/pretext`. Each section
+- `paginate` (`src/lensos/agents.ts`): pixel-accurate pagination with `@evenrealities/pretext`. Each section
   starts a new page, and paragraphs flow across page breaks.
 - `src/main.ts`: the glasses UI (reader = body + footer text containers; menus = list
   container), with all bridge calls serialized and given timeouts.

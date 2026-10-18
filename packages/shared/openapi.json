@@ -2245,7 +2245,8 @@
           "alternatives",
           "reviews",
           "youtube",
-          "news"
+          "news",
+          "spotify"
         ],
         "title": "AgentKind",
         "description": "Every routable specialist. Only the shopping TaskKinds are persisted as tasks."
