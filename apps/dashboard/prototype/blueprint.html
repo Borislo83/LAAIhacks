@@ -74,11 +74,12 @@ canvas#scene{position:fixed;inset:0;z-index:1;display:block;width:100%;height:10
 main{position:relative;z-index:3;pointer-events:none}
 section{min-height:130vh;display:flex;align-items:center;padding:0 0 0 clamp(28px,6vw,96px)}
 section:first-child{min-height:100vh}
-.copy{max-width:31ch;pointer-events:auto}
-.copy .sheetno{font:12px var(--mono);color:var(--muted);margin:0 0 14px}
+.copy{max-width:31ch;pointer-events:auto;position:fixed;left:clamp(28px,6vw,96px);top:50%;transform:translateY(-50%);opacity:0}
+.copy.off{visibility:hidden}
+.copy .tagline{font:400 clamp(22px,2vw,28px)/1.2 var(--serif);color:var(--ink);opacity:.82;margin:0 0 14px;max-width:24ch}
 .copy h2{font:400 clamp(38px,4.6vw,64px)/1.02 var(--serif);margin:0 0 18px;letter-spacing:-.01em}
 .copy p{margin:0;color:#c3c8c0;font-size:17px;max-width:34ch}
-.hero h1{font:400 clamp(56px,8vw,118px)/.95 var(--serif);margin:0 0 20px;letter-spacing:-.02em}
+.hero h1{font:400 clamp(46px,5.4vw,80px)/1 var(--serif);margin:0 0 18px;letter-spacing:-.015em}
 .hero p{font-size:18px}
 .copy .hint{margin-top:34px;font:12px var(--mono);color:var(--muted)}
 .end h2{font-size:clamp(48px,6vw,88px)}
@@ -87,7 +88,7 @@ section:first-child{min-height:100vh}
 @media (max-width:760px){
   .scrim{display:none}
   section{align-items:flex-end;padding:0 22px calc(15vh + 40px)}
-  .copy{max-width:none;background:linear-gradient(transparent,var(--sheet) 22%);padding-top:40px}
+  .copy{max-width:none;left:0;right:0;top:auto;bottom:0;transform:none;padding:40px 22px calc(env(safe-area-inset-bottom) + 40px);background:linear-gradient(transparent,var(--sheet) 22%)}
   .credits{display:none}
   .tag{font-size:10px}
   .tag small{display:none}
@@ -106,58 +107,58 @@ section:first-child{min-height:100vh}
 <main>
   <section class="hero" data-sheet="1">
     <div class="copy">
-      <p class="sheetno">The glasses</p>
-      <h1>Focal</h1>
-      <p>A team of AI agents behind your glasses. Glance at a product and they tell you whether it's the right price, the right product, and worth buying.</p>
-      <p class="hint">Scroll to build it</p>
+      <h1>The glasses</h1>
+      <p class="tagline">Focal: a team of AI agents behind your glasses.</p>
+      <p>Glance at a product and they tell you if it's the right price, the right product, and worth buying.</p>
+      <p class="hint">Scroll, or use the arrow keys</p>
     </div>
   </section>
   <section data-sheet="2">
     <div class="copy">
-      <p class="sheetno">The lens</p>
-      <h2>One glance, one answer.</h2>
-      <p>Look at a product page. Focal puts one line on your Even Realities G2: the best price it can source and what you'd save. Then it gets out of the way.</p>
+      <h2>The lens</h2>
+      <p class="tagline">One glance, one answer.</p>
+      <p>One line on your G2: the best sourced price and what you'd save. Then it clears.</p>
     </div>
   </section>
   <section data-sheet="3">
     <div class="copy">
-      <p class="sheetno">The architecture</p>
-      <h2>Simple to wear, not simple inside.</h2>
-      <p>The glasses hand the page to Focal's orchestrator. It works out what you need, checks what you've allowed, and keeps track of every approval.</p>
+      <h2>The architecture</h2>
+      <p class="tagline">Simple to wear, not simple inside.</p>
+      <p>The orchestrator works out what you need, checks what you've allowed and tracks every approval.</p>
     </div>
   </section>
   <section data-sheet="4">
     <div class="copy">
-      <p class="sheetno">The Agentverse</p>
-      <h2>Three specialists, at the same time.</h2>
-      <p>The Focal coordinator on Fetch.ai Agentverse sends the price, alternatives and reviews agents out in parallel. Each one fails on its own, so one slow site never blocks the answer.</p>
+      <h2>The Agentverse</h2>
+      <p class="tagline">Three specialists, at the same time.</p>
+      <p>The Focal coordinator sends price, alternatives and reviews agents out in parallel. They're a few of the many agents on Fetch.ai Agentverse it can call on.</p>
     </div>
   </section>
   <section data-sheet="5">
     <div class="copy">
-      <p class="sheetno">The sources</p>
-      <h2>No source, no number.</h2>
-      <p>Every price comes back with where it was found and how far to trust it. If a number can't be backed up, Focal doesn't show it.</p>
+      <h2>The sources</h2>
+      <p class="tagline">No source, no number.</p>
+      <p>Every price shows where it was found and how far to trust it.</p>
     </div>
   </section>
   <section data-sheet="6">
     <div class="copy">
-      <p class="sheetno">The approval gate</p>
-      <h2>Nothing happens without your OK.</h2>
-      <p>Ask Focal to add something to your Amazon cart and it shows you the exact listing first. You approve, it adds it and checks it's there. It has no way to check out. Messages to friends work the same way: you see the draft, you send it.</p>
+      <h2>The approval gate</h2>
+      <p class="tagline">Nothing happens without your OK.</p>
+      <p>Cart adds, checkout through Stripe on Fetch.ai's Payment Protocol, and messages all wait for your approval.</p>
     </div>
   </section>
   <section data-sheet="7">
     <div class="copy">
-      <p class="sheetno">The Studio</p>
-      <h2>A team that remembers you.</h2>
-      <p>Tell Focal Studio what matters once: price, quality or balanced. Every agent works to it, and your choices carry across the glasses and the Studio.</p>
+      <h2>The Studio</h2>
+      <p class="tagline">A team that remembers you.</p>
+      <p>Pick price, quality or balanced once. Every agent works to it, across the glasses and the Studio.</p>
     </div>
   </section>
   <section class="end" data-sheet="7">
     <div class="copy">
       <h2>Your team, one glance away.</h2>
-      <p>Chase your goals. Keep your peace.</p>
+      <p class="tagline">Chase your goals. Keep your peace.</p>
     </div>
   </section>
 </main>
@@ -299,7 +300,11 @@ const P = {
   msg:     new THREE.Vector3(2.4,0,3.7),
   gate:    new THREE.Vector3(-1.0,0,6.6),
   cart:    new THREE.Vector3(0.8,0,6.6),
-  stop:    new THREE.Vector3(2.9,0,6.6),
+  checkout: new THREE.Vector3(-1.6,0,9.4),
+  // the stores the price and alternatives agents read, outside the Agentverse
+  bestbuy: new THREE.Vector3(8.0,0,-2.8),
+  amazon:  new THREE.Vector3(8.0,0,-0.6),
+  others:  new THREE.Vector3(8.0,0,1.6),
   studio:  new THREE.Vector3(-7.0,0,4.8),
 };
 const N = {};
@@ -330,19 +335,42 @@ N.reviews = node(P.reviews, 1.1, 0.6, 0.9, 3.11);
 N.youtube = node(P.youtube, 0.9, 0.45, 0.8, 3.15, MUTED, .8);
 N.msg = node(P.msg, 0.9, 0.45, 0.8, 3.18, MUTED, .8);
 N.cart = node(P.cart, 1.1, 0.6, 0.9, 5.08);
+// the wider agent universe: many more agents on Agentverse the coordinator can call on.
+// Positions are seeded so the drawing is the same on every load.
+const universe = [];
+{
+  let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+  const segs = [];
+  while(universe.length < 34){
+    const x = -2.4 + rnd()*12.2, z = -11.2 + rnd()*5.6;
+    if(universe.some(u => Math.hypot(u.x - x, u.z - z) < 1.05)) continue;
+    const w = 0.22 + rnd()*0.3, h = w*0.6;
+    universe.push(new THREE.Vector3(x, 0, z));
+    segs.push(...boxEdges(w, h, w*0.8).map(p=>p.add(new THREE.Vector3(x, h/2, z))));
+  }
+  N.universe = track(lineObj(segs, MUTED, .55), 3.2);
+  // faint dashed links from the coordinator to a handful of them
+  const links = [];
+  for(const u of universe.filter((_,i)=>i % 4 === 0)){
+    const a = P.coord.clone().setY(0.4), n = Math.round(a.distanceTo(u)/0.22);
+    for(let k=0;k<n;k+=2) links.push(a.clone().lerp(u,k/n), a.clone().lerp(u,(k+1)/n));
+  }
+  N.links = track(lineObj(links, MUTED, .35), 3.25);
+}
 // the gate: two posts and a bar that lifts on approval
 const gate = new THREE.Group(); gate.position.copy(P.gate);
 gate.add(lineObj([...boxEdges(0.08,0.9,0.08).map(p=>p.add(new THREE.Vector3(0,0.45,-0.45))), ...boxEdges(0.08,0.9,0.08).map(p=>p.add(new THREE.Vector3(0,0.45,0.45)))]));
 const bar = new THREE.Group(); bar.position.set(0,0.6,-0.45);
 bar.add(lineObj(boxEdges(0.06,0.06,0.92).map(p=>p.add(new THREE.Vector3(0,0,0.46)))));
 gate.add(bar); track(gate, 5);
-// checkout: a wall Focal never crosses
-{
-  const s=P.stop, segs=[];
-  segs.push(...loop([new THREE.Vector3(s.x,0,s.z-0.7),new THREE.Vector3(s.x,1.1,s.z-0.7),new THREE.Vector3(s.x,1.1,s.z+0.7),new THREE.Vector3(s.x,0,s.z+0.7)]));
-  segs.push(new THREE.Vector3(s.x,0,s.z-0.7),new THREE.Vector3(s.x,1.1,s.z+0.7), new THREE.Vector3(s.x,1.1,s.z-0.7),new THREE.Vector3(s.x,0,s.z+0.7));
-  N.stop = track(lineObj(segs, MUTED, .9), 5.15);
-}
+// checkout: a real path, reached only through the approval gate
+N.checkout = node(P.checkout, 1.1, 0.6, 0.9, 5.12);
+// stores: one box each for Best Buy and Amazon, a stack for every other retailer
+N.bestbuy = node(P.bestbuy, 1.0, 0.55, 0.8, 4.0);
+N.amazon = node(P.amazon, 1.0, 0.55, 0.8, 4.03);
+N.others = node(P.others, 1.0, 0.55, 0.8, 4.06);
+node(P.others.clone().add(new THREE.Vector3(0.12,0.1,-0.12)), 1.0, 0.55, 0.8, 4.08, MUTED, .6);
+node(P.others.clone().add(new THREE.Vector3(0.24,0.2,-0.24)), 1.0, 0.55, 0.8, 4.1, MUTED, .35);
 // Studio: a panel with a priority slider
 const studio = new THREE.Group(); studio.position.copy(P.studio);
 {
@@ -375,6 +403,12 @@ const W = {
   msg:     wire(P.coord, P.msg, 3.18, .25, MUTED),
   gate:    wire(P.orch, P.gate, 5),
   cart:    wire(P.gate, P.cart, 5.08),
+  checkout: wire(P.gate, P.checkout, 5.12),
+  pBestbuy: wire(P.price, P.bestbuy, 4.0, .25),
+  pAmazon:  wire(P.price, P.amazon, 4.03, .25),
+  pOthers:  wire(P.price, P.others, 4.06, .25),
+  aAmazon:  wire(P.alts, P.amazon, 4.05, .2),
+  aOthers:  wire(P.alts, P.others, 4.08, .2),
   studio:  wire(P.studio, P.memory, 6),
 };
 // once its sheet is reached an object draws itself over DRAW seconds, so nothing is left half-drawn
@@ -393,9 +427,12 @@ packets(W.down, 2, {dir:1});
 packets(W.memory, 1, {dir:1, speed:.5});
 packets(W.coord, 2, {dir:1});
 for(const k of ["price","alts","reviews"]) packets(W[k], 1, {dir:1, sync:true});
-for(const k of ["price","alts","reviews"]) packets(W[k], 1, {stage:[4], dir:-1, sync:true, source:true});
+packets(W.reviews, 1, {stage:[4], dir:-1, sync:true, source:true});
+// prices come back from every store at once
+for(const k of ["pBestbuy","pAmazon","pOthers","aAmazon","aOthers"]) packets(W[k], 1, {stage:[4], dir:-1, sync:true, source:true});
 packets(W.gate, 1, {dir:1, gated:true});
 packets(W.cart, 1, {dir:1, afterGate:true});
+packets(W.checkout, 1, {dir:1, afterGate:true});
 packets(W.studio, 2, {dir:1, speed:.6});
 
 /* ---------- labels ---------- */
@@ -428,12 +465,14 @@ const L = {
   reviews:  label("Reviews", "", above(P.reviews, 0.95), 3.2),
   youtube:  label("YouTube finder", "on request", above(P.youtube, 0.8), 3.28),
   msg:      label("Messenger", "drafts, you send", above(P.msg, 0.8), 3.32),
-  bestbuy:  label("bestbuy.com", "high trust, read from the page", P.price.clone().add(new THREE.Vector3(0.75,0.3,0)), 4.05, 99, "lead live"),
-  amazon:   label("amazon.com", "high trust", P.alts.clone().add(new THREE.Vector3(0.75,0.3,0)), 4.1, 99, "lead live"),
+  universe: label("More agents on Agentverse", "a few shown; the coordinator can call any", new THREE.Vector3(3.6, 0.9, -8.4), 3.3),
+  bestbuy:  label("Best Buy", "high trust, read from the page", P.bestbuy.clone().add(new THREE.Vector3(0.7,0.3,0)), 4.05, 99, "lead live"),
+  amazon:   label("Amazon", "high trust", P.amazon.clone().add(new THREE.Vector3(0.7,0.3,0)), 4.1, 99, "lead live"),
+  others:   label("Other retailers", "Walmart, Target, Costco and more", P.others.clone().add(new THREE.Vector3(0.95,0.4,0)), 4.15, 99, "lead live"),
   reviewers: label("Reviewer sources", "pros and cons cited", P.reviews.clone().add(new THREE.Vector3(0.75,0.3,0)), 4.15, 99, "lead live"),
   approval: label("Your approval", "the exact listing or message", above(P.gate, 1.75), 5.05),
   cart:     label("Amazon cart", "adds, then verifies", above(P.cart, 0.95), 5.15),
-  checkout: label("Checkout", "no code path", above(P.stop, 1.45), 5.25),
+  checkout: label("Checkout", "Stripe, via Fetch.ai Payment Protocol", above(P.checkout, 0.95), 5.2),
   studio:   label("Focal Studio", "price, balanced or quality", above(P.studio, 0.45), 6.1),
 };
 
@@ -444,10 +483,10 @@ const K = [
   {az:-0.75, el:0.38, focus:[glasses, L.g2, L.display, L.touch]},
   {az:-0.14, el:0.12, focus:[g(-0.2,-0.55,0.05), g(1.66,0.55,0.05), L.display, L.touch, L.lens]},
   {az:-0.4, el:0.45, focus:[glasses, W.down.line, N.orch, N.memory, N.discs, L.orch, L.memory]},
-  {az:-0.4, el:0.6, focus:[N.floor, N.coord, N.price, N.alts, N.reviews, N.youtube, N.msg, L.coord, L.price, L.alts, L.reviews, L.youtube, L.msg]},
-  {az:-0.4, el:0.66, focus:[N.coord, N.price, N.alts, N.reviews, L.coord, L.bestbuy, L.amazon, L.reviewers]},
-  {az:-0.4, el:0.5, focus:[N.orch, gate, N.cart, N.stop, L.approval, L.cart, L.checkout]},
-  {az:-0.4, el:0.58, focus:[glasses, N.memory, N.floor, gate, N.stop, studio, L.orch, L.studio]},
+  {az:-0.4, el:0.6, focus:[N.floor, N.universe, N.coord, N.price, N.alts, N.reviews, N.youtube, N.msg, L.coord, L.price, L.alts, L.reviews, L.youtube, L.msg, L.universe]},
+  {az:-0.4, el:0.66, focus:[N.coord, N.price, N.alts, N.reviews, N.bestbuy, N.amazon, N.others, L.coord, L.bestbuy, L.amazon, L.others, L.reviewers]},
+  {az:-0.4, el:0.5, focus:[N.orch, gate, N.cart, N.checkout, L.approval, L.cart, L.checkout]},
+  {az:-0.4, el:0.58, focus:[glasses, N.memory, N.floor, gate, N.checkout, N.others, studio, L.orch, L.studio]},
 ];
 const HOLD = 0.6;   // the camera holds each sheet's framing for this much of its scroll, then moves on
 const ease = x => x<.5 ? 4*x*x*x : 1-Math.pow(-2*x+2,3)/2;
@@ -489,23 +528,21 @@ function labelBox(l, side = l.flip){   // pixel extents around the anchor: [left
   const w = l.w, h = l.h/2;
   return side === "r" ? [0, w+14, h, h] : side === "l" ? [w+14, 0, h, h] : [w/2, w/2, h, h];
 }
-// phones: each sheet's copy pins to the bottom of the screen while its drawing holds, then fades
-// out as it scrolls up, so the text never slides across the drawing
+// every sheet's copy is pinned in the same place and crossfades with the sheet, so the text
+// never slides across the drawing; the sections only provide scroll distance
 let copyBand = 0, copyRest = [];
 function pinCopy(){
-  copies.forEach((c,i)=>{ c.style.position = c.style.top = ""; c.style.opacity = ""; if(i) sections[i].style.cssText = ""; });
-  if(!narrow) return;
   copyBand = Math.max(...copies.slice(1,7).map(c=>c.offsetHeight));
-  copyRest = copies.map((c,i)=>{
-    if(i === 0) return c.getBoundingClientRect().top + scrollY;
-    const top = innerHeight - c.offsetHeight - 40;
-    if(i < 7 && top >= 0){
-      // sheets change when a section's top crosses mid-screen, so the copy pins at that moment
-      sections[i].style.cssText = `align-items:flex-start;padding-top:${Math.max(0, top - innerHeight/2)}px;padding-bottom:0`;
-      c.style.position = "sticky"; c.style.top = top+"px";
-    }
-    return top;
-  });
+  copyRest = copies.map(c=>c.getBoundingClientRect().top);
+}
+const smooth = x => x*x*(3-2*x);
+const FADE = 0.16;   // how much of a sheet's scroll the handover between two blocks of copy takes
+function copyAlpha(n){
+  const end = clamp((scrollY + innerHeight*0.5 - sections[7].offsetTop)/(innerHeight*0.2));
+  if(n === 7) return smooth(end);
+  const fadeIn = n === 0 ? 1 : smooth(clamp((s - n)/(FADE/2)));
+  const fadeOut = n === 6 ? smooth(end) : smooth(clamp((s - n - 1 + FADE/2)/(FADE/2)));
+  return fadeIn*(1 - fadeOut);
 }
 function safeRect(i){
   const W = innerWidth, H = innerHeight, b = studioLink.getBoundingClientRect();
@@ -619,12 +656,13 @@ function draw(dt, snap = false){
   const keepOut = [];
   const btn = studioLink.getBoundingClientRect(); keepOut.push([btn.left-6, btn.top-6, btn.right+6, btn.bottom+6]);
   if(+credits.style.opacity > 0.02){ const c = credits.getBoundingClientRect(); if(c.height) keepOut.push([c.left-6, c.top-6, c.right+6, c.bottom+6]); }
-  if(narrow) copies.forEach((c,n)=>{
-    const r = c.getBoundingClientRect();
-    if(n < 7) c.style.opacity = 1 - clamp((copyRest[n] - r.top - (n ? 0 : scrollY > 0 ? 0 : 1e9))/140);
-    if(r.bottom > 0 && r.top < VH && +c.style.opacity !== 0) keepOut.push([r.left-8, r.top-8, r.right+8, r.bottom+8]);
+  copies.forEach((c,n)=>{
+    const op = copyAlpha(n);
+    c.style.opacity = op.toFixed(3);
+    c.classList.toggle("off", op < 0.01);
+    if(narrow && op > 0.02){ const r = c.getBoundingClientRect(); keepOut.push([r.left-8, r.top-8, r.right+8, r.bottom+8]); }
   });
-  else keepOut.push([0, 0, copyRight+24, VH]);
+  if(!narrow) keepOut.push([0, 0, copyRight+24, VH]);
   const order = labels.slice().sort((p,q)=>{
     const pc = Math.floor(p.from) === cur, qc = Math.floor(q.from) === cur;
     return pc !== qc ? (pc ? -1 : 1) : pc ? p.from - q.from : q.from - p.from;
@@ -665,6 +703,21 @@ function frame(now){
 requestAnimationFrame(frame);
 // Scrolling redraws immediately, so the drawing never lags the copy even when frames are throttled.
 addEventListener("scroll", ()=>{ s = sTarget; if(performance.now() - lastDraw > 100) draw(0); }, {passive:true});
+// arrow keys, Page Up/Down and Space step one sheet at a time (handy when presenting)
+function sheetScroll(k){
+  if(k <= 0) return 0;
+  const sec = sections[Math.min(k, 7)];
+  return k >= 7 ? document.documentElement.scrollHeight : sec.offsetTop - innerHeight*0.5 + sec.offsetHeight*0.3;
+}
+addEventListener("keydown", e=>{
+  if(e.altKey || e.ctrlKey || e.metaKey || /input|textarea|select/i.test(e.target.tagName)) return;
+  const fwd = ["ArrowDown","PageDown"].includes(e.key) || (e.key === " " && !e.shiftKey);
+  const back = ["ArrowUp","PageUp"].includes(e.key) || (e.key === " " && e.shiftKey);
+  if(!fwd && !back) return;
+  e.preventDefault();
+  const cur = scrollY + innerHeight*0.5 >= sections[7].offsetTop ? 7 : Math.floor(sTarget);
+  scrollTo({top: sheetScroll(Math.max(0, Math.min(7, cur + (fwd ? 1 : -1)))), behavior: reduced ? "auto" : "smooth"});
+});
 // Render one sheet exactly (used to check every sheet): focalRender(3.5) shows sheet 4 mid-way.
 window.focalRender = (sheet, at = 6) => { sTarget = s = sheet; clock = at; draw(0, true); };
 </script>
