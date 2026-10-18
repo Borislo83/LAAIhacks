@@ -378,9 +378,10 @@ def build_coordinator(addresses: dict[str, str]):
         return ProgressBatch(events=read(req.progress_id, req.after))
 
     # ASI:One gets the full narrated flow with Interactive Cards and the Payment Protocol.
-    from .asi_flow import add_watch_loop, build_asi_protocols
+    from .asi_flow import add_reminder_loop, add_watch_loop, build_asi_protocols
 
     for protocol in build_asi_protocols(addresses):
         agent.include(protocol, publish_manifest=True)
     add_watch_loop(agent, addresses)
+    add_reminder_loop(agent)
     return agent

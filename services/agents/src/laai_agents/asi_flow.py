@@ -76,6 +76,7 @@ AGENTS = {
     "watch": ("👀", "Watch (coordinator)", None),
     "news": ("📰", "News agent", "laai-news"),
     "stripe": ("💳", "Stripe", None),
+    "reminder": ("⏰", "Reminder (FOCAL)", None),
     "youtube": ("▶️", "YouTube agent", "laai-youtube"),
 }
 
@@ -109,6 +110,33 @@ FAMILIES = {
 
 def family_of(body: str) -> str | None:
     return next((name for name, (pattern, _) in FAMILIES.items() if pattern.search(body)), None)
+
+
+RETAILERS = {
+    "amazon.com": "Amazon", "bestbuy.com": "Best Buy", "target.com": "Target", "walmart.com": "Walmart",
+    "costco.com": "Costco", "ebay.com": "eBay", "apple.com": "Apple", "newegg.com": "Newegg",
+    "bhphotovideo.com": "B&H",
+}
+
+
+def listed_stores(sources, priced: set[str]) -> list[str]:
+    """Big retailers among the price agent's sources that it could not read a price from."""
+    from urllib.parse import urlsplit
+
+    found = []
+    for source in sources:
+        host = (urlsplit(source.url).hostname or "").removeprefix("www.")
+        name = next((n for d, n in RETAILERS.items() if host == d or host.endswith("." + d)), None)
+        if name and name not in found and not any(d in store for store in priced for d in [name.lower()]):
+            found.append(name)
+    return found
+
+
+REMINDER_TIMES = {
+    "1m": (60, "In 1 minute (demo)"),
+    "1d": (86400, "Tomorrow"),
+    "14d": (14 * 86400, "In 14 days (return window)"),
+}
 
 
 def route_of(body: str) -> str:
@@ -565,10 +593,13 @@ class Conversation:
             self.credit(field, result.error, ms)
             return await self.talk(field, "focal", f"⚠️ {result.error}. I won't guess.", ms)
         if field in {"price", "price_retry"}:
-            stores = len({o.store for o in result.offers})
-            did = f"{len(result.offers)} offers from {stores} stores"
+            priced = {o.store for o in result.offers}
+            did = f"read {len(result.offers)} price(s) from {len(priced)} store(s)"
             best = f", best {money(result.best.price)} at {result.best.store} ({result.best.trust} trust)" if result.best else ""
-            body = f"{did}{best} · source `{result.data_source}`"
+            seen = listed_stores(result.sources, priced)
+            also = (f". Also found listings at {', '.join(seen)}, but they block automated price reads"
+                    if seen else "")
+            body = f"{did}{best}{also} · source `{result.data_source}`"
         elif field in {"reviews", "alternative_reviews"}:
             did = (
                 f"{result.product}: {result.rating}/5 from {result.review_count} expert reviews"
@@ -704,7 +735,7 @@ class Conversation:
         target = self.state.get("alt") if alternative else None
         product = target["product"] if target else self.state.get("product", "")
         self.state["buy_product"] = product
-        await self.talk("focal", "buyer", f"find the Amazon listing for **{product}**. Cart only, no checkout.")
+        await self.talk("focal", "buyer", f"find the Amazon listing for **{product}**.")
         started = time.perf_counter()
         result = await self.ask("buyer", BuyRequest(product=product[:500]), BuyResponse, timeout=60)
         ms = round((time.perf_counter() - started) * 1000)
@@ -746,7 +777,6 @@ class Conversation:
                 + "\n" + self.said("focal", "you", "pick the exact one. Nothing is added yet."),
                 "custom",
                 {"root": {"type": "section", "title": f"Amazon listings · {product[:60]}",
-                          "subtitle": "Cart only. Checkout is disabled.",
                           "children": [{"type": "list", "items": items}]}},
             )
         )
@@ -776,7 +806,6 @@ class Conversation:
                         {"label": "Listing", "value": url},
                         {"label": "Quantity", "value": str(result.quantity)},
                         {"label": "Expected price", "value": money((self.state.get("best") or {}).get("price"))},
-                        {"label": "Checkout", "value": "Disabled: the agent stops at the cart"},
                         {"label": "Mode", "value": "Live Amazon cart (owner)" if real else "Amazon add-to-cart link; you confirm on Amazon"},
                     ],
                     "approve_cta": {"label": "Add to cart", "primary": True, "selection": selection("focal_approve_cart")},
@@ -958,6 +987,10 @@ class Conversation:
         fields += [
             {"kind": "checkbox", "name": "message", "label": "Send a message to a friend about it"},
             {"kind": "text", "name": "friend", "label": "Who should I message? (e.g. John)"},
+            {"kind": "checkbox", "name": "remind", "label": "Remind me"},
+            {"kind": "select", "name": "remind_when", "label": "When?", "options": [
+                {"value": label, "label": text} for label, (_, text) in REMINDER_TIMES.items()]},
+            {"kind": "text", "name": "remind_about", "label": "Remind me about… (e.g. the return window)"},
             {"kind": "checkbox", "name": "remember", "label": "Save this to memory for better help next time"},
         ]
         await self.show(
@@ -977,7 +1010,8 @@ class Conversation:
             value = reply.get(name)
             if value is None:  # planner prose instead of JSON
                 return bool(re.search({"watch": r"\b(watch|updat|alert|price)", "message": r"\b(message|text|tell)",
-                                       "remember": r"\b(memory|remember|save)"}[name], body, re.IGNORECASE))
+                                       "remember": r"\b(memory|remember|save)",
+                                       "remind": r"\bremind"}[name], body, re.IGNORECASE))
             return str(value).lower() in {"true", "on", "yes", "1"}
 
         product = self.state.get("buy_product") or self.state.get("product", "")
@@ -991,6 +1025,15 @@ class Conversation:
             })
         if ticked("watch") and self.state.get("watch_target"):
             await self.arm_watch()
+        if ticked("remind"):
+            when = reply.get("remind_when") if reply.get("remind_when") in REMINDER_TIMES else "1d"
+            seconds, label = REMINDER_TIMES[when]
+            about = str(reply.get("remind_about") or "").strip()[:200] or f"your {product}"
+            reminders = self.ctx.storage.get("reminders") or []
+            reminders.append({"to": self.sender, "due": time.time() + seconds, "about": about})
+            self.ctx.storage.set("reminders", reminders)
+            self.credit("reminder", f"{label.lower()}: {about}")
+            self.note(self.said("focal", "you", f"⏰ reminder set ({label.lower()}): *{about}*."))
         if ticked("message"):
             friend = str(reply.get("friend") or "").strip() or os.getenv("FOCAL_SHARE_CONTACT", "John")
             what = "I just got" if self.state.get("paid_amount") else "I'm getting"
@@ -1135,6 +1178,17 @@ def build_asi_protocols(addresses: dict[str, str]) -> list[Protocol]:
         await conversation.finish()
 
     return [chat, pay]
+
+
+def add_reminder_loop(agent):
+    @agent.on_interval(period=20)
+    async def send_reminders(ctx: Context):
+        reminders = ctx.storage.get("reminders") or []
+        due = [r for r in reminders if r["due"] <= time.time()]
+        for reminder in due:
+            await ctx.send(reminder["to"], cards.text(f"⏰ **FOCAL reminder:** {reminder['about']}", end_session=True))
+        if due:
+            ctx.storage.set("reminders", [r for r in reminders if r not in due])
 
 
 def add_watch_loop(agent, addresses: dict[str, str]):
