@@ -53,6 +53,8 @@ const BOOKMARKS_KEY = 'webreader.v1.bookmarks'
 const RECOMMENDATION_LAYOUT_KEY = 'webreader.v2.recommendationLayout'
 const SESSION_KEY = 'webreader.lensos.session'
 const HANDS_FREE_KEY = 'webreader.v1.handsFree'
+/** The laptop's pairing code, pasted once into the phone's box (the packaged app has no ?pair= link). */
+const PAIR_KEY = 'webreader.v1.pair'
 const RECOMMENDATIONS_KEY = 'webreader.v1.recommendations'
 /** Must match the server's WAKE_NAME. Not "Hey Even": that wakes the system assistant. */
 const WAKE_PHRASE = 'Hey Focal'
@@ -1958,6 +1960,10 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
   // "open the AirPods page on Apple" typed in the box goes to its route, like by voice;
   // "open YouTube" opens it on the laptop only.
   onLoad: text => {
+    // A pasted pairing link or code ("https://...trycloudflare.com/?pair=..." / "pair XXXX")
+    // signs the app in to the laptop instead of opening a page.
+    const code = pairingCode(text)
+    if (code) return void pairWith(code)
     const route = matchRoute(text)
     if (route) backend.agents?.openOnLaptop(route.url).catch(console.error)
     if (route?.on === 'laptop') return
@@ -2187,13 +2193,30 @@ companion.update()
 void restore().then(connectLocalDev)
 
 // On the dev machine the gateway can sign in for us (GATEWAY_DEV_TOKEN); never over a tunnel.
+/** The pairing code in a pasted pairing link or "pair <code>", else null. */
+function pairingCode(text: string): string | null {
+  const m = text.trim().match(/[?&]pair=([A-Za-z0-9_-]{24,128})\b/) ?? text.trim().match(/^pair(?:ing)?(?:\s+code)?[\s:]+([A-Za-z0-9_-]{24,128})$/i)
+  return m ? m[1] : null
+}
+
+/** Saves the pairing code and signs in with it (a new laptop run means a new code). */
+async function pairWith(code: string) {
+  await enqueue(() => bridge.setLocalStorage(PAIR_KEY, code)).catch(() => {})
+  if (backend.state.connected) backend.disconnect()
+  await connectBackend(`pair-${code}`, '')
+  logHeard({ text: backend.state.connected ? 'Paired with the laptop.' : "Couldn't pair: check the code and that the laptop is running." })
+  companion.update()
+}
+
 async function connectLocalDev() {
   try {
     const api = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
     const res = await fetch(`${api}/api/backend/dev`, { cache: 'no-store' })
     const { local, pairing } = (await res.json()) as { local?: boolean; pairing?: boolean }
-    // A phone that scanned this run's pairing QR carries ?pair=<secret> in its URL.
+    // A phone that scanned this run's pairing QR carries ?pair=<secret> in its URL; the
+    // packaged app uses the code pasted into the phone's box instead.
     const pair = new URLSearchParams(location.search).get('pair')
+      || (await enqueue(() => bridge.getLocalStorage(PAIR_KEY)).catch(() => '')) || ''
     if (backend.state.connected) return
     if (local) await connectBackend('local-dev', '')
     else if (pairing && pair && /^[A-Za-z0-9_-]{24,128}$/.test(pair)) await connectBackend(`pair-${pair}`, '')
