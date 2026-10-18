@@ -422,8 +422,14 @@ async def consider(
         # The picks and each agent's card carry the details, so the reply stays short:
         # the recommendation and, when both were reviewed, how the reviews compare.
         top = next((p for p in picks if p.label == "Recommended"), picks[0])
-        price = f" at ${top.price:.2f} on {top.store}" if top.price is not None else ""
-        sections = [f"My pick: {top.product}{price}."] + [
+        # Store titles run long ("Nothing Ear (a) Wireless Earbuds, 45dB Hybrid ..."):
+        # the name is the part before the first comma or dash.
+        short = re.split(r",|\s[-–|]\s", top.product)[0].strip()
+        if top.price is not None:
+            line = f"My pick: {short} at ${top.price:.2f} on {top.store}."
+        else:
+            line = f"Worth a look: {short}. No store price could be confirmed, so check it yourself."
+        sections = [line] + [
             s for s in sections[-1:] if s.startswith("Reviews compared:")
         ]
     else:

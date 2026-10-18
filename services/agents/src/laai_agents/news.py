@@ -12,16 +12,16 @@ discarded for the extractive one. Nothing is guessed when nothing is found.
 import asyncio
 import ipaddress
 import re
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from html import unescape
-from datetime import UTC, datetime, timedelta
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import aiohttp
 from lxml import html as lxml_html
 
 from . import llm, net
-from .merchants import fetchable, public_host
+from .merchants import MALFORMED, fetchable, public_host
 from .models import NewsRequest, NewsResponse, NewsSource, NewsStory
 from .progress import report, tracked
 from .search import SearchUnavailable, search
@@ -322,7 +322,7 @@ async def read_article(hit: dict) -> dict:
         return article
     try:
         info = extract(page, hit["url"])
-    except (ValueError, TypeError):  # malformed markup
+    except (*MALFORMED, TypeError):  # malformed markup
         return article
     publisher = info["publisher"] or hit["publisher"]
     title = info["title"]
@@ -760,10 +760,9 @@ def story_summary(article: dict) -> str:
     """One or two of the article's own lead sentences, whole, within the limit."""
     lead = article.get("lead") or article.get("text") or ""
     # Search snippets often start with their age: "3 hours ago · ...".
-    lead = re.sub(r"^\s*(?:\d+\s+\w+\s+ago|[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})\s*[·\-–]\s*", "", lead)
-    article = {**article, "lead": lead}
+    lead = AGE_PREFIX.sub("", lead)
     parts = [
-        s for s in sentences(article.get("lead") or article.get("text") or "")
+        s for s in sentences(lead)
         if len(s) >= 25 and s[-1] in ".!?\"”'’" and not s.endswith(("...", "…"))
     ]
     out = ""
@@ -774,7 +773,6 @@ def story_summary(article: dict) -> str:
         out = candidate
     if out:
         return out
-    lead = article.get("lead") or ""
     # No whole sentence fits: a trimmed lead, marked as cut.
     return lead[: STORY_SUMMARY_LIMIT - 1].rstrip(" .") + "…" if lead else ""
 
