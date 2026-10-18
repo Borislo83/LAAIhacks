@@ -28,6 +28,12 @@ NEEDS_SIGN_IN = {
 }
 
 
+def guest_allowed() -> bool:
+    """Opt-in demo mode: a signed-out window adds to Amazon's guest cart in that browser
+    instead of stopping for sign-in. The item is not in anyone's Amazon account."""
+    return os.environ.get("AMAZON_CART_GUEST", "").strip() == "1"
+
+
 def _on_sign_in(page) -> bool:
     # Amazon's sign-in lives at /ap/signin or, in its newer flow, /ax/claim/...
     return bool(re.search(r"/(?:ap/signin|ax/claim)", urlsplit(page.url).path))
@@ -87,7 +93,9 @@ async def add_to_cart(url: str, quantity: int, require_new: bool = False):
             await page.goto(cart_url, wait_until="domcontentloaded", timeout=45000)
             if _on_sign_in(page):
                 return dict(NEEDS_SIGN_IN)
-            if await _signed_out(page):
+            signed_out = await _signed_out(page)
+            guest = signed_out and guest_allowed()
+            if signed_out and not guest:
                 # A signed-out add lands in a guest cart, not the user's account: open
                 # Amazon's sign-in in this window and stop.
                 link = page.locator("#nav-link-accountList").first
@@ -206,7 +214,13 @@ async def add_to_cart(url: str, quantity: int, require_new: bool = False):
             return {
                 "status": "cart_added",
                 "cart_url": cart_url,
-                "message": "Item verified in your Amazon cart. Stopped before checkout. No order was placed.",
+                "guest": guest,
+                "message": (
+                    "Item verified in the guest cart of the laptop's cart window (not signed in "
+                    "to an Amazon account). Stopped before checkout. No order was placed."
+                    if guest
+                    else "Item verified in your Amazon cart. Stopped before checkout. No order was placed."
+                ),
             }
         except (Error, OSError):
             return {

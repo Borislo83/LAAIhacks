@@ -276,6 +276,11 @@ async def add_listing(listing: dict) -> str:
                 f"{title} is already in your Amazon cart; no duplicate added. "
                 "Checkout not started."
             )
+        if outcome.get("guest"):
+            return (
+                f"Added {title} ({price}) to a guest Amazon cart on the laptop (not signed in, "
+                "so it is not in your account). Checkout not started."
+            )
         return f"Added {title} ({price}) to your Amazon cart. Checkout not started."
     if outcome["status"] == "needs_sign_in":
         raise CartError(
