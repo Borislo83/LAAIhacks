@@ -50,7 +50,9 @@ async def asi_search(query: str) -> list[Source]:
         if response.status != 200:
             raise SearchUnavailable(f"ASI search returned HTTP {response.status}")
         data = await response.json()
-    output = data.get("output", [])
+    output = data.get("output") if isinstance(data, dict) else None
+    # Only well-formed objects count; anything else is a failed search, not a crash.
+    output = [x for x in output if isinstance(x, dict)] if isinstance(output, list) else []
     if not any(
         x.get("type") == "web_search_call" and x.get("status") == "completed"
         for x in output
@@ -58,13 +60,17 @@ async def asi_search(query: str) -> list[Source]:
         raise SearchUnavailable("ASI did not report a completed web search")
     sources = []
     for item in output:
-        for content in item.get("content", []):
-            for annotation in content.get("annotations", []):
-                url = annotation.get("url", "")
+        for content in item.get("content") or []:
+            if not isinstance(content, dict):
+                continue
+            for annotation in content.get("annotations") or []:
+                if not isinstance(annotation, dict):
+                    continue
+                url = str(annotation.get("url") or "")
                 if annotation.get("type") == "url_citation" and https_url(url):
                     # A model's prose is not a verbatim source snippet.
                     sources.append(
-                        Source(title=annotation.get("title") or url, url=url)
+                        Source(title=str(annotation.get("title") or url), url=url)
                     )
     if not sources:
         raise SearchUnavailable("ASI search did not return usable citations")
@@ -161,6 +167,37 @@ async def free_search(query: str) -> list[Source]:
 
 
 ASI_FAILURES = (TimeoutError, SearchUnavailable, aiohttp.ClientError, ValueError)
+ASI_GRACE = 1.0
+
+
+async def _outcome(task):
+    try:
+        return await task
+    except asyncio.CancelledError:
+        if asyncio.current_task().cancelling():
+            raise
+        return TimeoutError("ASI search was too slow")
+    except Exception as exc:  # noqa: BLE001 -- the caller sorts failures by type
+        return exc
+
+
+async def _both(query: str):
+    """(ASI result, free search result), each a value or the exception it raised."""
+    cited = asyncio.create_task(asi_search(query))
+    free = asyncio.create_task(free_search(query))
+    try:
+        snippets = await _outcome(free)
+        if not isinstance(snippets, BaseException):
+            await asyncio.wait({cited}, timeout=ASI_GRACE)
+            if not cited.done():
+                cited.cancel()
+        return await _outcome(cited), snippets
+    finally:
+        for task in (cited, free):
+            if not task.done():
+                task.cancel()
+            elif not task.cancelled():
+                task.exception()  # retrieved: a failure we didn't wait for isn't logged
 
 
 async def search(query: str) -> tuple[list[Source], dict]:
@@ -178,10 +215,10 @@ async def search(query: str) -> tuple[list[Source], dict]:
             )
         provider = "asi_web_search"
     elif provider == "auto":
-        # Seek verbatim snippets for numerical claims even if ASI finds citations.
-        cited, snippets = await asyncio.gather(
-            asi_search(query), free_search(query), return_exceptions=True
-        )
+        # Seek verbatim snippets for numerical claims even if ASI finds citations. ASI often
+        # takes 5-10 s; once snippets are in, it gets ASI_GRACE more seconds, not the 35 s
+        # request timeout, so every caller's deadline isn't spent waiting on it.
+        cited, snippets = await _both(query)
         for result in (cited, snippets):
             if isinstance(result, BaseException) and not isinstance(result, ASI_FAILURES):
                 raise result

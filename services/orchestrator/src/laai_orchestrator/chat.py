@@ -461,7 +461,11 @@ async def call_agent(
                 answer = safe_spotify(answer)
         except httpx.TimeoutException:
             break  # Retrying a timed-out request would only multiply the wait.
-        except (httpx.HTTPError, ValueError, TypeError):
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            # A Spotify control that reached the agent may already have run ("next" twice
+            # would skip two songs); only one that never connected is sent again.
+            if kind == AgentKind.SPOTIFY and not isinstance(exc, httpx.ConnectError):
+                break
             continue
         result, error = answer, answer.get("error")
         # A failed web search is retried; a real answer is final. A Spotify error ("needs
@@ -826,7 +830,10 @@ SEARCH_REQUEST = (
     r"why\s+(?:is|are|do|does|did|was)|which\s+\w+|is\s+there|are\s+there|"
     r"(?:do\s+a\s+)?(?:web\s+|google\s+)?search\s+(?:the\s+web\s+|online\s+)?for|look\s+up|google|"
     r"define|tell\s+me\s+about|find\s+out)\b"
-    r"|\bweather\b|\bforecast\b|\bnear\s+(?:me|here|campus|ucla|usc)\b|\b(?:opening|open)\s+hours\b"
+    r"|\bweather\b|\bforecast\b"
+    # "will it rain today", "is it going to snow tomorrow"; "rain jacket" is a product.
+    r"|\b(?:will|is|does)\s+it\s+(?:going\s+to\s+|gonna\s+)?(?:rain|snow)(?:ing)?\b"
+    r"|\bnear\s+(?:me|here|campus|ucla|usc)\b|\b(?:opening|open)\s+hours\b"
 )
 # Small talk reads like a question but is for the assistant, not the web.
 SMALL_TALK = (
@@ -835,6 +842,15 @@ SMALL_TALK = (
     r"|who\s+(?:are|is)\s+(?:you|u|this|that|it)|what\s+are\s+you"
     r"|how\s+(?:can|do|could|should)\s+you\s+help(?:\s+me)?|what\s+(?:can|do)\s+you\s+do"
     r"|how\s+are\s+you(?:\s+doing)?|how(?:'|’)?s\s+it\s+going)[\s?.!]*$"
+)
+# Greetings and thanks: no agent has anything to look up.
+GREETING = (
+    r"(?:(?:hey|hi|hello|yo|sup|hiya|howdy)(?:\s+(?:there|focal))?|good\s+(?:morning|afternoon|evening|night)"
+    r"|thanks?(?:\s+you)?(?:\s+so\s+much)?|thx|ty|cool|nice|great|ok(?:ay)?|bye|goodbye)[\s?.!,]*"
+)
+HELP_REPLY = (
+    "Hi! I can compare prices, find reviews and alternatives, play music, get the news, "
+    "search the web or draft a text. What would you like?"
 )
 # Explicit search verbs: always a request, never the text of a message being drafted.
 SEARCH_VERBS = r"\bsearch\s+(?:the\s+web\s+|online\s+)?for\b|\blook\s+up\b|\bgoogle\b"
@@ -946,6 +962,23 @@ def _other_request(text: str) -> bool:
     )
 
 
+# How a message to a lowercase name usually starts ("text legend i'm late"). Words like
+# "size", "length" or "scale" never start one, so "text size bigger" stays out.
+MESSAGE_OPENER = (
+    r"(?:i(?:'|’)?m|i\s+am|i(?:'|’)?ll|i\s+will|i(?:'|’)?ve|omw|on\s+my\s+way|running\s+late|"
+    r"(?:will\s+|gonna\s+|going\s+to\s+)?be\s+there|see\s+(?:you|ya|u)|happy\s+\w+|call\s+me|"
+    r"where\s+(?:are|r)\s+(?:you|u)|are\s+you|r\s+u|can\s+you|did\s+you|do\s+you|"
+    r"(?:love|miss)\s+(?:you|ya|u)|good\s+(?:morning|night)|thanks|thank\s+you|sorry|"
+    r"congrats|congratulations|hi|hey|hello|yo|lol|ok|okay|let(?:'|’)?s|leaving|heading|"
+    r"almost\s+there|be\s+right\s+there|brt|running\s+behind)\b"
+)
+# "tell me about...", "text it to...": not a recipient.
+NOT_A_NAME = {
+    "me", "us", "it", "this", "that", "these", "those", "them", "him", "her", "the", "a", "an",
+    "my", "your", "our", "his", "their", "about", "to", "for", "some",
+}
+
+
 def _is_message_request(text: str) -> bool:
     # A capitalized name keeps "tell me about..." and "text scale" out of messaging.
     if re.search(r"\bimessage\b", text, re.IGNORECASE):
@@ -968,14 +1001,15 @@ def _is_message_request(text: str) -> bool:
     ):
         return True
     # A lowercase name is fine when the message itself follows: text jonathan "lol",
-    # tell jonathan that I'm late, message alex saying hi.
+    # tell jonathan that I'm late, message alex saying hi, text legend i'm late.
+    if not verb or not (name := verb[2].rstrip(",:")).isalpha():
+        return False
+    rest = text[verb.end():]
     return bool(
-        verb
-        and verb[2].isalpha()
-        and re.match(
-            r"\s*(?:[\"“'‘]|that\b|saying\b|to\s+(?!me\b))",
-            text[verb.end():],
-            re.IGNORECASE,
+        re.match(r"\s*(?:[\"“'‘]|that\b|saying\b|to\s+(?!me\b))", rest, re.IGNORECASE)
+        or (
+            name.lower() not in NOT_A_NAME
+            and re.match(rf"[\s,:]*{MESSAGE_OPENER}", rest, re.IGNORECASE)
         )
     )
 
@@ -989,6 +1023,9 @@ async def chat_with_rules(
         return rules_reply([await prepare_message(text, config, http, emit)])
     if spotify := spotify_request(text):
         return rules_reply([await call_agent(AgentKind.SPOTIFY, spotify, config, http, emit)])
+    # Without an LLM, small talk gets a short help line instead of a product search for "hi".
+    if re.fullmatch(GREETING, text.strip(), re.IGNORECASE) or re.search(SMALL_TALK, text.strip(), re.IGNORECASE):
+        return ChatReply(reply=HELP_REPLY, calls=[], source="rules")
     kinds = [k for k, pattern in KEYWORDS.items() if re.search(pattern, text, re.IGNORECASE)]
     youtube = re.search(r"youtube", text, re.IGNORECASE)
     if (

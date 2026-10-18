@@ -65,7 +65,7 @@ async def test_alternatives_survive_a_failed_category_search(monkeypatch):
     async def down(query):
         raise SearchUnavailable("rate limited")
 
-    async def no_price(req):
+    async def no_price(req, deadline=None):
         return PriceCompareResponse(product=req.product, offers=[], summary="none")
 
     monkeypatch.setattr(live, "search", down)

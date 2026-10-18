@@ -105,7 +105,7 @@ async def test_alternatives_for_products_outside_the_catalog(monkeypatch):
         sources = [Source(title=t, url=f"https://x.example/{i}") for i, t in enumerate(VS_TITLES)]
         return sources, {"sources": sources, "data_source": "ddgs", "notice": "n"}
 
-    async def no_price(req):
+    async def no_price(req, deadline=None):
         return PriceCompareResponse(product=req.product, offers=[], summary="none")
 
     monkeypatch.setattr(live, "search", search)

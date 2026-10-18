@@ -231,6 +231,48 @@ async def test_rest_routes(setup):
     assert response.status == "sent" and setup[0][3] == "sam@icloud.com"
 
 
+async def test_rest_send_route_refuses_a_wrong_token(setup):
+    agent = build_messenger_agent()
+    prepare = agent._rest_handlers[("POST", "/imessage/prepare")]
+    send_route = agent._rest_handlers[("POST", "/imessage/send")]
+    result = await prepare(None, MessageDraftRequest(request="text Sam hi"))
+    for token in ("wrong-token", ""):
+        response = await send_route(
+            None,
+            MessageSendRequest(draft_id=result.draft_id, text=result.text, executor_token=token),
+        )
+        assert response.status == "failed"
+    assert setup == []  # nothing reached osascript
+
+
+class FakeCtx:
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, to, message):
+        self.sent.append((to, message))
+
+
+async def test_only_the_coordinator_can_approve_a_send(setup, monkeypatch):
+    from laai_agents import agents as agents_module
+
+    agent = build_messenger_agent()
+    draft_ = await imessage.prepare(MessageDraftRequest(request="text Sam hi"))
+    handler = next(
+        h
+        for protocol in agent.protocols.values()
+        if protocol.name == "MessageApproval"
+        for h in protocol._signed_message_handlers.values()
+    )
+    approval = imessage.MessageApproval(draft_id=draft_.draft_id, text=draft_.text)
+    ctx = FakeCtx()
+    await handler(ctx, "agent1qstranger", approval)
+    assert ctx.sent[0][1].status == "failed" and setup == []
+    ctx = FakeCtx()
+    await handler(ctx, agents_module.coordinator_address(), approval)
+    assert ctx.sent[0][1].status == "sent" and len(setup) == 1
+
+
 def test_dry_run_is_on_unless_explicitly_disabled(monkeypatch):
     monkeypatch.delenv("IMESSAGE_DRY_RUN")
     assert imessage.dry_run()
@@ -324,12 +366,15 @@ async def test_link_delivery_returns_messages_link_once(monkeypatch):
     monkeypatch.setattr(imessage.llm, "complete", no_llm)
     draft = await imessage.prepare(imessage.MessageDraftRequest(request="text Jonathan see you at 7"))
     send = imessage.MessageSendRequest(draft_id=draft.draft_id, text=draft.text, executor_token="t" * 32)
+    # A wrong token first, while the draft is still unused: refused, and no link (which
+    # would carry the raw handle) is handed out.
+    wrong = imessage.MessageSendRequest(draft_id=draft.draft_id, text=draft.text, executor_token="x" * 32)
+    refused = await imessage.send(wrong)
+    assert refused.status == "failed" and not refused.open_url
     first = await imessage.send(send)
     assert first.status == "open_link"
     assert first.open_url == "sms:+12137930070?&body=See%20you%20at%207."
     assert (await imessage.send(send)).status == "failed"  # single use
-    wrong = imessage.MessageSendRequest(draft_id=draft.draft_id, text=draft.text, executor_token="x" * 32)
-    assert (await imessage.send(wrong)).status == "failed"
 
 
 def test_send_name_a_message_phrasing_is_parsed():

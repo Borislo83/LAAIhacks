@@ -274,3 +274,15 @@ async def test_album_play_keeps_album_link(app):
     reply = await spotify.control(SpotifyRequest(query="After Hours", kind="album"))
     assert reply.uri == f"spotify:album:{ARTIST_ID}" and reply.url.endswith(f"/album/{ARTIST_ID}")
     assert reply.summary == "▶️ Playing Blinding Lights by The Weeknd (from the album After Hours) on the laptop."
+
+
+async def test_rest_route_itself_is_token_gated(app, monkeypatch):
+    calls, _, _ = app
+    monkeypatch.delenv("AGENTVERSE_MAILBOX", raising=False)
+    monkeypatch.setenv("SPOTIFY_EXECUTOR_TOKEN", TOKEN)
+    route = build_spotify_agent()._rest_handlers[("POST", "/spotify")]
+    for sent in ("wrong", ""):
+        reply = await route(None, spotify.SpotifyControlRequest(action="next", executor_token=sent))
+        assert reply.error and calls == []
+    reply = await route(None, spotify.SpotifyControlRequest(action="pause", executor_token=TOKEN))
+    assert reply.error is None and ("pause",) in calls

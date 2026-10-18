@@ -25,7 +25,7 @@ from uuid import uuid4
 import aiohttp
 from dotenv import load_dotenv
 
-from . import cart_action, catalog, handlers
+from . import cart_action, catalog, handlers, net
 from .models import (
     AlternativesRequest,
     ConsiderRequest,
@@ -262,7 +262,16 @@ class GlassesWorkflow:
                         max_price=request.max_price,
                     )
                 ),
+                return_exceptions=True,
             )
+            # Prices are the answer; alternatives that failed are said so, not fatal.
+            if isinstance(price, BaseException):
+                raise price
+            if isinstance(alternatives, BaseException) or alternatives.error:
+                if isinstance(alternatives, BaseException) and not isinstance(alternatives, Exception):
+                    raise alternatives
+                log.warning("alternatives failed for %s", request.product)
+                return result_message([price]) + "\nAlternatives couldn't be checked right now."
             return result_message([price, alternatives])
         raise ValueError("No approved registered handler")
 
@@ -271,6 +280,8 @@ class GlassesWorkflow:
             try:
                 return {"status": "completed", "message": await self.execute(plan)}
             except Exception:  # noqa: BLE001 -- persist a safe failure result for the API
+                # The glasses get the safe message; the log keeps why, for diagnosis.
+                log.exception("%s failed", plan["handler"])
                 return {"status": "failed", "message": "Live research unavailable"}
         if plan.get("cart_started"):
             # A crash after the add began and before its outcome was journaled: never add
@@ -604,6 +615,8 @@ async def run_cli(args):
             print(f"Processed {await workflow.poll_once()} events")
     finally:
         await workflow.close()
+        # Research handlers share one HTTP session per loop (net.session); close it too.
+        await net.close()
 
 
 def main():

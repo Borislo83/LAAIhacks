@@ -34,7 +34,9 @@ async def complete(system: str, user: str, timeout: float = 30.0) -> str | None:
             resp.raise_for_status()
             data = await resp.json()
         return data["choices"][0]["message"]["content"].strip()
-    except (aiohttp.ClientError, TimeoutError, KeyError, IndexError):
+    # A malformed answer (no text, not JSON, not an object) is no answer, not a crash.
+    except (aiohttp.ClientError, TimeoutError, KeyError, IndexError, TypeError,
+            AttributeError, ValueError):
         return None
 
 

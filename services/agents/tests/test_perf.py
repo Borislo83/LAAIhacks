@@ -82,7 +82,7 @@ async def test_alternatives_search_runs_alongside_candidate_compares(monkeypatch
         await wait_for_all("search")
         return [], {"sources": [], "data_source": "ddgs", "notice": "n"}
 
-    async def compare(req):
+    async def compare(req, deadline=None):
         await wait_for_all(req.product)
         return PriceCompareResponse(product=req.product, offers=[], summary="none")
 
