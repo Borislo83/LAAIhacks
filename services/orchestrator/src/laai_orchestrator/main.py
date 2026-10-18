@@ -14,6 +14,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .chat import buyer_call, call_agent, chat
 from .config import DEMO_TOKENS, LOOPBACK_CLIENTS, PROXY_HEADERS, Config
 from .models import (
+    FIELDS,
+    AgentKind,
     BuyerPreparation,
     ChatReply,
     ChatRequest,
@@ -21,7 +23,6 @@ from .models import (
     DispatchRequest,
     PageContext,
     Task,
-    TaskKind,
     ToolArgs,
     UserSettings,
     agent_payload,
@@ -127,6 +128,11 @@ async def chat_user(
     return await current_user(request, credentials)
 
 
+def require_args(kind: AgentKind, body: ToolArgs) -> None:
+    if not body.suits(kind):
+        raise HTTPException(422, f"{kind.value} requires {FIELDS[kind][0]}")
+
+
 def sse(events) -> StreamingResponse:
     return StreamingResponse(
         events,
@@ -169,7 +175,8 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
         }
 
     @app.post("/v1/agents/{kind}")
-    async def direct_agent(kind: TaskKind, body: ToolArgs, request: Request, _: User):
+    async def direct_agent(kind: AgentKind, body: ToolArgs, request: Request, _: User):
+        require_args(kind, body)
         return await call_agent(kind, body, config, request.app.state.http)
 
     @app.get("/v1/settings", response_model=UserSettings)
@@ -265,11 +272,12 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
 
     @app.post("/v1/agents/{kind}/stream", response_class=StreamingResponse)
     async def stream_agent(
-        kind: TaskKind,
+        kind: AgentKind,
         body: ToolArgs,
         request: Request,
         _: User,
     ):
+        require_args(kind, body)
         return sse(
             event_stream(lambda emit: call_agent(kind, body, config, request.app.state.http, emit))
         )
