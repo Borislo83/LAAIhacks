@@ -1,4 +1,6 @@
-from pydantic import Field, HttpUrl, SecretStr
+from uuid import UUID
+
+from pydantic import Field, HttpUrl, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,3 +17,25 @@ class Config(BaseSettings):
     # Local prototyping only: lets /v1/chat run without a Supabase sign-in.
     chat_auth_required: bool = True
     amazon_cart_executor_token: SecretStr = SecretStr("")
+    # Local development only. Accepts the fixture tokens in DEMO_TOKENS from loopback clients
+    # and maps them to DEMO_USER_ID, which must be an existing Supabase Auth user.
+    demo_auth_mode: bool = False
+    demo_user_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def demo_user_required(self):
+        if self.demo_auth_mode and self.demo_user_id is None:
+            raise ValueError("DEMO_AUTH_MODE requires DEMO_USER_ID (an existing Auth user)")
+        return self
+
+
+# Fixture bearer tokens for DEMO_AUTH_MODE. They are public by design and only ever
+# accepted from loopback clients, so they can live in the repository and docs.
+DEMO_TOKENS = {
+    "demo-web": {"web"},
+    "demo-g2": {"g2"},
+    "demo-agent": {"agent"},
+    "demo-executor": {"executor"},
+    "demo-all": {"web", "g2", "agent", "executor"},
+}
+LOOPBACK_CLIENTS = {"127.0.0.1", "::1", "localhost"}

@@ -50,6 +50,13 @@ async def check() -> int:
                         "Check the server secret, apply the migration, and reload the API schema."
                     )
                     return 1
+            # Migration 004 adds this pure helper; calling it reads and writes nothing.
+            response = await http.post(
+                base + "/rest/v1/rpc/laai_uuid_or_null", headers=headers, json={"p": "x"}
+            )
+            if response.is_error:
+                print("Workflow v1.1 (migration 004) is not applied yet.")
+                return 1
     except httpx.HTTPError:
         print("Supabase connection check failed. Check project URL, keys, and network access.")
         return 1

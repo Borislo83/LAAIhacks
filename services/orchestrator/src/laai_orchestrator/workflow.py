@@ -70,6 +70,15 @@ class ActionsSubmission(Submission):
         return actions
 
 
+class SessionCreate(InputModel):
+    device_id: UUID | None = None
+
+
+class DeviceRegistration(InputModel):
+    # Omit to register a new device; send an owned ID to refresh last_seen_at.
+    device_id: UUID | None = None
+
+
 class Decision(Submission):
     expected_revision: int = Field(ge=1)
 
@@ -100,6 +109,8 @@ def router(current_user):
         "reject": {"g2"},
         "events": {"executor"},
         "result": {"executor"},
+        "ack": {"executor"},
+        "device": {"g2"},
     }
 
     async def operate(request, user, operation, session_id=None, body=None):
@@ -129,9 +140,19 @@ def router(current_user):
     async def health():
         return {"status": "ok"}
 
+    @routes.post("/v1/devices", status_code=201)
+    async def register_device(
+        request: Request, body: DeviceRegistration | None = None, user: UUID = user_dependency
+    ):
+        payload = body.model_dump(mode="json", exclude_none=True) if body else {}
+        return await operate(request, user, "device", body=payload)
+
     @routes.post("/v1/sessions", status_code=201)
-    async def create_session(request: Request, user: UUID = user_dependency):
-        return await operate(request, user, "create")
+    async def create_session(
+        request: Request, body: SessionCreate | None = None, user: UUID = user_dependency
+    ):
+        payload = body.model_dump(mode="json", exclude_none=True) if body else {}
+        return await operate(request, user, "create", body=payload)
 
     @routes.get("/v1/sessions/{session_id}")
     async def session_status(session_id: UUID, request: Request, user: UUID = user_dependency):
@@ -212,6 +233,10 @@ def router(current_user):
             )
         return await operate(request, user, "events", session_id, {"after": after})
 
+    @routes.post("/v1/sessions/{session_id}/events/{event_id}/ack")
+    async def ack(session_id: UUID, event_id: UUID, request: Request, user: UUID = user_dependency):
+        return await operate(request, user, "ack", session_id, {"event_id": str(event_id)})
+
     @routes.post("/v1/sessions/{session_id}/actions/{action_id}/result")
     async def result(
         session_id: UUID,
@@ -241,7 +266,7 @@ def install_workflow(app, current_user):
     from starlette.exceptions import HTTPException as StarletteHTTPException
 
     def shared(request):
-        return request.url.path.startswith("/v1/sessions")
+        return request.url.path.startswith(("/v1/sessions", "/v1/devices"))
 
     @app.exception_handler(StarletteHTTPException)
     async def contract_error(request, exc):
