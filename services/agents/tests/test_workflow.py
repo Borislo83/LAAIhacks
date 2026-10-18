@@ -333,16 +333,20 @@ class ContractFixture(GlassesWorkflow):
     async def api(self, role, method, path, body=None, params=None):
         self.requests.append((role, method, path, body, params))
         if path.endswith("/events"):
-            return {"events": self.events}
-        if path.endswith("/display"):
+            # Events carry the action's current status (migration 004).
             return {
-                "page": {"page_id": "page-sony"},
-                "actions": [
-                    {"action_id": action_id, "status": "approved"}
-                    for action_id in self.state["actions"]
-                    if action_id not in self.invalidated
-                ],
+                "events": [
+                    dict(
+                        event,
+                        action_status="invalidated"
+                        if event["action_id"] in self.invalidated
+                        else "approved",
+                    )
+                    for event in self.events
+                ]
             }
+        if path.endswith("/display"):
+            raise AssertionError("The executor must not need the web role")
         if path.endswith("/result") and path.split("/")[-2] in self.invalidated:
             raise GlassesAPIError("POST", 409)
         if (
@@ -404,10 +408,7 @@ async def test_contract_no_execution_before_approval_and_durable_result_retry(tm
     assert result["request_id"] == "evt-1:outcome" and result["status"] == "completed"
 
 
-@pytest.mark.parametrize(
-    "field,value",
-    [("session_id", "other"), ("page_id", "old"), ("action_id", "unknown")],
-)
+@pytest.mark.parametrize("field,value", [("session_id", "other"), ("page_id", "old")])
 async def test_contract_rejects_cross_context_events(tmp_path, field, value):
     workflow = ContractFixture(tmp_path / "journal.json")
     await workflow.propose(PAGE, ConsiderRequest(product="Sony XM5"))
@@ -562,7 +563,65 @@ async def test_invalidated_action_is_recorded_and_does_not_block_later_events(tm
     restarted.events = [stale, fresh]
     await restarted.poll_once()
     assert restarted.executions == 0
-    assert not [r for r in restarted.requests if r[2].endswith("/display")]
+    assert {r[0] for r in restarted.requests} == {"executor"}
+
+
+async def test_poll_needs_only_the_executor_role(tmp_path):
+    workflow = ContractFixture(tmp_path / "journal.json")
+    await workflow.propose(PAGE, ConsiderRequest(product="Sony XM5"))
+    workflow.requests.clear()
+    workflow.events = [approved_event(workflow)]
+    await workflow.poll_once()
+    assert workflow.executions == 1 and workflow.state["cursor"] == "000001"
+    assert {r[0] for r in workflow.requests} == {"executor"}
+
+
+async def test_foreign_approved_action_is_recorded_and_skipped(tmp_path):
+    workflow = ContractFixture(tmp_path / "journal.json")
+    await workflow.propose(PAGE, ConsiderRequest(product="Sony XM5"))
+    foreign = dict(approved_event(workflow), action_id="act-someone-else")
+    mine = approved_event(workflow, "evt-2", "000002")
+    workflow.requests.clear()
+    workflow.events = [foreign, mine]
+    assert await workflow.poll_once() == 2
+    assert workflow.executions == 1 and workflow.state["cursor"] == "000002"
+    assert workflow.state["not_mine"]["evt-1"]["action_id"] == "act-someone-else"
+    # Nothing is posted (result or ack) for another proposer's action.
+    assert not [r for r in workflow.requests if "act-someone-else" in r[2]]
+
+
+async def test_shared_http_session_is_reused_and_closed(tmp_path, monkeypatch):
+    from laai_agents import integration
+
+    opened = []
+
+    class Response:
+        status = 204
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class Session:
+        closed = False
+
+        def __init__(self, **kwargs):
+            opened.append(self)
+
+        def request(self, *args, **kwargs):
+            return Response()
+
+        async def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(integration.aiohttp, "ClientSession", Session)
+    workflow = GlassesWorkflow("http://localhost:8002", {"executor": "t"}, tmp_path / "j")
+    await workflow.api("executor", "GET", "/a")
+    await workflow.api("executor", "GET", "/b")
+    await workflow.close()
+    assert len(opened) == 1 and opened[0].closed
 
 
 async def test_action_invalidated_during_execution_advances_cursor(tmp_path):

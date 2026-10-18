@@ -47,6 +47,10 @@ class GlassesAPIError(RuntimeError):
         self.status = status
 
 
+# Action states that still accept a result. Events carry the action's current status.
+ACTIVE = {"approved", "running"}
+
+
 class GlassesWorkflow:
     def __init__(self, base_url: str, tokens: dict[str, str], journal: Path):
         parsed = urlsplit(base_url)
@@ -66,6 +70,12 @@ class GlassesWorkflow:
                 "outcomes": {},
             }
         )
+        self._session: aiohttp.ClientSession | None = None
+
+    async def close(self):
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
 
     def save(self):
         self.journal.parent.mkdir(parents=True, exist_ok=True)
@@ -81,17 +91,18 @@ class GlassesWorkflow:
             raise RuntimeError(
                 f"Configure GLASSES_{role.upper()}_TOKEN for this operation"
             )
-        async with (
-            aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session,
-            session.request(
-                method,
-                self.base_url + path,
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-                params=params,
-                allow_redirects=False,
-            ) as response,
-        ):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30)
+            )
+        async with self._session.request(
+            method,
+            self.base_url + path,
+            headers={"Authorization": f"Bearer {token}"},
+            json=body,
+            params=params,
+            allow_redirects=False,
+        ) as response:
             if response.status == 204:
                 return None
             if response.status >= 300:
@@ -193,18 +204,29 @@ class GlassesWorkflow:
             return result_message([price, alternatives])
         raise ValueError("No approved registered handler")
 
-    async def still_approved(self, action_id, plan):
-        display = await self.api("web", "GET", self.path() + "/display")
+    async def fetch_events(self):
+        payload = await self.api(
+            "executor",
+            "GET",
+            self.path() + "/events",
+            params={"after": self.state["cursor"]},
+        )
+        return payload if isinstance(payload, list) else payload["events"]
+
+    async def still_approved(self, event):
+        # Re-read the event feed (executor role) for the action's current status.
         current = next(
-            (a for a in display.get("actions", []) if a["action_id"] == action_id),
-            None,
+            (e for e in await self.fetch_events() if e["event_id"] == event["event_id"]),
+            event,
         )
-        return bool(
-            display.get("page")
-            and display["page"]["page_id"] == plan["page_id"]
-            and current
-            and current["status"] in {"approved", "running"}
-        )
+        return current.get("action_status", "approved") in ACTIVE
+
+    def record_foreign(self, event):
+        # Another proposer's action: not ours to run, ack or report on.
+        self.state.setdefault("not_mine", {})[event["event_id"]] = {
+            "action_id": event["action_id"],
+            "recorded_at": datetime.now(UTC).isoformat(),
+        }
 
     def record_invalidated(self, event):
         # The API invalidated this approval (page or proposal changed). Nothing may run
@@ -215,12 +237,12 @@ class GlassesWorkflow:
         }
         self.save()
 
-    async def post_result(self, event, plan, path, body):
+    async def post_result(self, event, path, body):
         try:
             await self.api("executor", "POST", path, body)
         except GlassesAPIError as exc:
             # A 409 can mean the action was invalidated mid-run; only skip if so.
-            if exc.status != 409 or await self.still_approved(event["action_id"], plan):
+            if exc.status != 409 or await self.still_approved(event):
                 raise
             self.record_invalidated(event)
             return False
@@ -232,7 +254,7 @@ class GlassesWorkflow:
             return
         path = self.path() + "/actions/" + quote(action_id, safe="") + "/result"
         if event_id not in self.state["outcomes"]:
-            if not await self.still_approved(action_id, plan):
+            if event.get("action_status", "approved") not in ACTIVE:
                 self.record_invalidated(event)
                 return
             # Authenticated event carries the approval; product/handler/budget
@@ -248,7 +270,7 @@ class GlassesWorkflow:
                     "status": "running",
                     "message": "Researching approved product",
                 }
-                if not await self.post_result(event, plan, path, running):
+                if not await self.post_result(event, path, running):
                     return
                 try:
                     outcome = {
@@ -265,28 +287,23 @@ class GlassesWorkflow:
                 **outcome,
             }
             self.save()
-        await self.post_result(event, plan, path, self.state["outcomes"][event_id])
+        await self.post_result(event, path, self.state["outcomes"][event_id])
 
     async def poll_once(self):
-        payload = await self.api(
-            "executor",
-            "GET",
-            self.path() + "/events",
-            params={"after": self.state["cursor"]},
-        )
-        events = payload if isinstance(payload, list) else payload["events"]
+        events = await self.fetch_events()
         for event in events:
             if event["session_id"] != self.state["session_id"]:
                 raise ValueError("Cross-session event rejected")
             plan = self.state["actions"].get(event["action_id"])
             if event["type"] == "action.approved":
-                if not plan or event["page_id"] != plan["page_id"]:
-                    raise ValueError(
-                        "Unknown or cross-page approved action; cursor not advanced"
-                    )
-                await self.handle_approved(event, plan)
+                if not plan:
+                    self.record_foreign(event)
+                elif event["page_id"] != plan["page_id"]:
+                    raise ValueError("Cross-page approved action; cursor not advanced")
+                else:
+                    await self.handle_approved(event, plan)
             # Never advance until the result is accepted or the approval is recorded as
-            # invalidated. API retries use the same IDs.
+            # invalidated or foreign. API retries use the same IDs.
             self.state["cursor"] = event["cursor"]
             self.save()
         return len(events)
@@ -301,17 +318,20 @@ async def run_cli(args):
         },
         Path(args.journal),
     )
-    if args.command == "propose":
-        page = json.loads(Path(args.page).read_text())
-        print(
-            await workflow.propose(
-                page,
-                ConsiderRequest(product=args.product, max_price=args.budget),
-                args.session,
+    try:
+        if args.command == "propose":
+            page = json.loads(Path(args.page).read_text())
+            print(
+                await workflow.propose(
+                    page,
+                    ConsiderRequest(product=args.product, max_price=args.budget),
+                    args.session,
+                )
             )
-        )
-    else:
-        print(f"Processed {await workflow.poll_once()} events")
+        else:
+            print(f"Processed {await workflow.poll_once()} events")
+    finally:
+        await workflow.close()
 
 
 def main():
