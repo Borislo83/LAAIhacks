@@ -12,6 +12,9 @@ function orb(v,size=40,idle=false){
     const t=size*.2;el+=`<path class="s5" d="M${(c-t*.75).toFixed(1)} ${(c-t).toFixed(1)}L${(c+t).toFixed(1)} ${c}L${(c-t*.75).toFixed(1)} ${(c+t).toFixed(1)}Z" fill="#fff"/>`}
   if(v===6){for(let i=0;i<n;i++)el+=`<rect x="${(i*st+1).toFixed(1)}" y="0" width="1" height="${size}" fill="${g}"/>`;
     for(let k=0;k<3;k++)el+=`<circle class="s6" style="animation-delay:${(k*0.18).toFixed(2)}s" cx="${(c+(k-1)*size*.2).toFixed(1)}" cy="${c}" r="${Math.max(1.2,size/14).toFixed(1)}" fill="#fff"/>`}
+  if(v===7){for(let i=0;i<n;i++)el+=`<rect x="0" y="${(i*st+1).toFixed(1)}" width="${size}" height="1" fill="${g}"/>`;
+    const b=Math.max(1.2,size/14);el+=`<rect x="${(size*.2).toFixed(1)}" y="${(size*.3).toFixed(1)}" width="${(size*.22).toFixed(1)}" height="${(size*.2).toFixed(1)}" fill="#fff" opacity=".85"/>`;
+    [[.48,.3,.32],[.48,.42,.26],[.2,.58,.6],[.2,.7,.48]].forEach(([x,y,w],k)=>el+=`<rect class="s7" style="animation-delay:${(k*0.22).toFixed(2)}s" x="${(x*size).toFixed(1)}" y="${(y*size).toFixed(1)}" width="${(w*size).toFixed(1)}" height="${b.toFixed(1)}" fill="#fff"/>`)}
   if(v===3){for(let i=0;i<n;i++)el+=`<rect x="0" y="${(i*st+1).toFixed(1)}" width="${size}" height="1" fill="${g}"/>`;
     [[.28,.3,1.9],[.45,.25,2.6],[.62,.2,2.2],[.8,.15,3.1]].forEach(([y,w,d],k)=>el+=`<rect class="s3" style="animation-duration:${d}s;animation-delay:${(-k*0.7).toFixed(2)}s" x="0" y="${(y*size).toFixed(1)}" width="${(w*size).toFixed(1)}" height="${Math.max(1,size/16).toFixed(1)}" fill="#fff"/>`)}
   return `<svg class="orb${idle?" idle":""}" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><defs><clipPath id="${id}"><circle cx="${c}" cy="${c}" r="${r}"/></clipPath></defs><circle cx="${c}" cy="${c}" r="${r}" fill="#0E0E10"/><g clip-path="url(#${id})">${el}</g></svg>`;

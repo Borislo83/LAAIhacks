@@ -120,6 +120,8 @@ body[data-density="compact"] .agent{padding:10px}
 @keyframes play{50%{transform:scale(.78);opacity:.55}}
 .orb .s6{animation:typing 1.2s ease-in-out infinite;transform-box:fill-box}
 @keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.5}30%{transform:translateY(-45%);opacity:1}}
+.orb .s7{animation:read 2.2s ease-in-out infinite;transform-box:fill-box;transform-origin:left center}
+@keyframes read{0%,100%{transform:scaleX(.35);opacity:.45}50%{transform:scaleX(1);opacity:1}}
 .orb.idle *{animation-play-state:paused}
 
 /* mode tabs + chat */
@@ -164,6 +166,23 @@ body[data-density="compact"] .agent{padding:10px}
 .yt b{font-weight:500;font-size:14px;line-height:20px}
 .yt small{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
 .yt:hover b{text-decoration:underline}
+/* News brief: image left, sourced text right; stacks when the card itself is narrow */
+.out-news{container-type:inline-size}
+.news{display:grid;grid-template-columns:minmax(0,40%) minmax(0,1fr);gap:14px 18px;align-items:start;max-width:720px}
+.news-img{position:relative;margin:0;aspect-ratio:4/3;border-radius:10px;overflow:hidden;background:#ECECE8;border:1px solid var(--hair)}
+.news-img a,.news-img img{display:block;width:100%;height:100%}
+.news-img img{object-fit:cover}
+.news-img .ph{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:8px;font:11px var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.news-img.noimg img{display:none}
+.news-img.noimg .ph{display:flex}
+.news-text{display:flex;flex-direction:column;gap:8px;min-width:0}
+.news-text h3{margin:0;font:500 19px/26px var(--sans);letter-spacing:-.01em;color:var(--ink);overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden}
+.out-news .lensbox .l2{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.news-text p{margin:0;font-size:14px;line-height:22px;overflow-wrap:anywhere}
+.news-meta{font-size:12px;color:var(--muted)}
+.news-meta time{font-family:var(--mono);font-size:11px}
+.news-srcs{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+@container (max-width:560px){.news{grid-template-columns:1fr}.news-text h3{font-size:17px;line-height:24px}}
 /* iMessage draft: nothing leaves without an explicit Send click on the exact drafted text */
 .out-messenger{border-left:0;padding-left:0}
 .draft{padding:16px;border:1.5px solid var(--ink);border-radius:12px;background:var(--white);display:flex;flex-direction:column;gap:10px;font-size:14px}
@@ -339,6 +358,7 @@ const AGENTS={
   buyer:{v:3,name:"Amazon cart agent",id:"focal-amazon-buyer-demo",route:"/buy/prepare",what:"Real cart · stops before checkout"},
   youtube:{v:5,name:"YouTube finder",id:"laai-youtube",route:"/youtube",what:"Finds the video or song you mean"},
   messenger:{v:6,name:"Messenger",id:"laai-messenger",route:"/messages/draft",what:"Drafts iMessages in chat; you approve each send"},
+  news:{v:7,name:"News brief",id:"laai-news",route:"/news",what:"Reads several sources, one sourced summary"},
 };
 const KEYS=Object.keys(AGENTS);
 const TRY=["Sony XM5","AirPods Pro 2","Bose QC Ultra","Nothing Ear (a)"];
@@ -351,7 +371,7 @@ const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{re
 
 document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=logoMark()+`Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
 const logoOrb=()=>logoMark(28,"orb");
-const WELCOME=`<div class="msg bot">${logoOrb()}<div class="body"><p>Ask me to consider a product, and I’ll check prices, reviews and alternatives within your budget. I can also find a song or video on YouTube, or draft an iMessage for you to approve.</p></div></div>`;
+const WELCOME=`<div class="msg bot">${logoOrb()}<div class="body"><p>Ask me to consider a product, and I’ll check prices, reviews and alternatives within your budget. I can also find a song or video on YouTube, brief you on the news, or draft an iMessage for you to approve.</p></div></div>`;
 const EMPTY_RESULTS='<div class="empty">Answers from the agents show up here.</div>';
 const THREAD_MAX=40;
 $("#thread").innerHTML=WELCOME;
@@ -427,7 +447,7 @@ async function checkAll(){
 $("#ping").onclick=checkAll;
 
 /* rendering answers */
-function lens(top,main,sub){return `<div class="lensbox"><span class="l1">${esc(top)}</span><span class="l2">${esc(main)}</span><span>${esc(sub)}</span></div>`}
+function lens(top,main,sub){return `<div class="lensbox"><span class="l1">${esc(top)}</span><span class="l2">${esc(main)}</span>${sub?`<span>${esc(sub)}</span>`:""}</div>`}
 const VIEW={
   buyer(d){
     const candidates=(d.candidates||[]).map(c=>`<button type="button" class="chip" data-buy-link="${esc(c.url)}" data-product="${esc(d.product)}" data-quantity="${d.quantity}">${esc(c.title)} →</button>`).join("");
@@ -467,6 +487,18 @@ const VIEW={
     return {lens:lens("IMESSAGE DRAFT",d.recipient_name?`To ${d.recipient_name}`:"Pick a recipient","nothing sends until you approve"),
       body:(cands?`<div class="draft-cands">Who did you mean?${cands}</div>`:"")+card};
   },
+  news(d){
+    const srcs=(d.sources||[]).map(s=>({s,u:httpsUrl(s.url)})).filter(x=>x.u);
+    if(!d.headline)return {lens:lens("NEWS","No story found",""),body:`<p class="muted">${esc(d.summary||"No sources reported this yet.")}</p>`};
+    const img=httpsUrl(d.image_url),link=httpsUrl(d.image_source_url),top=srcs[0];
+    const pic=img?`<img src="${esc(img.href)}" alt="${esc(d.image_alt||"")}" width="400" height="300" loading="lazy" referrerpolicy="no-referrer">`:"";
+    const frame=`<figure class="news-img${img?"":" noimg"}">${link&&img?`<a href="${esc(link.href)}" target="_blank" rel="noopener noreferrer">${pic}</a>`:pic}<span class="ph">${logoMark(22)}No image</span></figure>`;
+    const ago=relTime(top?.s.published_at);
+    const meta=[top&&esc(top.s.publisher||top.u.hostname.replace(/^www\./,"")),ago&&`<time datetime="${esc(top.s.published_at)}">${esc(ago)}</time>`].filter(Boolean).join(" · ");
+    const chips=srcs.slice(0,8).map(({s,u})=>`<a class="src" href="${esc(u.href)}" target="_blank" rel="noopener noreferrer" title="${esc(s.title||u.hostname)}">${esc(s.publisher||u.hostname.replace(/^www\./,""))}</a>`).join("");
+    return {lens:lens("NEWS",d.headline,""),
+      body:`<div class="news">${frame}<div class="news-text"><h3 title="${esc(d.headline)}">${esc(d.headline)}</h3>${d.summary?`<p>${esc(d.summary)}</p>`:""}${meta?`<span class="news-meta">${meta}</span>`:""}</div>${chips?`<div class="news-srcs">Sources${chips}</div>`:""}</div>`};
+  },
   reviews(d){
     const pc=(d.pros.length||d.cons.length)?`<div class="pc"><div><h4>Pros</h4><ul>${d.pros.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div><div><h4>Cons</h4><ul>${d.cons.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div></div>`:"";
     // One row per expert score (live mode); otherwise a single link to the reviews.
@@ -494,6 +526,17 @@ function youtubeId(url){
   }catch{}
   return null;
 }
+// News links and images: https only, everything else is dropped.
+function httpsUrl(url){try{const u=new URL(url);return u.protocol==="https:"?u:null}catch{return null}}
+function relTime(iso){
+  const t=Date.parse(iso||"");if(isNaN(t))return "";
+  const m=Math.round((Date.now()-t)/60000);
+  if(m<1)return "just now";if(m<60)return m+"m ago";
+  const h=Math.round(m/60);if(h<24)return h+"h ago";
+  const d=Math.round(h/24);return d<7?d+"d ago":new Date(t).toLocaleDateString([], {month:"short",day:"numeric"});
+}
+// A broken news image falls back to the quiet placeholder; the frame keeps its 4:3 size.
+document.addEventListener("error",e=>{const f=e.target.closest?.(".news-img");if(f)f.classList.add("noimg")},true);
 const watchUrl=id=>`https://www.youtube.com/watch?v=${id}`;
 
 function evidence(d){
@@ -518,7 +561,9 @@ function fill(k,res){
   const box=el.querySelector(".thinking");
   if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the backend running at ${esc(orch.value)}?</p></div>`;return}
   const v=VIEW[k](res.data);
-  box.outerHTML=`<div class="bd"><div><p class="summary">${esc(res.data.summary)}</p>${v.body}</div>${v.lens}${evidence(res.data)}</div>`;
+  // The news card carries its own summary and source chips.
+  const own=k==="news";
+  box.outerHTML=`<div class="bd"><div>${own?"":`<p class="summary">${esc(res.data.summary)}</p>`}${v.body}</div>${v.lens}${own?"":evidence(res.data)}</div>`;
 }
 
 /* form */
@@ -537,6 +582,7 @@ $("#ask").onsubmit=async e=>{
     reviews:{product},
     buyer:{product:product||null,url:amazonUrl||null,quantity:Number($("#quantity").value)||1},
     youtube:{query:product},
+    news:{query:product},
   };
   // Messenger is chat-only: a message needs the conversation's context and a reviewed draft.
   const ks=KEYS.filter(k=>selected.has(k)&&bodies[k]);
@@ -614,8 +660,8 @@ function miniCard(c,i,all=[c]){
   if(!c.result)return `<section class="out">${head}<p class="err">${esc(c.error||"No result")}</p></section>`;
   const v=VIEW[c.kind](c.result);
   const warn=c.result.error?`<p class="warn-note">${esc(c.result.error)}. The agent is fine; the free web search refused this request. Try again in a moment.</p>`:"";
-  const summary=c.kind==="buyer"?"":`<p class="summary">${esc(c.result.summary)}</p>`;
-  return `<section class="out out-${c.kind}">${head}${summary}${v.body}${warn}${v.lens}${evidence(c.result)}</section>`;
+  const summary=c.kind==="buyer"||c.kind==="news"?"":`<p class="summary">${esc(c.result.summary)}</p>`;
+  return `<section class="out out-${c.kind}">${head}${summary}${v.body}${warn}${v.lens}${c.kind==="news"?"":evidence(c.result)}</section>`;
 }
 // The final reply arrives whole; reveal it word by word so it reads like Claude writing.
 async function streamReply(host,text){
