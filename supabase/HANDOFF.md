@@ -13,9 +13,12 @@ This page explains what each team gets and how to plug in. Contract terms follow
 | `202610170003_user_preferences.sql` | `user_preferences` + private notes | Applied (do not rerun) |
 | `202610170004_workflow_v1_1.sql` | Event ack, invalidation outbox, devices, rate-limit fix | Applied 2026-10-17 |
 | `202610170005_workflow_perf.sql` | Lock/index/retention fixes (no API change) | Applied 2026-10-17 (pg_cron not installed: daily purge not scheduled) |
+| `202610170006_session_list.sql` | `sessions` read operation for `GET /v1/sessions` (page watcher) | **Not applied** |
 
-004 and 005 only use `create or replace` / `if [not] exists`, so applying either twice is
-harmless. Apply in the Supabase SQL editor, then run `python check_supabase.py` in
+004, 005 and 006 only use `create or replace` / `if [not] exists`, so applying any of them
+twice is harmless. 006 replaces only the `laai_workflow` entry point (rate limit unchanged)
+and adds `laai_workflow_sessions`; deploy it before an orchestrator that serves
+`GET /v1/sessions`, or that route returns `SESSION_NOT_FOUND`. Apply in the Supabase SQL editor, then run `python check_supabase.py` in
 `services/orchestrator` (read-only; it reports whether 004 is live).
 
 005 keeps `laai_workflow`'s signature and every response shape. It changes:
@@ -148,6 +151,6 @@ curl -s -X POST localhost:8001/v1/sessions -H 'Authorization: Bearer demo-web'
 
 - `cd supabase/tests && npm test`: runs the real migration SQL in embedded Postgres (PGlite).
   Every behavior suite runs twice, against the live schema (001-004) and with 005 on top;
-  `workflow_perf.test.mjs` covers what 005 changes. Shared setup is in `tests/helpers.mjs`.
+  `workflow_perf.test.mjs` covers what 005 changes and `session_list.test.mjs` what 006 adds. Shared setup is in `tests/helpers.mjs`.
 - `cd services/orchestrator && uv run pytest -q`: API, roles, error envelope, demo auth.
 - `cd services/agents && uv run pytest -q`: executor journal, retries, invalidated approvals.
