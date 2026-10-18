@@ -82,6 +82,11 @@ def user(text):
         ("set the volume to 40%", {"action": "volume", "volume": 40}),
         ("turn it up", {"action": "volume", "volume_change": 15}),
         ("turn the music down", {"action": "volume", "volume_change": -15}),
+        ("what's playing", {"action": "now_playing"}),
+        ("What song is this?", {"action": "now_playing"}),
+        ("what is playing on spotify", {"action": "now_playing"}),
+        ("now playing", {"action": "now_playing"}),
+        ("who sings this", {"action": "now_playing"}),
     ],
 )
 async def test_rules_route_spotify_requests(text, payload):
@@ -106,6 +111,11 @@ async def test_rules_route_spotify_requests(text, payload):
         "turn it up to 11 review",
         "is the Sony XM5 worth it",
         "skip the line tickets deals",
+        "what's playing on youtube",
+        "what song is this on youtube",
+        "what's playing at the movies",
+        "what's happening with spotify",
+        "what songs are trending",
     ],
 )
 def test_spotify_rules_do_not_steal_other_requests(text):
@@ -118,6 +128,8 @@ def test_spotify_rules_do_not_steal_other_requests(text):
         ("play never gonna give you up on YouTube", "/youtube"),
         ("latest news on spotify", "/news"),
         ("spotify premium price", "/price"),
+        ("what's happening with spotify", "/news"),
+        ("what song is this on youtube", "/youtube"),
     ],
 )
 async def test_other_agents_keep_their_requests(text, path):
@@ -189,6 +201,17 @@ def llm_agents(tool, arguments, final="Done.", opened=None):
         return httpx.Response(200, json=youtube_result())
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handle)), llm, seen
+
+
+async def test_llm_can_ask_what_is_playing():
+    http, llm, seen = llm_agents("control_spotify", {"action": "now_playing", "query": "x"})
+    async with http:
+        await chat_with_llm(user("what song is this"), config(asi_one_api_key="k"), http)
+    tool = next(t for t in llm[0]["tools"] if t["function"]["name"] == "control_spotify")
+    assert "now_playing" in tool["function"]["parameters"]["properties"]["action"]["enum"]
+    assert seen == [
+        ("/spotify", {"action": "now_playing", "query": None, "kind": "auto", "volume": None, "volume_change": None})
+    ]
 
 
 async def test_llm_uses_the_spotify_tool():
