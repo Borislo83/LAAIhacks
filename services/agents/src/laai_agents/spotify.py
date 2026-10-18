@@ -177,6 +177,11 @@ def clock(seconds: int) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
+def is_named(playing: dict) -> bool:
+    """A real track has a title; Spotify ads report an empty title or a dash."""
+    return (playing.get("title") or "").strip(" -—–") != ""
+
+
 def track_line(playing: dict) -> str:
     """'Espresso by Sabrina Carpenter'."""
     return playing["title"] + (f" by {playing['artist']}" if playing["artist"] else "")
@@ -299,7 +304,12 @@ async def control(req: SpotifyRequest) -> SpotifyResponse:
         fill(reply, playing)
         icon = {"resume": "▶️", "next": "⏭", "previous": "⏮"}[req.action]
         verb = "Now playing" if playing["state"] == "playing" else "Paused on"
-        reply.summary = f"{icon} {verb} {track_line(playing)}"
+        if is_named(playing):
+            reply.summary = f"{icon} {verb} {track_line(playing)}"
+        else:
+            # Spotify Free plays ads between songs; an ad has no real title.
+            done = {"resume": "Resumed", "next": "Skipped", "previous": "Went back"}[req.action]
+            reply.summary = f"{icon} {done}. An ad or untitled item is playing."
     except SpotifyError as exc:
         reply.error = reply.summary = str(exc)
     except SearchUnavailable:

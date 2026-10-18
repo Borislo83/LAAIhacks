@@ -268,6 +268,15 @@ async def test_skips_name_the_track(app, action, summary):
     assert (await spotify.control(SpotifyRequest(action=action))).summary == summary
 
 
+@pytest.mark.parametrize("title", ["—", "", "-"])
+async def test_a_skip_onto_an_ad_says_so_instead_of_a_blank_title(app, title):
+    _, _, state = app
+    state["now_playing"] = playing_line("playing", title, "")
+    reply = await spotify.control(SpotifyRequest(action="next"))
+    assert reply.summary == "⏭ Skipped. An ad or untitled item is playing."
+    assert reply.error is None
+
+
 async def test_album_play_keeps_album_link(app):
     _, _, state = app
     state["sources"] = [source(f"https://open.spotify.com/album/{ARTIST_ID}", "After Hours - Album by The Weeknd | Spotify")]
