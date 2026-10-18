@@ -61,6 +61,8 @@ EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 class MessageDraftRequest(Model):
     request: str = Field(min_length=1, max_length=1200)
+    # The glasses: every message goes to IMESSAGE_DEFAULT_CONTACT, whoever is named.
+    to_default: bool = False
     progress_id: str | None = Field(default=None, min_length=32, max_length=64)
 
 
@@ -135,6 +137,75 @@ def contacts() -> dict[str, str]:
         if name:
             result[name] = handle
     return result
+
+
+def default_contact(book: dict[str, str]) -> str | None:
+    """IMESSAGE_DEFAULT_CONTACT: who a message goes to when the request names nobody
+    ("send a message saying I'm on my way"). Must be one of IMESSAGE_CONTACTS."""
+    matches = resolve(os.getenv("IMESSAGE_DEFAULT_CONTACT", "").strip(), book)
+    return matches[0] if len(matches) == 1 else None
+
+
+# The verb and linking words before an unaddressed message ("send a text saying ...").
+UNADDRESSED = re.compile(
+    r"^(?:(?:hey|hi|ok|okay|yo)[\s,!]+)?(?:please\s+|can you\s+|could you\s+)?"
+    r"(?:send\s+(?:an?\s+)?(?:quick\s+)?(?:imessage|text|message|msg)|imessage|text|message)\b\s*",
+    re.IGNORECASE,
+)
+# Words that start a message rather than name someone ("text I'm on my way").
+NOT_A_RECIPIENT = re.compile(
+    r"^(?:i|i'm|im|i’m|i'll|i’ll|i've|i’ve|we|we're|we’re|omw|on|running|be|see|can|are|did|"
+    r"do|where|what|when|how|hey|hi|hello|yo|thanks|thank|sorry|good|love|miss|happy|call|"
+    r"just|the|it|its|it's|this|that|saying|says|to)$",
+    re.IGNORECASE,
+)
+
+
+WORD = re.compile(r"[a-z0-9']+")
+# Person changes the model may make when it turns "tell him I'm late" into the message.
+FREE_WORDS = {"i", "i'm", "im", "i'll", "i've", "you", "your", "you're", "we", "we're", "me",
+              "my", "a", "an", "the", "is", "am", "are", "to", "and", "it", "it's"}
+
+
+def grounded_message(message: str, request: str) -> bool:
+    """The model's message uses the user's own words (allowing small person changes)."""
+    said = set(WORD.findall(request.lower().replace("’", "'")))
+    words = WORD.findall(message.lower().replace("’", "'"))
+    new = [w for w in words if w not in said and w not in FREE_WORDS]
+    return bool(words) and len(new) <= max(1, len(words) // 5)
+
+
+async def intended_message(request: str, name: str) -> str | None:
+    """What the user wants texted, worked out by the model from a spoken request
+    ("can you let him know I'll be ten minutes late" -> "I'll be ten minutes late").
+    None when there is no model or its answer adds words the user didn't say."""
+    answer = await llm.complete(
+        f"The user is dictating a text message to {name} through smart glasses. Work out the "
+        "exact message they want sent, as they would type it. Drop the request around it "
+        "(\"send a message\", \"tell her\", \"can you\", names, the wake phrase \"Hey Focal\"). "
+        "Keep their words; do not add, explain or rephrase anything. Never start the message "
+        "with a person's name: it is who the request was addressed to, not part of the text. "
+        "Examples: \"text Alex running late\" -> \"running late\"; \"can you let Legend know "
+        "the demo is working\" -> \"the demo is working\"; \"send a message saying I'm on my "
+        "way\" -> \"I'm on my way\". If there is no message, use an empty string. "
+        'Reply with JSON only: {"message": "<text>"}.',
+        request,
+    )
+    try:
+        message = str(json.loads(answer or "")["message"]).strip()
+    except (ValueError, KeyError, TypeError):
+        return None
+    # A contact's name left at the front is who it was addressed to ("Alex running late").
+    names = {w.lower() for name in contacts() for w in [name, name.split()[0]]}
+    first = message.split(maxsplit=1)
+    if len(first) == 2 and first[0].strip(",.:").lower() in names:
+        message = first[1].lstrip(",.: ")
+    return message if message and grounded_message(message, request) else None
+
+
+def unaddressed(request: str) -> str:
+    """The message text of a request that names no recipient."""
+    return LINK.sub("", UNADDRESSED.sub("", request.strip(), count=1), count=1).strip()
 
 
 def mask(handle: str) -> str:
@@ -261,6 +332,22 @@ async def prepare(req: MessageDraftRequest) -> MessageDraftResponse:
         )
     report("parsing", "Finding the recipient and message")
     parsed = await extract(req.request, book)
+    fallback = default_contact(book)
+    if fallback and req.to_default:
+        # The recipient is always the default; the model works out the message from what
+        # was said, else the words after the request are the message.
+        if parsed and (resolve(parsed[0], book) or not NOT_A_RECIPIENT.match(parsed[0])):
+            rule = parsed[1]
+        else:
+            rule = unaddressed(req.request)
+        parsed = (fallback, await intended_message(req.request, fallback) or rule)
+    elif fallback:
+        # Nobody named, or the "name" is the message's first word: it goes to the default.
+        if not parsed:
+            body = unaddressed(req.request)
+            parsed = (fallback, body) if body and body != req.request.strip() else None
+        elif not resolve(parsed[0], book) and NOT_A_RECIPIENT.match(parsed[0]):
+            parsed = (fallback, unaddressed(req.request))
     if not parsed:
         return MessageDraftResponse(
             status="needs_details",

@@ -121,6 +121,12 @@ function messageAnswer(call: AgentCall): AgentAnswer {
     return { kind: 'draft', title: `Message to ${who}`, draft,
       pages: paginate(`Send to ${who}?`, `"${draft.text}"${name ? `\n${draft.recipient}` : ''}`) }
   }
+  // Sent straight from the glasses (no draft to confirm): the outcome, said honestly.
+  if (r.status === 'sent' || r.status === 'failed' || r.status === 'needs_permission' || r.status === 'open_link') {
+    const said = draft.text ? `\n"${draft.text}"` : ''
+    return { kind: 'answer', title: 'Messages',
+      pages: paginate('Messages', `${str(r.summary) || (r.status === 'sent' ? 'Sent.' : 'Not sent.')}${said}`) }
+  }
   // No draft: the agent asked who or what to send, or couldn't reach Messages.
   return { kind: 'answer', title: 'Messages',
     pages: paginate('Messages', `${str(r.summary) || call.error || 'No message was drafted.'}\nNothing was sent.`) }

@@ -21,6 +21,7 @@ def setup(monkeypatch):
     monkeypatch.setenv("IMESSAGE_EXECUTOR_TOKEN", TOKEN)
     monkeypatch.setenv("IMESSAGE_DRY_RUN", "0")  # dry-run tests switch it back on
     monkeypatch.delenv("IMESSAGE_DELIVERY", raising=False)  # link tests set it themselves
+    monkeypatch.delenv("IMESSAGE_DEFAULT_CONTACT", raising=False)  # default tests set it
     monkeypatch.setattr(imessage, "dry_run_log", imessage.deque(maxlen=20))
     monkeypatch.delenv("ASI_ONE_API_KEY", raising=False)
     monkeypatch.setattr(imessage.sys, "platform", "darwin")
@@ -483,3 +484,60 @@ async def test_a_run_of_linking_words_and_punctuation_is_dropped(monkeypatch):
     monkeypatch.setattr(imessage.llm, "complete", no_llm)
     result = await draft("Text Sam to say: testing the message screen.")
     assert (result.status, result.recipient_name, result.text) == ("ready", "Sam", "Testing the message screen.")
+
+
+@pytest.mark.parametrize(
+    ("said", "text"),
+    [
+        ("send a message saying I'm on my way", "I'm on my way."),
+        ("text I'm running late", "I'm running late."),
+        ("message: the demo works", "The demo works."),
+        ("text Alex running late", "Running late"),
+        ("send an imessage to Sam that the glasses work", "The glasses work."),
+    ],
+)
+async def test_from_the_glasses_every_message_goes_to_the_default_contact(monkeypatch, said, text):
+    monkeypatch.setenv("IMESSAGE_DEFAULT_CONTACT", "jordan lee")
+    result = await imessage.prepare(MessageDraftRequest(request=said, to_default=True))
+    assert (result.status, result.recipient_name, result.text) == ("ready", "Jordan Lee", text)
+
+
+async def test_without_the_glasses_flag_a_named_contact_is_kept_and_nobody_named_uses_the_default(monkeypatch):
+    monkeypatch.setenv("IMESSAGE_DEFAULT_CONTACT", "Jordan Lee")
+    named = await imessage.prepare(MessageDraftRequest(request="text Alex running late"))
+    unnamed = await imessage.prepare(MessageDraftRequest(request="send a message saying hi there"))
+    assert (named.recipient_name, unnamed.recipient_name, unnamed.text) == ("Alex", "Jordan Lee", "Hi there")
+
+
+async def test_from_the_glasses_the_model_works_out_the_message_from_the_users_words(monkeypatch):
+    monkeypatch.setenv("IMESSAGE_DEFAULT_CONTACT", "Jordan Lee")
+
+    async def complete(system, user, timeout=30.0):
+        return '{"message": "I\'ll be ten minutes late to the demo"}'
+
+    monkeypatch.setattr(imessage.llm, "complete", complete)
+    said = "can you let him know that I'll be ten minutes late to the demo"
+    result = await imessage.prepare(MessageDraftRequest(request=said, to_default=True))
+    assert (result.recipient_name, result.text) == ("Jordan Lee", "I'll be ten minutes late to the demo.")
+
+
+async def test_a_message_the_model_made_up_is_not_used(monkeypatch):
+    monkeypatch.setenv("IMESSAGE_DEFAULT_CONTACT", "Jordan Lee")
+
+    async def complete(system, user, timeout=30.0):
+        return '{"message": "Sorry, traffic is terrible, see you at the venue soon"}'
+
+    monkeypatch.setattr(imessage.llm, "complete", complete)
+    result = await imessage.prepare(MessageDraftRequest(request="text I'm running late", to_default=True))
+    assert result.text == "I'm running late."
+
+
+async def test_a_contact_name_the_model_leaves_at_the_front_is_dropped(monkeypatch):
+    monkeypatch.setenv("IMESSAGE_DEFAULT_CONTACT", "Jordan Lee")
+
+    async def complete(system, user, timeout=30.0):
+        return '{"message": "Alex running late"}'
+
+    monkeypatch.setattr(imessage.llm, "complete", complete)
+    result = await imessage.prepare(MessageDraftRequest(request="text Alex running late", to_default=True))
+    assert result.text == "Running late"

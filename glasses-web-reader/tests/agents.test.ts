@@ -227,3 +227,10 @@ test('no comparison with fewer than two choices', () => {
   assert.equal(compareTable(shopping([{ kind: 'price', result: { offers: [{ store: 'Amazon', price: 298, trust: 'high' }] } }])), undefined)
   assert.equal(compareTable(shopping([{ kind: 'reviews', result: { summary: 'Good' } }])), undefined)
 })
+
+test('a message sent straight from the glasses shows the outcome, not a confirm screen', () => {
+  const sent = answerFor({ reply: '', calls: [{ kind: 'message', result: { status: 'sent', summary: 'Sent your iMessage to Legend Yang.', recipient_name: 'Legend Yang', text: 'On my way.' } }] } as never)
+  assert.equal(sent?.kind, 'answer')
+  assert.match(sent!.pages.join('\n'), /Sent your iMessage to Legend Yang\.[\s\S]*On my way\./)
+  assert.doesNotMatch(sent!.pages.join('\n'), /Nothing was sent/)
+})

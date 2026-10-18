@@ -89,7 +89,81 @@ def _cart_item(page, asin: str):
 
 
 async def add_to_cart(url: str, quantity: int, require_new: bool = False):
-    """`require_new`: refuse when only Amazon's used buy box ("Buy Used") can add it."""
+    """`require_new`: refuse when only Amazon's used buy box ("Buy Used") can add it.
+    Once the item is in the cart, the cart window comes to the front on the cart page, so
+    the guest cart (which lives only in this window's own profile) can be seen."""
+    outcome = await _add_to_cart(url, quantity, require_new)
+    if outcome.get("status") in ("cart_added", "needs_sign_in"):
+        await _show_window()
+    return outcome
+
+
+# A bar along the bottom of every page and a title prefix: this is the glasses' cart
+# window (its own profile and guest cart), not the user's Chrome. The bar lets clicks
+# through, so it never gets in the way of the add.
+MARKER_SCRIPT = """
+(() => {
+  const mark = () => {
+    if (!document.title.startsWith('FOCAL CART')) document.title = 'FOCAL CART · ' + document.title;
+    if (!document.body || document.getElementById('focal-cart-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'focal-cart-bar';
+    bar.textContent = 'FOCAL CART · the glasses demo cart (guest, separate from your Chrome) · checkout is never started';
+    bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;pointer-events:none;' +
+      'background:#ff6a00;color:#fff;font:600 13px/1.2 -apple-system,Helvetica,Arial,sans-serif;' +
+      'padding:8px 14px;text-align:center;letter-spacing:.04em;box-shadow:0 -2px 8px rgba(0,0,0,.25)';
+    document.body.appendChild(bar);
+  };
+  document.addEventListener('DOMContentLoaded', mark);
+  setInterval(mark, 1000);
+})();
+"""
+
+
+async def _side_of_screen() -> tuple[int, int, int, int]:
+    """The right ~42% of the main screen (x, y, width, height), for the cart window."""
+    width, height = 1512, 982
+    try:
+        probe = await asyncio.create_subprocess_exec(
+            "osascript", "-l", "JavaScript", "-e",
+            'ObjC.import("AppKit"); const f = $.NSScreen.mainScreen.visibleFrame; '
+            "`${f.size.width},${f.size.height}`",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        out = (await asyncio.wait_for(probe.communicate(), 5))[0].decode().strip()
+        width, height = (int(float(v)) for v in out.split(","))
+    except Exception:  # noqa: BLE001 -- a default size is fine
+        pass
+    side = max(560, int(width * 0.42))
+    return width - side, 25, side, height - 25
+
+
+async def _show_window():
+    """Best effort: the cart tab in front, and its Chrome window above the user's Chrome
+    (the same app, so it is raised by process id). Never fails the add."""
+    try:
+        if _page is not None and not _page.is_closed():
+            await _page.bring_to_front()
+        profile = str(Path(os.getenv("AMAZON_BROWSER_PROFILE", ".runtime/amazon-profile")).resolve())
+        find = await asyncio.create_subprocess_exec(
+            "ps", "-axo", "pid=,command=", stdout=asyncio.subprocess.PIPE
+        )
+        lines = (await find.communicate())[0].decode().splitlines()
+        # The browser's own process: its helpers carry --type=renderer, gpu-process, ...
+        pid = next((ln.split()[0] for ln in lines
+                    if f"user-data-dir={profile}" in ln and "--type=" not in ln), "")
+        if pid.isdigit():
+            raise_it = await asyncio.create_subprocess_exec(
+                "osascript", "-e",
+                f'tell application "System Events" to set frontmost of (first process whose unix id is {pid}) to true',
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(raise_it.wait(), 5)
+    except Exception:  # noqa: BLE001 -- showing the window is a convenience
+        pass
+
+
+async def _add_to_cart(url: str, quantity: int, require_new: bool = False):
     from playwright.async_api import Error, TimeoutError, async_playwright
 
     from .buyer import amazon_listing
@@ -111,15 +185,23 @@ async def add_to_cart(url: str, quantity: int, require_new: bool = False):
                 ).resolve()
                 profile.mkdir(parents=True, exist_ok=True, mode=0o700)
                 report("opening_browser", "Opening the dedicated Amazon cart browser")
+                x, y, width, height = await _side_of_screen()
                 _browser = await _playwright.chromium.launch_persistent_context(
                     str(profile),
                     channel="chrome",
                     headless=False,
-                    viewport={"width": 1280, "height": 900},
+                    # Sized to the window, which sits on the right of the screen.
+                    no_viewport=True,
+                    args=[f"--window-position={x},{y}", f"--window-size={width},{height}",
+                          "--hide-crash-restore-bubble"],
                 )
+                # Marked so it is never mistaken for the user's own Chrome.
+                await _browser.add_init_script(MARKER_SCRIPT)
                 _browser.on("close", _reset_browser)
             if _page is None or _page.is_closed():
-                _page = await _browser.new_page()
+                # The window opens with one blank tab: use it rather than adding a second.
+                blank = [p for p in _browser.pages if p.url == "about:blank"]
+                _page = blank[0] if blank else await _browser.new_page()
             page, cart_url = _page, CART_URL
             report(
                 "checking_cart",
