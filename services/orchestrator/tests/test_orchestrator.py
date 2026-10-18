@@ -93,6 +93,8 @@ class Backend:
                     "tasks": tasks,
                 },
             )
+        if path == "/rest/v1/laai_actions":
+            return httpx.Response(200, json=[])
         if path == "/rest/v1/laai_tasks":
             params = request.url.params
             rows = [r for r in self.rows.values() if f"eq.{r['user_id']}" == params["user_id"]]
