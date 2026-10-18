@@ -9,16 +9,29 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
+from .asi_one import complete
 from .config import Config
-from .models import AgentCall, ChatMessage, ChatReply, TaskKind, ToolArgs
+from .models import (
+    FIELDS,
+    AgentCall,
+    AgentKind,
+    ChatMessage,
+    ChatReply,
+    MessageRequest,
+    TaskKind,
+    ToolArgs,
+)
 from .preferences import preference_context, preferred_tasks
 from .progress import agent_request
 
-ASI_ONE_URL = "https://api.asi1.ai/v1/chat/completions"
 MAX_ROUNDS = 3
 
 SYSTEM = """You are Focal, a shopping assistant on smart glasses. You answer by calling agents.
 Tools:
+- find_youtube: a YouTube link for a song or video. Use it, not the shopping tools, whenever the
+  user wants to play, watch, listen to or find a song, music video or other video.
+- message_friend: drafts an iMessage for the user to review. It never sends; the user confirms
+  the draft in the app. Use it for "text/message/tell <name> ...". Say the draft needs review.
 - compare_prices: where a product is cheapest. Use for price, deals, "where to buy", savings.
 - find_alternatives: cheaper or better-rated competitors. Use for "something else", "cheaper", "vs".
 - get_reviews: rating, pros and cons. Use for "is it good", "worth it", quality questions.
@@ -59,24 +72,77 @@ TOOLS = [
         ),
         ("get_reviews", "Rating, review count, pros and cons for a product.", {}),
     ]
+] + [
+    {
+        "type": "function",
+        "function": {
+            "name": "find_youtube",
+            "description": "Find a YouTube link for a song or video the user asks for.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Song or video, with the artist"},
+                    "kind": {"type": "string", "enum": ["song", "video", "auto"]},
+                },
+                "required": ["query"],
+            },
+        },
+    }
 ]
+TOOLS.append(
+    {
+        "type": "function",
+        "function": {
+            "name": "message_friend",
+            "description": "Draft an iMessage to a contact for the user to review. Never sends.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "request": {
+                        "type": "string",
+                        "description": "Who to message and what to say, in the user's words",
+                    }
+                },
+                "required": ["request"],
+            },
+        },
+    }
+)
 TOOL_KINDS = {
-    "compare_prices": TaskKind.PRICE,
-    "find_alternatives": TaskKind.ALTERNATIVES,
-    "get_reviews": TaskKind.REVIEWS,
+    "compare_prices": AgentKind.PRICE,
+    "find_alternatives": AgentKind.ALTERNATIVES,
+    "get_reviews": AgentKind.REVIEWS,
+    "find_youtube": AgentKind.YOUTUBE,
 }
+# Agent output is untrusted: only canonical watch or short links reach the user.
+YOUTUBE_LINK = re.compile(
+    r"https://(?:www\.youtube\.com/watch\?v=|youtu\.be/)[A-Za-z0-9_-]{11}"
+)
+
+
+def _youtube_link(url: Any) -> str | None:
+    return url if isinstance(url, str) and YOUTUBE_LINK.fullmatch(url) else None
+
+
+def safe_youtube(result: dict[str, Any]) -> dict[str, Any]:
+    """Drop any YouTube agent link that is not a canonical https video URL."""
+    alternatives = result.get("alternatives")
+    return {
+        **result,
+        "url": _youtube_link(result.get("url")),
+        "alternatives": [
+            alternative
+            for alternative in (alternatives if isinstance(alternatives, list) else [])
+            if isinstance(alternative, dict) and _youtube_link(alternative.get("url"))
+        ],
+    }
 # Each agent call is tried up to three times before it counts as failed.
 ATTEMPTS = 3
 RETRY_DELAY = 1.0
-FIELDS = {
-    TaskKind.PRICE: ("product", "current_store", "current_price"),
-    TaskKind.ALTERNATIVES: ("product", "max_price"),
-    TaskKind.REVIEWS: ("product",),
-}
 
 
 async def call_agent(
-    kind: TaskKind, args: ToolArgs, config: Config, http: httpx.AsyncClient, emit=None
+    kind: AgentKind, args: ToolArgs, config: Config, http: httpx.AsyncClient, emit=None
 ) -> AgentCall:
     payload = args.model_dump(include=set(FIELDS[kind]))
     started = time.perf_counter()
@@ -109,6 +175,8 @@ async def call_agent(
             answer = response.json()
             if not isinstance(answer, dict) or not isinstance(answer.get("summary"), str):
                 raise TypeError("Invalid agent result")
+            if kind == AgentKind.YOUTUBE:
+                answer = safe_youtube(answer)
         except httpx.TimeoutException:
             break  # Retrying a timed-out request would only multiply the wait.
         except (httpx.HTTPError, ValueError, TypeError):
@@ -133,24 +201,53 @@ async def call_agent(
 
 def _brief(call: AgentCall) -> str:
     """Tool result for the LLM: the agent's own JSON, or the error."""
+    if call.kind == "message" and call.result is not None:
+        # The model needs only what to tell the user, not draft IDs or full contact names.
+        return json.dumps({k: call.result.get(k) for k in MESSAGE_BRIEF})
     return json.dumps(call.result if call.result is not None else {"error": call.error})
 
 
-async def _complete(messages: list[dict[str, Any]], config: Config, http: httpx.AsyncClient):
-    response = await http.post(
-        ASI_ONE_URL,
-        headers={"Authorization": f"Bearer {config.asi_one_api_key.get_secret_value()}"},
-        json={
-            "model": config.asi_one_model,
-            "messages": messages,
-            "tools": TOOLS,
-            "temperature": 0,
-            "max_tokens": 400,
-        },
-        timeout=30,
+MESSAGE_FIELDS = (
+    "draft_id",
+    "recipient_name",
+    "recipient_masked",
+    "text",
+    "expires_at",
+    "summary",
+    "error",
+    "candidates",
+)
+MESSAGE_BRIEF = ("summary", "recipient_masked", "text", "error")
+
+
+async def prepare_message(request: str, config: Config, http: httpx.AsyncClient, emit=None):
+    """Ask the iMessage agent for a draft. Sending is only ever POST /v1/messages/send."""
+    started = time.perf_counter()
+    payload = {"request": request}
+    if emit:
+        emit(
+            {
+                "type": "progress",
+                "kind": "message",
+                "stage": "planning",
+                "message": "Drafting an iMessage; nothing is sent until you confirm",
+            }
+        )
+    try:
+        response = await agent_request("imessage/prepare", payload, config, http, emit, timeout=60)
+        response.raise_for_status()
+        answer = response.json()
+        if not isinstance(answer, dict) or not isinstance(answer.get("summary"), str):
+            raise TypeError("Invalid agent result")
+    except (httpx.HTTPError, ValueError, TypeError):
+        return AgentCall(kind="message", payload=payload, error="iMessage agent unavailable", ms=0)
+    return AgentCall(
+        kind="message",
+        payload=payload,
+        result={k: answer.get(k) for k in MESSAGE_FIELDS if k in answer},
+        error=answer.get("error") if isinstance(answer.get("error"), str) else None,
+        ms=round((time.perf_counter() - started) * 1000),
     )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]
 
 
 def _numbers(text: str) -> set[float]:
@@ -193,7 +290,7 @@ async def chat_with_llm(
                     "message": "Choosing agents" if not calls else "Combining agent findings",
                 }
             )
-        message = await _complete(messages, config, http)
+        message = await complete(messages, config, http, max_tokens=400, timeout=30, tools=TOOLS)
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
             return ChatReply(
@@ -202,24 +299,37 @@ async def chat_with_llm(
         messages.append(
             {"role": "assistant", "content": message.get("content") or "", "tool_calls": tool_calls}
         )
+        # Validate every call first, then run the agents together; replies keep call order.
+        planned = []
         for tool_call in tool_calls:
             name = tool_call["function"]["name"]
-            kind = TOOL_KINDS.get(name)
+            arguments = tool_call["function"]["arguments"] or "{}"
+            job = None
             try:
-                args = ToolArgs.model_validate_json(tool_call["function"]["arguments"] or "{}")
+                if name == "message_friend":
+                    request = MessageRequest.model_validate_json(arguments).request
+                    job = prepare_message(request, config, http, emit)
+                elif kind := TOOL_KINDS.get(name):
+                    args = ToolArgs.model_validate_json(arguments)
+                    if args.suits(kind):
+                        job = call_agent(kind, grounded(args, user_text), config, http, emit)
             except ValidationError:
-                kind = None
-            if kind is None:
-                content = json.dumps({"error": f"Unknown tool or bad arguments: {name}"})
-            else:
-                call = await call_agent(kind, grounded(args, user_text), config, http, emit)
+                pass
+            planned.append((tool_call, name, job))
+        results = iter(await asyncio.gather(*(job for _, _, job in planned if job)))
+        for tool_call, name, job in planned:
+            if job:
+                call = next(results)
                 calls.append(call)
                 content = _brief(call)
+            else:
+                content = json.dumps({"error": f"Unknown tool or bad arguments: {name}"})
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": content})
     # Out of rounds: answer from what the agents returned.
     return rules_reply(calls)
 
 
+MEDIA_WORDS = r"\bsongs?\b|\bvideos?\b|\bplay\b|\bmusic\b|\blisten to\b"
 KEYWORDS = {
     TaskKind.PRICE: r"price|cheap|deal|cost|buy|sale|store|\$",
     TaskKind.ALTERNATIVES: r"alternative|instead|similar|other|cheaper|\bvs\b|versus|compare",
@@ -227,10 +337,28 @@ KEYWORDS = {
 }
 
 
+def _line(call: AgentCall) -> str:
+    link = call.result.get("url") if call.kind == AgentKind.YOUTUBE else None
+    summary = call.result["summary"]
+    return f"{summary} {link}" if link and link not in summary else summary
+
+
 def rules_reply(calls: list[AgentCall]) -> ChatReply:
-    lines = [c.result["summary"] for c in calls if c.result]
+    lines = [_line(c) for c in calls if c.result]
     reply = " ".join(lines) or "The agents are unavailable right now. Try again in a moment."
     return ChatReply(reply=reply, calls=calls, source="rules")
+
+
+def _is_message_request(text: str) -> bool:
+    # A capitalized name keeps "tell me about..." and "text scale" out of messaging.
+    if re.search(r"\bimessage\b", text, re.IGNORECASE):
+        return True
+    verb = re.match(
+        r"(?:please\s+)?(?:send\s+(?:an?\s+)?(?:text|message)\s+to|text|message|tell)\s+(\S+)",
+        text,
+        re.IGNORECASE,
+    )
+    return bool(verb and verb[1][:1].isupper())
 
 
 async def chat_with_rules(
@@ -238,7 +366,20 @@ async def chat_with_rules(
 ) -> ChatReply:
     """No LLM: pick agents by keyword and treat the message as the product name."""
     text = history[-1].content
+    if _is_message_request(text):
+        return rules_reply([await prepare_message(text, config, http, emit)])
     kinds = [k for k, pattern in KEYWORDS.items() if re.search(pattern, text, re.IGNORECASE)]
+    if re.search(r"youtube", text, re.IGNORECASE) or (
+        not kinds and re.search(MEDIA_WORDS, text, re.IGNORECASE)
+    ):
+        # Media requests go to YouTube alone; "video doorbell reviews" stays shopping.
+        media = (
+            "video" if re.search(r"video", text, re.IGNORECASE)
+            else "song" if re.search(r"\bsongs?\b|\bmusic\b", text, re.IGNORECASE)
+            else "auto"
+        )
+        args = ToolArgs(query=text[:300], kind=media)
+        return rules_reply([await call_agent(AgentKind.YOUTUBE, args, config, http, emit)])
     if kinds and TaskKind.REVIEWS not in kinds:
         # Any shopping question is worth reviews, even without a review word in it.
         kinds.append(TaskKind.REVIEWS)

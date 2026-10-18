@@ -16,6 +16,15 @@ class TaskKind(StrEnum):
     REVIEWS = "reviews"
 
 
+class AgentKind(StrEnum):
+    """Every routable specialist. Only the shopping TaskKinds are persisted as tasks."""
+
+    PRICE = "price"
+    ALTERNATIVES = "alternatives"
+    REVIEWS = "reviews"
+    YOUTUBE = "youtube"
+
+
 class UserSettings(InputModel):
     enabled_agents: list[TaskKind] = Field(default_factory=lambda: list(TaskKind), max_length=3)
     require_confirmation: bool = True
@@ -61,13 +70,18 @@ class DispatchRequest(InputModel):
     confirmed: bool = False
 
 
+# The arguments each specialist accepts; shared by chat tool calls and page predictions.
+# The first field is required. TaskKind and AgentKind values compare equal as strings.
+FIELDS = {
+    AgentKind.PRICE: ("product", "current_store", "current_price"),
+    AgentKind.ALTERNATIVES: ("product", "max_price"),
+    AgentKind.REVIEWS: ("product",),
+    AgentKind.YOUTUBE: ("query", "kind"),
+}
+
+
 def agent_payload(kind: TaskKind, product: str, page: PageContext) -> dict[str, Any]:
-    payload: dict[str, Any] = {"product": product}
-    if kind == TaskKind.PRICE:
-        payload.update(current_store=page.current_store, current_price=page.current_price)
-    elif kind == TaskKind.ALTERNATIVES:
-        payload["max_price"] = page.max_price
-    return payload
+    return {f: product if f == "product" else getattr(page, f) for f in FIELDS[kind]}
 
 
 class ChatMessage(InputModel):
@@ -89,14 +103,21 @@ class BuyerPreparation(InputModel):
 class ToolArgs(BaseModel):
     """Agent arguments chosen by the LLM; validated before any agent call."""
 
-    product: str = Field(min_length=1, max_length=200)
+    product: str | None = Field(default=None, min_length=1, max_length=200)
     current_store: str | None = Field(default=None, max_length=200)
     current_price: float | None = Field(default=None, ge=0)
     max_price: float | None = Field(default=None, ge=0)
+    # YouTube agent arguments.
+    query: str | None = Field(default=None, min_length=1, max_length=300)
+    kind: Literal["song", "video", "auto"] = "auto"
+
+    def suits(self, agent: "AgentKind") -> bool:
+        """Whether the agent's required argument is present."""
+        return getattr(self, FIELDS[agent][0]) is not None
 
 
 class AgentCall(BaseModel):
-    kind: TaskKind | Literal["buyer"]
+    kind: AgentKind | Literal["buyer", "message"]
     payload: dict[str, Any]
     result: dict[str, Any] | None = None
     error: str | None = None
@@ -107,3 +128,23 @@ class ChatReply(BaseModel):
     reply: str
     calls: list[AgentCall]
     source: Literal["asi_one", "rules", "coordinator", "buyer"]
+
+
+class MessageRequest(BaseModel):
+    """message_friend tool arguments chosen by the LLM."""
+
+    request: str = Field(min_length=1, max_length=1000)
+
+
+class MessageSend(InputModel):
+    """A draft the signed-in user reviewed and confirmed; text may be edited first."""
+
+    draft_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class MessageSent(BaseModel):
+    status: Literal["sent", "failed", "needs_permission"]
+    summary: str = Field(max_length=2000)
+    # True when the agent only simulated the send (local development).
+    dry_run: bool = False
