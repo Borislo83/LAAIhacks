@@ -239,11 +239,15 @@ async def chat_with_rules(
     """No LLM: pick agents by keyword and treat the message as the product name."""
     text = history[-1].content
     kinds = [k for k, pattern in KEYWORDS.items() if re.search(pattern, text, re.IGNORECASE)]
+    if kinds and TaskKind.REVIEWS not in kinds:
+        # Any shopping question is worth reviews, even without a review word in it.
+        kinds.append(TaskKind.REVIEWS)
     args = ToolArgs(product=text)
     kinds = kinds or list(TaskKind)
     if preferences:
         kinds = preferred_tasks(kinds, preferences.shopping_priority)
-    calls = [await call_agent(k, args, config, http, emit) for k in kinds]
+    # The agents are independent, so they run at the same time; order is kept.
+    calls = list(await asyncio.gather(*(call_agent(k, args, config, http, emit) for k in kinds)))
     return rules_reply(calls)
 
 
