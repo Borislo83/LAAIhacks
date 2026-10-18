@@ -1335,6 +1335,76 @@ async def fast_path(
     return reply.model_copy(update={"reply": laptop_honest(reply.reply, calls)})
 
 
+# --- On the laptop (the glasses) ----------------------------------------------------------
+# From the glasses, naming YouTube or Spotify always does it on the laptop, and "add X to my
+# Amazon cart" adds it there: the spoken command is the approval (a guest cart, no checkout).
+SPOTIFY_FILLER = re.compile(
+    r"^(?:(?:hey|hi|ok|okay|please|pls|focal|can\s+you|could\s+you|would\s+you)\b[\s,]*)*"
+    r"(?:(?:play|put\s+on|start|listen\s+to|queue\s+up|shuffle|open(?:\s+up)?|go\s+to|launch)\b\s*)?"
+    r"(?:me\s+)?(?:some\s+)?|(?:\s*\b(?:on|in|from|with|using|via)\s+)?\bspotify\b(?:\s+app)?"
+    r"|\s+(?:please|for\s+me)$",
+    re.IGNORECASE,
+)
+
+
+def laptop_spotify(text: str) -> SpotifyArgs:
+    """Any request naming Spotify: its control, or else play whatever else it names."""
+    if args := spotify_request(text):
+        return args
+    query = " ".join(SPOTIFY_FILLER.sub(" ", text.strip(" ?.!,")).split()).strip(" ?.!,")
+    return SpotifyArgs(action="play", query=query[:300]) if query else SpotifyArgs(action="resume")
+
+
+async def cart_add_call(product: str, config: Config, http: httpx.AsyncClient, emit=None) -> AgentCall:
+    started = time.perf_counter()
+    if emit:
+        emit({"type": "progress", "kind": "buyer", "stage": "delegated",
+              "message": "Adding it to the Amazon cart on your laptop; checkout is never started"})  # fmt: skip
+    try:
+        response = await agent_request(
+            "cart/add",
+            {"product": product, "executor_token": config.amazon_cart_executor_token.get_secret_value()},
+            config, http, timeout=90,
+        )
+        response.raise_for_status()
+        result = response.json()
+        if not isinstance(result, dict) or result.get("purchase_enabled") is not False:
+            raise ValueError("Only cart-only results are supported")
+        result = {k: str(result.get(k) or "")[:2000] for k in ("product", "status", "summary")} | {
+            "purchase_enabled": False
+        }
+        error = None if result["status"] == "cart_added" else result["summary"]
+        return AgentCall(kind="buyer", payload={"product": product}, result=result, error=error,
+                         ms=round((time.perf_counter() - started) * 1000))  # fmt: skip
+    except (httpx.HTTPError, ValueError, TypeError):
+        return AgentCall(kind="buyer", payload={"product": product},
+                         error="Couldn't reach the Amazon cart on the laptop. Nothing was added.", ms=0)  # fmt: skip
+
+
+async def on_laptop(text: str, history, config: Config, http: httpx.AsyncClient, emit=None) -> ChatReply | None:
+    """The laptop action a glasses request names, run now; None when it names none."""
+    youtube = re.search(r"\byou\s*tube\b", text, re.IGNORECASE)
+    if youtube and not re.search(LINK_WORDS, text, re.IGNORECASE):
+        media = "video" if re.search(r"video", text, re.IGNORECASE) else (
+            "song" if re.search(r"\bsongs?\b|\bmusic\b", text, re.IGNORECASE) else "auto"
+        )
+        call = await call_agent(AgentKind.YOUTUBE, ToolArgs(query=text[:300], kind=media), config, http, emit)
+        call = await play_on_laptop(call, config, http, emit)
+        reply = rules_reply([call])
+        return reply.model_copy(update={"reply": laptop_honest(reply.reply, [call])})
+    if not youtube and re.search(r"\bspotify\b", text, re.IGNORECASE):
+        call = await call_agent(AgentKind.SPOTIFY, grounded_spotify(laptop_spotify(text), text), config, http, emit)
+        reply = rules_reply([call])
+        return reply.model_copy(update={"reply": laptop_honest(reply.reply, [call])})
+    if re.search(CART_REQUEST, text, re.IGNORECASE):
+        product = re.sub(r"\s+", " ", CART_FILLER.sub(" ", re.sub(r"[^\w\s()'+-]", " ", text))).strip()
+        if len(product) >= 2:
+            call = await cart_add_call(product[:200], config, http, emit)
+            return ChatReply(reply=(call.result or {}).get("summary") or call.error, calls=[call], source="buyer",
+                             product="Amazon cart")  # fmt: skip
+    return None
+
+
 async def chat(
     history: list[ChatMessage],
     config: Config,
@@ -1342,6 +1412,7 @@ async def chat(
     emit=None,
     purchase_confirmation=None,
     preferences=None,
+    act_on_laptop=False,
 ) -> ChatReply:
     text = history[-1].content
     # Answer to "What would you like to say to Jonathan?": this text is the message.
@@ -1361,6 +1432,8 @@ async def chat(
     # ("send Jonathan a message about the cheaper AirPods" is a message, not a search).
     if _is_message_request(text) and not re.search(CART_REQUEST, text, re.IGNORECASE):
         return rules_reply([await prepare_message(text, config, http, emit)])
+    if act_on_laptop and (done := await on_laptop(text, history, config, http, emit)):
+        return done
     normalized = re.sub(r"[^a-z ]", "", text.lower()).replace("kart", "cart").strip()
     normalized = re.sub(r"\s+", " ", normalized)
     confirming = normalized in {

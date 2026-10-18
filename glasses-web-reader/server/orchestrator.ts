@@ -3,6 +3,8 @@ import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import type { Context } from 'hono'
 import { getConnInfo } from '@hono/node-server/conninfo'
+import { execFile } from 'node:child_process'
+import { LAPTOP_URLS } from '../shared/routes'
 
 interface Options {
   base: string; transport?: typeof fetch; origins?: string[]
@@ -15,7 +17,12 @@ interface Options {
   pairSecret?: string
   /** The TCP peer address; defaults to the Node socket. Injectable for tests. */
   peerAddress?: (c: Context) => string | undefined
+  /** Opens a URL on this laptop (macOS `open`). Injectable for tests. */
+  openOnLaptop?: (url: string) => Promise<void>
 }
+
+const macOpen = (url: string) => new Promise<void>((resolve, reject) =>
+  execFile('open', [url], { timeout: 10_000 }, err => err ? reject(err) : resolve()))
 
 const LOOPBACK = /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/
 // A tunnel or other proxy in front of us: never local.
@@ -68,6 +75,23 @@ export function orchestratorGateway(options: Options) {
   gateway.use('*', bodyLimit({ maxSize: 100_000 }))
   // Tells the app whether it can connect without a token (local dev token on this machine).
   gateway.get('/dev', c => c.json({ local: !!options.devToken && isLocal(c), pairing: !!pairBearer }, 200, { 'Cache-Control': 'no-store' }))
+  // Opens one of the hardcoded routes (YouTube, Spotify, the AirPods page) on this laptop,
+  // for this machine or a paired phone only. Any other URL is refused.
+  gateway.post('/laptop/open', async c => {
+    const origin = c.req.header('origin')
+    if (origin && ![new URL(c.req.url).origin, ...(options.origins ?? [])].includes(origin)) return c.json({ error: 'Origin not allowed' }, 403)
+    const auth = c.req.header('authorization') ?? ''
+    if (!((auth === LOCAL_DEV_BEARER && !!options.devToken && isLocal(c)) || paired(auth))) return c.json({ error: 'Pair the glasses to open things on the laptop.' }, 401)
+    const { url } = await c.req.json<{ url?: unknown }>().catch(() => ({ url: undefined }))
+    if (typeof url !== 'string' || !LAPTOP_URLS.has(url)) return c.json({ error: 'Not a known page.' }, 400)
+    try {
+      await (options.openOnLaptop ?? macOpen)(url)
+      console.log(`[laptop] opened ${url}`)
+      return c.json({ opened: url }, 200, { 'Cache-Control': 'no-store' })
+    } catch {
+      return c.json({ error: "Couldn't open it on the laptop." }, 502)
+    }
+  })
   gateway.all('*', async c => {
     const path = c.req.path.replace(/^\/api\/backend/, '')
     if (!routes.some(([method, pattern]) => method === c.req.method && pattern.test(path))) return c.json({ error: 'Route unavailable' }, 404)

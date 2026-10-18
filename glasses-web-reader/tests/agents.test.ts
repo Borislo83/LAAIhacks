@@ -26,7 +26,7 @@ test('voice command reaches chat when signed in and a news hit becomes lens page
   assert.equal(requests[0].method, 'POST')
   assert.ok(requests[0].url.endsWith('/api/backend/v1/chat'))
   assert.equal(requests[0].headers.get('authorization'), 'Bearer signed-token')
-  assert.deepEqual(await requests[0].json(), { messages: [{ role: 'user', content: 'what is the latest on the fed' }] })
+  assert.deepEqual(await requests[0].json(), { messages: [{ role: 'user', content: 'what is the latest on the fed' }], act_on_laptop: true })
   assert.equal(answer?.kind, 'answer')
   assert.match(lens(answer), /^Fed holds rates\nRates held steady/)
   assert.match(lens(answer), /Sources: Reuters, AP/)

@@ -58,6 +58,8 @@ export class BackendClient {
       return await response.json() as T
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
   }
+  /** Opens a hardcoded route (YouTube, Spotify, a product page) on the laptop. */
+  openOnLaptop(url: string, signal?: AbortSignal) { return this.request<{ opened: string }>('/laptop/open', 'POST', { url }, signal) }
   createSession(signal?: AbortSignal) { return this.request<{ session_id: string; revision: number }>('/v1/sessions', 'POST', {}, signal) }
   async display(session: string, after?: number, signal?: AbortSignal) {
     const d = await this.request<DisplayState | null>(`/v1/sessions/${this.id(session)}/display${after === undefined ? '' : `?after_revision=${after}`}`, 'GET', undefined, signal)
@@ -77,7 +79,8 @@ export class BackendClient {
   }
   /** One voice command; the orchestrator picks and calls the agents. */
   chat(text: string, signal?: AbortSignal) {
-    return this.request<ChatReply>('/v1/chat', 'POST', { messages: [{ role: 'user', content: text.slice(0, 4000) }] }, signal)
+    // From the glasses: YouTube, Spotify and Amazon cart requests run on the laptop.
+    return this.request<ChatReply>('/v1/chat', 'POST', { messages: [{ role: 'user', content: text.slice(0, 4000) }], act_on_laptop: true }, signal)
   }
   /** Sends a reviewed iMessage draft exactly as drafted; only after the user's tap. */
   sendMessage(draft_id: string, text: string, signal?: AbortSignal) {

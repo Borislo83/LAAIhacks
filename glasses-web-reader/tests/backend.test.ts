@@ -140,3 +140,21 @@ test('a phone with this run\'s pairing secret gets the dev token from anywhere; 
   assert.equal(calls.length, 1)
   assert.throws(() => orchestratorGateway({ base: 'http://127.0.0.1:8001', devToken: 'demo-all', pairSecret: 'short' }))
 })
+
+test('the laptop opens only hardcoded routes, for this machine or a paired phone', async () => {
+  const opened: string[] = []
+  const secret = 'p'.repeat(32)
+  let peer = '127.0.0.1'
+  const app = new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001', devToken: 'demo-all', pairSecret: secret,
+    peerAddress: () => peer, openOnLaptop: async url => { opened.push(url) } }))
+  const open = (auth: string, url: string) => app.request('/api/backend/laptop/open', { method: 'POST',
+    headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) })
+  assert.equal((await open('Bearer local-dev', 'https://www.youtube.com/')).status, 200)
+  assert.equal((await open(`Bearer pair-${secret}`, 'spotify:')).status, 200)
+  assert.equal((await open('Bearer local-dev', 'https://evil.example/')).status, 400)
+  assert.equal((await open('Bearer pair-wrong', 'spotify:')).status, 401)
+  assert.equal((await open('Bearer someone-elses-token', 'spotify:')).status, 401)
+  peer = '203.0.113.9'
+  assert.equal((await open('Bearer local-dev', 'spotify:')).status, 401)
+  assert.deepEqual(opened, ['https://www.youtube.com/', 'spotify:'])
+})

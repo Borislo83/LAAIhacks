@@ -10,6 +10,7 @@ import { renderPage } from './render'
 import { isMangaDex, mangaPage, mangaStrip } from './manga'
 import type { Extracted } from './extract'
 import { orchestratorGateway } from './orchestrator'
+import { routeFor } from '../shared/routes'
 import { recommendationRoutes } from './recommendations'
 import { normalizeSpokenCodes, parseWake, transcribe } from './voice'
 import { findPage } from './search'
@@ -226,6 +227,12 @@ app.post('/api/voice', async c => {
 app.get('/api/search', async c => {
   const q = c.req.query('q')?.trim()
   if (!q) return c.json({ error: 'Missing ?q=' }, 400)
+  // A hardcoded route wins over the web search ("open the AirPods page on Apple").
+  const routed = routeFor(q)
+  if (routed) {
+    console.log(`[search] ${JSON.stringify(q)} → ${routed} (route)`)
+    return c.json({ url: routed, title: routed })
+  }
   try {
     const result = await findPage(q)
     console.log(`[search] ${JSON.stringify(q)} → ${result.url}`)

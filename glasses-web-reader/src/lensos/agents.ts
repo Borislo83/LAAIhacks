@@ -105,7 +105,7 @@ function youtubeText(r: Record<string, unknown>) {
 }
 
 /** A call that may have changed something on the laptop: it is always shown, error or not. */
-const laptopCall = (c: AgentCall) => c.kind === 'spotify' || (c.kind === 'youtube' && !!c.result?.laptop)
+const laptopCall = (c: AgentCall) => c.kind === 'spotify' || c.kind === 'buyer' || (c.kind === 'youtube' && !!c.result?.laptop)
 
 /** Shown when chat may still be running (or ran) an action but didn't answer in time. */
 export const NO_ANSWER = 'No answer yet. Check the laptop.'
