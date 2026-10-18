@@ -15,6 +15,9 @@ from uagents_core.contrib.protocols.payment import Funds, RequestPayment
 from . import net
 
 STRIPE_API = "https://api.stripe.com/v1"
+# Pinned so sessions keep the `embedded` ui_mode that ASI:One's checkout renders;
+# newer API versions renamed it and drop older parameters.
+STRIPE_VERSION = {"Stripe-Version": "2025-03-31.basil"}
 
 
 def amount_cents() -> int:
@@ -44,7 +47,6 @@ async def create_checkout(description: str, reference: str) -> dict:
         "ui_mode": "embedded",
         "redirect_on_completion": "if_required",
         "mode": "payment",
-        "payment_method_types[0]": "card",
         "return_url": return_url,
         "expires_at": str(int(time.time()) + 1800),
         "line_items[0][quantity]": "1",
@@ -59,6 +61,7 @@ async def create_checkout(description: str, reference: str) -> dict:
         f"{STRIPE_API}/checkout/sessions",
         data=form,
         auth=_auth(),
+        headers=STRIPE_VERSION,
         timeout=aiohttp.ClientTimeout(total=15),
     ) as response:
         body = await response.json()
@@ -82,6 +85,7 @@ async def is_paid(checkout_session_id: str) -> bool:
     async with net.session().get(
         f"{STRIPE_API}/checkout/sessions/{checkout_session_id}",
         auth=_auth(),
+        headers=STRIPE_VERSION,
         timeout=aiohttp.ClientTimeout(total=15),
     ) as response:
         if response.status != 200:
