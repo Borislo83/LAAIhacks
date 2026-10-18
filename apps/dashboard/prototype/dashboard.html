@@ -663,6 +663,8 @@ $("#ask").onsubmit=async e=>{
     news:{query:product},
   };
   // Messenger is chat-only: a message needs the conversation's context and a reviewed draft.
+  // A message needs a reviewed draft, which lives in chat: hand it to the orchestrator there.
+  if(/^\s*(?:(?:hey|hi|ok|okay)[\s,!]+)?(?:please\s+)?(?:(?:send|shoot|drop)\s+\S+\s+(?:an?\s+)?(?:i?message|text|msg)\b|send\s+(?:an?\s+)?(?:i?message|text)\s+to\b|text\s+\S+|message\s+\S+\s+["“'‘]|imessage\b)/i.test(product)){chatAsk(product);return}
   // What was asked wins over the selection: a song or video goes to YouTube and a news ask
   // to News, even when those agents aren't selected.
   const shopping=/\b(?:prices?|cheap\w*|deals?|reviews?|worth|buy|alternatives?|compare)\b|\$/i.test(product);

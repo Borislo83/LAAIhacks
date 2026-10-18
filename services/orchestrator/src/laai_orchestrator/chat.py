@@ -569,7 +569,27 @@ def _is_message_request(text: str) -> bool:
         re.IGNORECASE,
     )
     # "send a message to jonathan" is explicit in any case; a bare verb needs a Name.
-    return bool(verb and (verb[1] or verb[2][:1].isupper()))
+    if verb and (verb[1] or verb[2][:1].isupper()):
+        return True
+    # "Send jonathan a message "lol"", "shoot Alex a text saying ...": explicit too.
+    if re.match(
+        r"(?:(?:hey|hi|ok|okay|yo)[\s,!]+)?(?:please\s+|can you\s+|could you\s+)?"
+        r"(?:send|shoot|drop|write)\s+\S+\s+(?:an?\s+)?(?:quick\s+)?(?:i?message|text|msg|note)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return True
+    # A lowercase name is fine when the message itself follows: text jonathan "lol",
+    # tell jonathan that I'm late, message alex saying hi.
+    return bool(
+        verb
+        and verb[2].isalpha()
+        and re.match(
+            r"\s*(?:[\"“'‘]|that\b|saying\b|to\s+(?!me\b))",
+            text[verb.end():],
+            re.IGNORECASE,
+        )
+    )
 
 
 async def chat_with_rules(
@@ -741,6 +761,10 @@ async def chat(
     if awaiting and not _is_message_request(text) and not _other_request(text):
         call = await prepare_message(f"text {awaiting[1]} {text}", config, http, emit)
         return rules_reply([call])
+    # A message ask goes to the messenger agent before any shopping rule sees it
+    # ("send Jonathan a message about the cheaper AirPods" is a message, not a search).
+    if _is_message_request(text) and not re.search(CART_REQUEST, text, re.IGNORECASE):
+        return rules_reply([await prepare_message(text, config, http, emit)])
     normalized = re.sub(r"[^a-z ]", "", text.lower()).replace("kart", "cart").strip()
     normalized = re.sub(r"\s+", " ", normalized)
     confirming = normalized in {
