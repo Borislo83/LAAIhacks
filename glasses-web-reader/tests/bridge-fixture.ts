@@ -6,6 +6,7 @@ export { Container as TextContainerProperty, Container as ListContainerProperty,
   Container as TextContainerUpgrade, Container as ImageRawDataUpdate }
 export const OsEventTypeList = { CLICK_EVENT: 0, SCROLL_TOP_EVENT: 1, SCROLL_BOTTOM_EVENT: 2,
   DOUBLE_CLICK_EVENT: 3, FOREGROUND_ENTER_EVENT: 4, FOREGROUND_EXIT_EVENT: 5, SYSTEM_EXIT_EVENT: 7, ABNORMAL_EXIT_EVENT: 8 }
+export const AudioInputSource = { Glasses: 0 }
 export async function waitForEvenAppBridge() {
   // Visible test controls drive the real main.ts event handler and expose what
   // crossed the SDK boundary, independently of the phone's mirror rendering.
@@ -44,6 +45,8 @@ export async function waitForEvenAppBridge() {
       if (!text) throw new Error(`Unknown device text container ${value.containerID}`)
       text.content = value.content; update(); return 0
     }, async updateImageRawData() { return 'success' },
+    // No microphone in the browser fixture: hands-free stays off.
+    async audioControl() { return false },
     async shutDownPageContainer() { shutdowns++; update(); return 0 },
     async setLocalStorage(key: string, value: string) { sessionStorage.setItem(key, value) },
     async getLocalStorage(key: string) { return sessionStorage.getItem(key) },

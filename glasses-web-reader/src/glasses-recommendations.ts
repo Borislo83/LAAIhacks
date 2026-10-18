@@ -13,9 +13,9 @@ export const recommendationCursor = (index: number, delta: 1 | -1) => Math.max(0
 
 /** G2 containers are transparent: clip the underlying text rather than overlap it. */
 export function glassesRecommendationSpec(base: PageSpec, titles: string[], cursor: number, selected = false,
-  layout: RecommendationLayout = 'bottom'): PageSpec {
-  const heading = selected ? 'Selected; not run' : 'Recommended actions'
-  const choices = [...titles.slice(0, 3), 'Close recommendations']
+  layout: RecommendationLayout = 'bottom', text: { heading?: string; close?: string } = {}): PageSpec {
+  const heading = text.heading ?? (selected ? 'Selected; not run' : 'Recommended actions')
+  const choices = [...titles.slice(0, 3), text.close ?? 'Close recommendations']
   const row = (title: string, index: number, width: number) =>
     `${index === cursor ? '>' : ' '} ${pxTruncate(clean(title), width - 40)}`
   if (layout === 'full') return { images: [], texts: [
