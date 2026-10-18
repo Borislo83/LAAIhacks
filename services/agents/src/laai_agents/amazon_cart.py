@@ -47,6 +47,41 @@ async def _signed_out(page) -> bool:
     return "sign in" in (await greeting.inner_text()).lower()
 
 
+# Amazon's add-on offer after Add to Cart: the side sheet or modal, and its decline control.
+ADD_ON_SHEET = (
+    "#attach-warranty-pane, #attach-desktop-sideSheet, #attachDisplayAddBaseAlert, "
+    "[id^='attach-warranty'], #abb-intl-pop-table"
+)
+DECLINE = (
+    "#attachSiNoCoverage, #attachSiNoCoverage input, input[aria-labelledby='attachSiNoCoverage-announce'], "
+    "#siNoCoverage-announce, #abb-intl-decline"
+)
+
+
+async def _decline_add_ons(page, wait_ms: int = 6000) -> bool:
+    """If Amazon offers protection or add-ons, press its "No thanks". True when declined."""
+    from playwright.async_api import TimeoutError
+
+    try:
+        await page.wait_for_selector(f"{ADD_ON_SHEET}, {DECLINE}", timeout=wait_ms, state="visible")
+    except TimeoutError:
+        return False
+    decline = page.locator(DECLINE).first
+    if not await decline.count() or not await decline.is_visible():
+        sheet = page.locator(ADD_ON_SHEET).first
+        if not await sheet.count() or not hasattr(page, "get_by_role"):
+            return False
+        # Amazon renames its controls; inside the offer, "No thanks" is the decline.
+        decline = sheet.get_by_role("button", name=re.compile(r"^\s*no thanks\s*$", re.IGNORECASE)).first
+        if not await decline.count():
+            decline = sheet.get_by_text(re.compile(r"^\s*no thanks\s*$", re.IGNORECASE)).first
+        if not await decline.count():
+            return False
+    await decline.click(timeout=10000)
+    report("declined_add_ons", "Declined Amazon's add-on offer; only the approved item is added")
+    return True
+
+
 def _cart_item(page, asin: str):
     return page.locator(
         f'#sc-active-cart [data-asin="{asin}"], #activeCartViewForm [data-asin="{asin}"]'
@@ -187,6 +222,9 @@ async def add_to_cart(url: str, quantity: int, require_new: bool = False):
                 }
             report("adding_to_cart", "Adding the approved item to the real Amazon cart")
             await button.click(timeout=15000)
+            # Amazon may first offer protection or add-ons ("Add to your order":
+            # AppleCare+, warranties). Only the approved item is added: always decline.
+            await _decline_add_ons(page)
             # Wait for Amazon's add-to-cart response before navigating to the cart.
             try:
                 await page.wait_for_selector(
