@@ -433,8 +433,12 @@ async function call(k,body,onProgress){
     return {ok:!!result.result&&!result.error,reachable:!!result.result,data:result.result,error:result.error,ms:performance.now()-t0};
   }catch(e){return {ok:false,reachable:false,error:e.message||String(e),ms:performance.now()-t0}}
 }
+// The orchestrator names Messenger calls "message"; the dashboard's agent key is "messenger".
+const kindOf=k=>k==="message"?"messenger":k;
 function record(k,res){
-  const u=usage.agents[k]; u.calls++; u.ms+=res.ms; if(!res.ok||res.data?.error)u.errors++;
+  k=kindOf(k);
+  // Usage saved before an agent existed has no row for it yet.
+  const u=usage.agents[k]??=({calls:0,ms:0,errors:0}); u.calls++; u.ms+=res.ms; if(!res.ok||res.data?.error)u.errors++;
   store.set("focal.usage",usage); renderUsage();
   // A failed web search is a result, not an outage.
   health[k]=res.reachable??res.ok; updateRoster();
@@ -482,7 +486,7 @@ const VIEW={
       <div>To: ${who}</div>
       <textarea rows="3" maxlength="1000" aria-label="Message text" data-original="${esc(d.text)}">${esc(d.text)}</textarea>
       <div class="draft-foot"><span class="draft-status" role="status"></span><span class="draft-exp" data-expires="${esc(d.expires_at||"")}"></span></div>
-      <div class="draft-actions"><button type="button" class="btn dark" data-msg-send>Send via iMessage</button><button type="button" class="btn" data-msg-redraft hidden>Re-draft</button><button type="button" class="btn" data-msg-cancel>Cancel</button></div>
+      <div class="draft-actions"><button type="button" class="btn dark" data-msg-send>Approve to send</button><button type="button" class="btn" data-msg-redraft hidden>Re-draft</button><button type="button" class="btn" data-msg-cancel>Cancel</button></div>
     </div>`:"";
     return {lens:lens("IMESSAGE DRAFT",d.recipient_name?`To ${d.recipient_name}`:"Pick a recipient","nothing sends until you approve"),
       body:(cands?`<div class="draft-cands">Who did you mean?${cands}</div>`:"")+card};
@@ -649,7 +653,9 @@ function miniCard(c,i,all=[c]){
   const head=`<header>${orb(a.v,20,true)}<b>${a.name}</b>${tag}<span class="ms">${Math.round(c.ms)} ms</span></header>`;
   if(!c.result)return `<section class="out">${head}<p class="err">${esc(c.error||"No result")}</p></section>`;
   const v=VIEW[c.kind](c.result);
-  const warn=c.result.error?`<p class="warn-note">${esc(c.result.error)}. The agent is fine; the free web search refused this request. Try again in a moment.</p>`:"";
+  // Only research agents depend on web search; other agents' errors speak for themselves.
+  const searchy=["price","alternatives","reviews","youtube"].includes(c.kind);
+  const warn=c.result.error?`<p class="warn-note">${esc(c.result.error)}.${searchy?" The agent is fine; the free web search refused this request. Try again in a moment.":""}</p>`:"";
   const summary=c.kind==="buyer"?"":`<p class="summary">${esc(c.result.summary)}</p>`;
   return `<section class="out out-${c.kind}">${head}${summary}${v.body}${warn}${v.lens}${evidence(c.result)}</section>`;
 }
@@ -732,6 +738,7 @@ $("#chat-form").onsubmit=async e=>{
     const cartRelated=isCartRelated(text);
     const d=await withRetry(()=>readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update),
       n=>progress.update({kind:"coordinator",stage:"retrying",message:retryMessage(n)}),!cartRelated);
+    d.calls=(d.calls||[]).map(c=>({...c,kind:kindOf(c.kind)}));
     d.calls.forEach(c=>{if(c.result?.confirmation_token)activePurchase=c.result.confirmation_token;if(c.result?.status==="cart_added")activePurchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
     d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
@@ -769,7 +776,7 @@ function draftControls(d){
   const t=d.querySelector("textarea"),edited=t.value!==t.dataset.original,expired=d.dataset.state==="expired";
   t.disabled=false;d.querySelector("[data-msg-cancel]").disabled=false;
   const send=d.querySelector("[data-msg-send]"),redraft=d.querySelector("[data-msg-redraft]");
-  send.disabled=edited||expired;send.textContent="Send via iMessage";
+  send.disabled=edited||expired;send.textContent="Approve to send";
   // After an edit or expiry, re-drafting is the next step, so it becomes the primary action.
   redraft.hidden=!(edited||expired);send.classList.toggle("dark",!(edited||expired));redraft.classList.toggle("dark",edited||expired);
 }
@@ -813,6 +820,9 @@ async function sendDraft(d){
   orbEl?.classList.add("idle");
   const at=new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
   if(res.status==="sent")return lockDraft(d,"sent",`Sent at ${at}${res.dry_run?'<span class="badge">Dry run — not actually sent</span>':""}`);
+  // Link delivery: approved; the user's own Messages app sends it after they tap Send.
+  if(res.status==="open_link"&&/^sms:/.test(res.open_url||""))
+    return lockDraft(d,"sent",`Approved at ${at}. <a class="btn dark" href="${esc(res.open_url)}">Open in Messages</a> <span class="muted">then tap Send</span>`);
   d.dataset.state=res.status==="needs_permission"?"needs_permission":"failed";
   draftControls(d);
   draftStatus(d,res.status==="needs_permission"

@@ -307,7 +307,8 @@ def create_app(config: Config | None = None, http: httpx.AsyncClient | None = No
             event_stream(lambda emit: call_agent(kind, body, config, request.app.state.http, emit))
         )
 
-    @app.post("/v1/messages/send", response_model=MessageSent)
+    # open_url only appears for link delivery, so earlier clients see the same shape.
+    @app.post("/v1/messages/send", response_model=MessageSent, response_model_exclude_none=True)
     async def send_message(body: MessageSend, request: Request, user: User):
         # Always a verified sign-in (never chat_user), so CHAT_AUTH_REQUIRED=false can't open it.
         if "web" not in request.state.actor_roles:
