@@ -118,6 +118,8 @@ body[data-density="compact"] .agent{padding:10px}
 @keyframes scan{from{transform:translateX(-60%)}to{transform:translateX(110%)}}
 .orb .s5{animation:play 1.8s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
 @keyframes play{50%{transform:scale(.78);opacity:.55}}
+.orb .s6{animation:typing 1.2s ease-in-out infinite;transform-box:fill-box}
+@keyframes typing{0%,60%,100%{transform:translateY(0);opacity:.5}30%{transform:translateY(-45%);opacity:1}}
 .orb.idle *{animation-play-state:paused}
 
 /* mode tabs + chat */
@@ -162,6 +164,22 @@ body[data-density="compact"] .agent{padding:10px}
 .yt b{font-weight:500;font-size:14px;line-height:20px}
 .yt small{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
 .yt:hover b{text-decoration:underline}
+/* iMessage draft: nothing leaves without an explicit Send click on the exact drafted text */
+.out-messenger{border-left:0;padding-left:0}
+.draft{padding:16px;border:1.5px solid var(--ink);border-radius:12px;background:var(--white);display:flex;flex-direction:column;gap:10px;font-size:14px}
+.draft textarea{font:15px/1.5 var(--sans);border:1px solid var(--hair);border-radius:8px;padding:10px 12px;background:var(--paper);color:var(--ink);resize:vertical;width:100%}
+.draft textarea:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
+.draft-foot{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.draft-exp{font-family:var(--mono)}
+.draft-actions{display:flex;gap:8px;flex-wrap:wrap}
+.draft-status{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.draft-status.err{color:var(--warn)}
+.draft:is([data-state="sent"],[data-state="cancelled"],[data-state="replaced"]) .draft-actions{display:none}
+.draft[data-state="sent"]{border-color:var(--signal)}
+.draft[data-state="sent"] .draft-status{color:var(--signal);font-weight:500}
+.draft[data-state="cancelled"],.draft[data-state="replaced"]{opacity:.6}
+.badge{display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#FDF0E6;color:var(--warn);font-size:12px;font-weight:500}
+.draft-cands{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
 .yt-alts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
 .composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--hair)}
 .composer input{flex:1;min-width:0;font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
@@ -181,12 +199,12 @@ body[data-density="compact"] .agent{padding:10px}
 @keyframes pulse{50%{transform:scale(.55)}}
 /* "Show steps": the finished run folds away like Claude's tool-use blocks */
 .work-history{font-size:12px;color:var(--muted)}
-.work-history summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;padding:4px 0;user-select:none}
+.work-history summary{cursor:pointer;list-style:none;display:inline-flex;flex-wrap:wrap;align-items:center;gap:0 8px;padding:4px 0;user-select:none;white-space:nowrap}
 .work-history summary::-webkit-details-marker{display:none}
 .work-history summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
 .work-history[open] summary::before{transform:rotate(45deg)}
 .work-history summary:hover{color:var(--ink)}
-.work-history .meta{font:11px var(--mono)}
+.work-history .meta{font:11px var(--mono);white-space:normal}
 .work-history .work-rows,.work-history .log{border-left:2px solid var(--hair);padding-left:12px;margin:6px 0 0 2px}
 .card>.work{padding:0 18px 12px}
 .work-history .log{max-height:180px;overflow:auto}.work-history .log p{margin:3px 0}
@@ -320,6 +338,7 @@ const AGENTS={
   reviews:{v:1,name:"Reviews agent",id:"laai-reviews",route:"/reviews",what:"Rating, pros and cons"},
   buyer:{v:3,name:"Amazon cart agent",id:"focal-amazon-buyer-demo",route:"/buy/prepare",what:"Real cart · stops before checkout"},
   youtube:{v:5,name:"YouTube finder",id:"laai-youtube",route:"/youtube",what:"Finds the video or song you mean"},
+  messenger:{v:6,name:"Messenger",id:"laai-messenger",route:"/messages/draft",what:"Drafts iMessages in chat; you approve each send"},
 };
 const KEYS=Object.keys(AGENTS);
 const TRY=["Sony XM5","AirPods Pro 2","Bose QC Ultra","Nothing Ear (a)"];
@@ -332,7 +351,7 @@ const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{re
 
 document.querySelectorAll("[data-logo]").forEach(e=>e.innerHTML=logoMark()+`Focal <span style="font-weight:400;color:var(--muted)">Studio</span>`);
 const logoOrb=()=>logoMark(28,"orb");
-const WELCOME=`<div class="msg bot">${logoOrb()}<div class="body"><p>Ask me to consider a product, and I’ll check prices, reviews and alternatives within your budget. I can also find a song or video on YouTube.</p></div></div>`;
+const WELCOME=`<div class="msg bot">${logoOrb()}<div class="body"><p>Ask me to consider a product, and I’ll check prices, reviews and alternatives within your budget. I can also find a song or video on YouTube, or draft an iMessage for you to approve.</p></div></div>`;
 const EMPTY_RESULTS='<div class="empty">Answers from the agents show up here.</div>';
 const THREAD_MAX=40;
 $("#thread").innerHTML=WELCOME;
@@ -435,6 +454,19 @@ const VIEW={
     return {lens:lens("YOUTUBE",id?d.title:"No video found",id?`${meta} · nod to play`:"try a more specific request"),
       body:card+(alts?`<div class="yt-alts">Also${alts}</div>`:"")};
   },
+  messenger(d){
+    const who=d.recipient_name?`${esc(d.recipient_name)}${d.recipient_masked?` <span class="muted">(${esc(d.recipient_masked)})</span>`:""}`:"";
+    const cands=(d.candidates||[]).map(c=>{const n=c.recipient_name??c.name,m=c.recipient_masked??c.masked;
+      return `<button type="button" class="chip" data-msg-pick="${esc(n)}">${esc(n)}${m?` <span class="muted">${esc(m)}</span>`:""}</button>`}).join("");
+    const card=d.draft_id&&d.recipient_name?`<div class="draft" data-draft="${esc(d.draft_id)}" data-recipient="${esc(d.recipient_name)}">
+      <div>To: ${who}</div>
+      <textarea rows="3" maxlength="1000" aria-label="Message text" data-original="${esc(d.text)}">${esc(d.text)}</textarea>
+      <div class="draft-foot"><span class="draft-status" role="status"></span><span class="draft-exp" data-expires="${esc(d.expires_at||"")}"></span></div>
+      <div class="draft-actions"><button type="button" class="btn dark" data-msg-send>Send via iMessage</button><button type="button" class="btn" data-msg-redraft hidden>Re-draft</button><button type="button" class="btn" data-msg-cancel>Cancel</button></div>
+    </div>`:"";
+    return {lens:lens("IMESSAGE DRAFT",d.recipient_name?`To ${d.recipient_name}`:"Pick a recipient","nothing sends until you approve"),
+      body:(cands?`<div class="draft-cands">Who did you mean?${cands}</div>`:"")+card};
+  },
   reviews(d){
     const pc=(d.pros.length||d.cons.length)?`<div class="pc"><div><h4>Pros</h4><ul>${d.pros.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div><div><h4>Cons</h4><ul>${d.cons.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div></div>`:"";
     const link=d.review_url?`<div class="list"><a href="${esc(d.review_url)}" target="_blank" rel="noopener"><span>Read full reviews</span><span class="p">↗</span></a></div>`:"";
@@ -497,7 +529,8 @@ $("#ask").onsubmit=async e=>{
     buyer:{product:product||null,url:amazonUrl||null,quantity:Number($("#quantity").value)||1},
     youtube:{query:product},
   };
-  const ks=KEYS.filter(k=>selected.has(k));
+  // Messenger is chat-only: a message needs the conversation's context and a reviewed draft.
+  const ks=KEYS.filter(k=>selected.has(k)&&bodies[k]);
   $("#results").innerHTML=ks.map(cardShell).join("");
   $("#go").disabled=true;
   await Promise.all(ks.map(async k=>{const progress=makeProgress($("#card-"+k+" .thinking"));const r=await call(k,bodies[k],progress.update);progress.finish(r.ok);record(k,r);const card=$("#card-"+k);morph(card,()=>{fill(k,r);card.append(progress.el)})}));
@@ -522,7 +555,7 @@ const convo=[];
 let activePurchase=null;
 // Cart requests are never retried, so nothing can be added to a cart twice.
 const isCartRelated=text=>!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
-const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100","Find the song Blinding Lights"];
+const STARTERS=["Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100","Find the song Blinding Lights","Text Alex that I'm running 10 minutes late"];
 $("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
 document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
 
@@ -627,7 +660,9 @@ function makeProgress(container,outs){
     const line=document.createElement("p");line.textContent=`${((performance.now()-started)/1000).toFixed(1)}s · ${key} · ${event.message}`;const log=el.querySelector(".log");log.append(line);
     if(log.children.length>100)log.firstChild.remove();
     follow();
-    if(event.result&&AGENTS[key]){const host=outs||el;let slot=host.querySelector(`[data-partial="${key}"]`);if(!slot){slot=document.createElement("div");slot.className="fresh";slot.dataset.partial=key;host.append(slot)}slot.innerHTML=miniCard({kind:key,result:event.result,error:event.result.error,ms:event.ms||0})}
+    if(event.result&&AGENTS[key]){const host=outs||el;let slot=host.querySelector(`[data-partial="${key}"]`);if(!slot){slot=document.createElement("div");slot.className="fresh";slot.dataset.partial=key;host.append(slot)}slot.innerHTML=miniCard({kind:key,result:event.result,error:event.result.error,ms:event.ms||0});
+      // Live previews are replaced when the run ends, so their actions stay inert until then.
+      slot.querySelectorAll(".draft button,.draft textarea").forEach(x=>x.disabled=true)}
   }
   function finish(ok,note){
     const summary=el.querySelector(".work-history summary");
@@ -659,6 +694,7 @@ $("#chat-form").onsubmit=async e=>{
     const via=d.calls.length?`${d.calls.length} agent${d.calls.length>1?"s":""} via ${by}`:d.source==="asi_one"?"ASI:One, no agents needed":by;
     // Live previews become the final blocks in the same frame, so nothing blinks out and back.
     morph(pending,()=>{progress.finish(true,via);outs.innerHTML=d.calls.map(miniCard).join("")});
+    tickDrafts();
     await streamReply(body,d.reply||"");
   }catch(err){
     convo.pop();
@@ -678,6 +714,77 @@ document.addEventListener("click",e=>{
   if(confirmation){activePurchase=confirmation.dataset.confirmBuy;$("#chat-input").value="confirm add to cart"}
   else{$("#chat-input").value=`Prepare Amazon cart addition for ${listing.dataset.product}, quantity ${listing.dataset.quantity}: ${listing.dataset.buyLink}`}
   $("#chat-form").requestSubmit();
+});
+
+/* iMessage drafts. Sending needs an explicit click and sends only the exact drafted text;
+   an edit must be re-drafted first. Enter in the textarea is just a new line. */
+const chatAsk=text=>{setMode("chat");$("#chat-input").value=text;$("#chat-form").requestSubmit()};
+const draftStatus=(d,html,err=false)=>{const s=d.querySelector(".draft-status");s.innerHTML=html;s.classList.toggle("err",err)};
+function draftControls(d){
+  const t=d.querySelector("textarea"),edited=t.value!==t.dataset.original,expired=d.dataset.state==="expired";
+  t.disabled=false;d.querySelector("[data-msg-cancel]").disabled=false;
+  const send=d.querySelector("[data-msg-send]"),redraft=d.querySelector("[data-msg-redraft]");
+  send.disabled=edited||expired;send.textContent="Send via iMessage";
+  // After an edit or expiry, re-drafting is the next step, so it becomes the primary action.
+  redraft.hidden=!(edited||expired);send.classList.toggle("dark",!(edited||expired));redraft.classList.toggle("dark",edited||expired);
+}
+function lockDraft(d,state,html){
+  d.dataset.state=state;
+  d.querySelectorAll("button").forEach(b=>b.disabled=true);d.querySelector("textarea").readOnly=true;
+  draftStatus(d,html);d.querySelector(".draft-exp").textContent="";
+}
+const DRAFT_DONE=["sent","cancelled","replaced"];
+function tickDrafts(){
+  document.querySelectorAll(".draft [data-expires]").forEach(el=>{
+    const d=el.closest(".draft"),left=Math.round((Date.parse(el.dataset.expires)-Date.now())/1000);
+    if(DRAFT_DONE.includes(d.dataset.state)||Number.isNaN(left))return;
+    if(left>0){el.textContent=`Expires in ${Math.floor(left/60)}:${String(left%60).padStart(2,"0")}`;return}
+    el.textContent="Expired";
+    if(d.dataset.state!=="expired"&&d.dataset.state!=="sending"){d.dataset.state="expired";draftControls(d);draftStatus(d,"This draft expired. Re-draft to send it.")}
+  });
+}
+setInterval(tickDrafts,1000);
+document.addEventListener("input",e=>{
+  const t=e.target.closest(".draft textarea");if(!t)return;
+  const d=t.closest(".draft");if(d.dataset.state==="sending")return;
+  draftControls(d);
+  draftStatus(d,t.value!==t.dataset.original?"Edited. Re-draft so the agent sends exactly this text.":"");
+});
+async function sendDraft(d){
+  const t=d.querySelector("textarea");
+  if(["sending",...DRAFT_DONE].includes(d.dataset.state)||t.value!==t.dataset.original)return;
+  d.dataset.state="sending";
+  d.querySelectorAll("button,textarea").forEach(x=>x.disabled=true);
+  d.querySelector("[data-msg-send]").textContent="Sending…";
+  draftStatus(d,`${orb(AGENTS.messenger.v,18)}Sending to ${esc(d.dataset.recipient)}…`);
+  const orbEl=d.closest(".out")?.querySelector("header .orb");orbEl?.classList.remove("idle");
+  let res={};
+  try{
+    const r=await auth.request("/v1/messages/send",{method:"POST",body:JSON.stringify({draft_id:d.dataset.draft,text:t.value})});
+    res=await r.json().catch(()=>({}));
+    // A 200 without a status may already have gone out; never invite a second send of it.
+    res=r.ok?{...res,status:res.status||"sent"}:{status:res.status||"failed",error:res.error||res.message||`HTTP ${r.status}`};
+  }catch(err){res={status:"failed",error:err.message}}
+  orbEl?.classList.add("idle");
+  const at=new Date().toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});
+  if(res.status==="sent")return lockDraft(d,"sent",`Sent at ${at}${res.dry_run?'<span class="badge">Dry run — not actually sent</span>':""}`);
+  d.dataset.state=res.status==="needs_permission"?"needs_permission":"failed";
+  draftControls(d);
+  draftStatus(d,res.status==="needs_permission"
+    ?"Not sent. Messages needs Automation permission on the Mac running the agent: allow it in System Settings, then send again."
+    :`Not sent${res.error?`: ${esc(res.error)}`:""}. You can send again.`,true);
+}
+document.addEventListener("click",e=>{
+  const pick=e.target.closest("[data-msg-pick]");
+  if(pick){if(!$("#send").disabled)chatAsk(`Message ${pick.dataset.msgPick}`);return}
+  const b=e.target.closest(".draft button");if(!b||b.disabled)return;
+  const d=b.closest(".draft");
+  if(b.matches("[data-msg-send]"))sendDraft(d);
+  else if(b.matches("[data-msg-cancel]"))lockDraft(d,"cancelled","Cancelled. Nothing was sent.");
+  else if(b.matches("[data-msg-redraft]")&&!$("#send").disabled){
+    chatAsk(`Re-draft my message to ${d.dataset.recipient}: ${d.querySelector("textarea").value}`);
+    lockDraft(d,"replaced","Replaced by a new draft below.");
+  }
 });
 
 updateRoster(); renderUsage();
