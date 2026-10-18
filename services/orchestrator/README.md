@@ -47,6 +47,18 @@ contain only `status` (`sent|failed|needs_permission`), `summary` and `dry_run` 
 agent only simulated the send). For a local end-to-end dry run, set the same
 `IMESSAGE_EXECUTOR_TOKEN` value in both `services/orchestrator/.env` and `services/agents/.env`;
 the agent rejects sends whose token does not match its own.
+
+Laptop control also runs through chat. The `control_spotify` tool (or, without an LLM, keyword
+rules: "play X on Spotify", "pause", "skip", "next song", "volume 40", "turn it up") calls the
+agents' `/spotify` with `{action, query, kind, volume, volume_change}`; the LLM's volume is kept
+only when the user said that number or direction. "Play X" without Spotify still goes to
+YouTube, and news and shopping asks keep their agents. Spotify errors (not linked, app closed,
+no Premium) are not retried. When the user asks to play or watch a video and `find_youtube`
+returns a `https://www.youtube.com/watch?v=` link, the orchestrator posts it to the agents'
+`/youtube/open` with the private `LAPTOP_EXECUTOR_TOKEN` (the same value in both `.env` files)
+and adds `laptop: {status, summary}` to the YouTube call's result. The reply says "Playing
+<title> on your laptop" only when `status` is `opened`; otherwise it gives the link and says why
+it didn't open. Without the token nothing is opened.
 Set `AGENTS_URL` for a remote agent Bureau and `CORS_ORIGINS` for frontend origins.
 Optional `ASI_ONE_API_KEY` enables ASI:One page understanding. Without it, an explicit `product`
 field produces deterministic shopping suggestions; unstructured pages produce no tasks.

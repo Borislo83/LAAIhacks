@@ -24,6 +24,7 @@ class AgentKind(StrEnum):
     REVIEWS = "reviews"
     YOUTUBE = "youtube"
     NEWS = "news"
+    SPOTIFY = "spotify"
 
 
 class UserSettings(InputModel):
@@ -79,6 +80,7 @@ FIELDS = {
     AgentKind.REVIEWS: ("product",),
     AgentKind.YOUTUBE: ("query", "kind"),
     AgentKind.NEWS: ("query", "max_sources"),
+    AgentKind.SPOTIFY: ("action", "query", "kind", "volume", "volume_change"),
 }
 
 
@@ -117,7 +119,24 @@ class ToolArgs(BaseModel):
 
     def suits(self, agent: "AgentKind") -> bool:
         """Whether the agent's required argument is present."""
-        return getattr(self, FIELDS[agent][0]) is not None
+        return getattr(self, FIELDS[agent][0], None) is not None
+
+
+class SpotifyArgs(BaseModel):
+    """control_spotify tool arguments chosen by the LLM (or the keyword rules)."""
+
+    action: Literal["play", "pause", "resume", "next", "previous", "volume"]
+    query: str | None = Field(default=None, min_length=1, max_length=300)
+    kind: Literal["track", "artist", "album", "playlist", "auto"] = "auto"
+    volume: int | None = Field(default=None, ge=0, le=100)
+    volume_change: int | None = Field(default=None, ge=-100, le=100)
+
+    def suits(self, agent: "AgentKind" = AgentKind.SPOTIFY) -> bool:
+        if self.action == "play":
+            return self.query is not None
+        if self.action == "volume":
+            return self.volume is not None or bool(self.volume_change)
+        return True
 
 
 class AgentCall(BaseModel):
