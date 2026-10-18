@@ -809,3 +809,74 @@ def test_news_without_summary_does_not_crash():
 
     assert safe_news({"headline": "x", "summary": None})["summary"] == ""
     assert safe_news({"headline": "x"})["summary"] == ""
+
+
+@pytest.mark.parametrize(
+    "text, coordinated",
+    [
+        ("Is there a better alteranate for the garmin 5 forerunning watch", True),
+        ("any alternate to the Kindle", True),
+        ("is there a better option than the Kindle", True),
+        ("replacement for my AirPods", True),
+        ("alter the font size", False),
+    ],
+)
+def test_alternative_questions_with_typos_use_the_coordinator(text, coordinated):
+    import re
+
+    from laai_orchestrator.chat import COORDINATE, COORDINATE_WITHOUT_LLM
+
+    found = re.search(COORDINATE, text, re.IGNORECASE) or re.search(COORDINATE_WITHOUT_LLM, text, re.IGNORECASE)
+    assert bool(found) is coordinated
+
+
+# The coordinator follows the ask: songs and videos go to YouTube whatever the title
+# says, and a store constraint ("in amazon") goes to the coordinator.
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Play Bad Guy by Billie Eilish", ["/youtube"]),
+        ("Find a song like the Blinding Lights", ["/youtube"]),
+        ("find the music video for Shape of You", ["/youtube"]),
+        ("Are there any smart watches under 50 dollars in amazon", ["/consider"]),
+        ("AirPods Pro 2 on amazon", ["/consider"]),
+        ("video doorbells under 100 dollars", ["/consider"]),
+    ],
+)
+async def test_routing_follows_what_was_asked(text, expected):
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    seen = []
+
+    def handle(request):
+        seen.append(request.url.path)
+        if request.url.path == "/consider":
+            return httpx.Response(200, json={"product": "x", "summary": "ok", "mode": "browse",
+                                             "price": {"summary": "ok", "offers": []}})
+        return httpx.Response(200, json={"summary": "ok", "url": "https://www.youtube.com/watch?v=abcdefghijk"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        await chat.chat([ChatMessage(role="user", content=text)], config(), http)
+    assert seen == expected
+
+
+async def test_a_browse_answer_shows_only_the_listings_card():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    def handle(request):
+        return httpx.Response(200, json={
+            "product": "smart watches", "max_price": 50, "store": "amazon.com", "mode": "browse",
+            "summary": "Yes. Amazon has smart watches under $50.",
+            "price": {"product": "smart watches", "summary": "Yes.", "offers": []},
+            "picks": [{"label": "Most popular", "product": "Redmi Watch 5 Active", "price": 43.49,
+                       "store": "amazon.com", "url": "https://www.amazon.com/dp/B0DFZPR9Z4",
+                       "reason": "4.5★"}],
+        })
+
+    text = "Are there any smart watches under 50 dollars in amazon"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        reply = await chat.chat([ChatMessage(role="user", content=text)], config(), http)
+    assert reply.source == "coordinator" and [c.kind for c in reply.calls] == ["price"]
+    assert reply.picks[0]["product"] == "Redmi Watch 5 Active"

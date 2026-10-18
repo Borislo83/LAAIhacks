@@ -43,6 +43,10 @@ class PriceCompareRequest(Model):
     max_price: float | None = None
     # Also run the store-focused search, e.g. when the verifier rejected every lead.
     deep: bool = False
+    # Only this store's offers ("amazon.com"), when the user asked for one.
+    store: str | None = None
+    # A category ("smart watches"), not one product: list what the store has in budget.
+    browse: bool = False
 
 
 class PriceCompareResponse(EvidenceResponse):
@@ -98,12 +102,18 @@ class ReviewsResponse(EvidenceResponse):
     cons: list[str] = Field(default_factory=list)
     review_url: str | None = None
     summary: str
+    # Advice drawn from the reviews' own text: what they conclude and who it suits.
+    verdict: str = ""
+    # Review sites whose text the verdict, pros and cons came from.
+    read_from: list[str] = Field(default_factory=list, max_items=6)
 
 
 class ConsiderRequest(Model):
     product: str = Field(min_length=1, max_length=500)
     progress_id: str | None = Field(default=None, min_length=32, max_length=64)
     max_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    store: str | None = Field(default=None, max_length=40)
+    browse: bool = False
 
 
 class Pick(Model):
@@ -136,6 +146,9 @@ class CartLink(Model):
 class ConsiderResponse(Model):
     product: str
     max_price: float | None = None
+    store: str | None = None
+    # "consider" (price, reviews, alternatives) or "browse" (store listings in budget).
+    mode: str = "consider"
     price: PriceCompareResponse | None = None
     reviews: ReviewsResponse | None = None
     alternatives: AlternativesResponse | None = None
