@@ -194,7 +194,7 @@ export function answerFor(reply: ChatReply): AgentAnswer | null {
     return { kind: 'answer', title, compare: compareTable(reply),
       pages: paginate(title, str(reply.reply) || done.map(c => str(c.result?.summary)).join('\n\n')) }
   }
-  const parts = done.map(c => c.kind === 'news' ? newsText(c.result!)
+  const parts = done.map(c => c.kind === 'news' || c.kind === 'search' ? newsText(c.result!)
     : c.kind === 'youtube' ? youtubeText(c.result!)
     : c.kind === 'spotify' ? { title: 'Spotify', body: str(c.result?.summary) || str(c.error) || "Spotify didn't answer." }
     : { title: c.kind[0].toUpperCase() + c.kind.slice(1), body: str(c.result!.summary) })
