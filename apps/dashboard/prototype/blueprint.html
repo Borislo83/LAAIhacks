@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Focal Blueprint</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%226%22 fill=%22none%22 stroke=%22%23e8ebe4%22 stroke-width=%221.5%22/%3E%3Ccircle cx=%228%22 cy=%228%22 r=%222%22 fill=%22%238ee6a2%22/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500&family=Instrument+Serif&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --sheet:#23272b;      /* graphite drafting film */
+  --grid:#2c3136;
+  --grid-major:#353b41;
+  --ink:#e8ebe4;        /* line work and text */
+  --muted:#8d949a;
+  --lens:#8ee6a2;       /* the G2's own display green: lens content and live data only */
+  --serif:"Instrument Serif",Georgia,serif;
+  --sans:"Instrument Sans",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--sheet);color:var(--ink)}
+body{font:16px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+.paper{
+  position:fixed;inset:0;z-index:0;
+  background:
+    linear-gradient(var(--grid-major) 1px,transparent 1px) 0 0/120px 120px,
+    linear-gradient(90deg,var(--grid-major) 1px,transparent 1px) 0 0/120px 120px,
+    linear-gradient(var(--grid) 1px,transparent 1px) 0 0/24px 24px,
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/24px 24px,
+    var(--sheet);
+  opacity:.55;
+}
+canvas#scene{position:fixed;inset:0;z-index:1;display:block;width:100%;height:100%}
+#labels{position:fixed;inset:0;z-index:2;pointer-events:none}
+.tag{
+  position:absolute;left:0;top:0;white-space:nowrap;
+  font:12px/1.3 var(--mono);color:var(--ink);
+  transform:translate(-50%,-50%);
+}
+.tag small{display:block;color:var(--muted);font-size:11px}
+.tag.lead{transform:translate(14px,-50%)}
+.tag.lead::before{content:"";position:absolute;left:-14px;top:50%;width:10px;border-top:1px solid var(--muted)}
+.tag.live{color:var(--lens)}
+
+/* keeps the copy column legible when the drawing passes behind it */
+.scrim{position:fixed;top:0;bottom:0;left:0;width:min(620px,44vw);z-index:2;pointer-events:none;
+  background:linear-gradient(90deg,var(--sheet) 0,var(--sheet) 62%,transparent);opacity:.92}
+/* frame: sheet border like a drawing */
+.frame{position:fixed;inset:14px;z-index:3;border:1px solid var(--grid-major);pointer-events:none}
+
+/* the way into the product */
+.studio-link{
+  position:fixed;top:30px;right:30px;z-index:5;
+  font:500 14px/1 var(--sans);color:var(--sheet);background:var(--ink);
+  border:1px solid var(--ink);padding:11px 16px;text-decoration:none;
+}
+.studio-link:hover{background:transparent;color:var(--ink)}
+.studio-link:focus-visible{outline:2px solid var(--lens);outline-offset:3px}
+
+/* title block */
+.titleblock{
+  position:fixed;right:14px;bottom:14px;z-index:4;
+  display:grid;grid-template-columns:auto auto;min-width:300px;
+  border:1px solid var(--muted);background:var(--sheet);
+  font:12px/1.35 var(--mono);color:var(--muted);
+}
+.titleblock > div{padding:8px 10px;border-top:1px solid var(--grid-major)}
+.titleblock > div:nth-child(-n+2){border-top:0}
+.titleblock > div:nth-child(odd){border-right:1px solid var(--grid-major)}
+.titleblock b{display:block;color:var(--ink);font-weight:400;font-family:var(--sans);font-size:14px}
+.titleblock .name{grid-column:1/-1;border-right:0!important}
+.titleblock .name b{font-family:var(--serif);font-size:22px;line-height:1.1}
+
+/* scrolling copy */
+main{position:relative;z-index:3;pointer-events:none}
+section{min-height:130vh;display:flex;align-items:center;padding:0 0 0 clamp(28px,6vw,96px)}
+section:first-child{min-height:100vh}
+.copy{max-width:31ch;pointer-events:auto}
+.copy .sheetno{font:12px var(--mono);color:var(--muted);margin:0 0 14px}
+.copy h2{font:400 clamp(38px,4.6vw,64px)/1.02 var(--serif);margin:0 0 18px;letter-spacing:-.01em}
+.copy p{margin:0;color:#c3c8c0;font-size:17px;max-width:34ch}
+.hero h1{font:400 clamp(56px,8vw,118px)/.95 var(--serif);margin:0 0 20px;letter-spacing:-.02em}
+.hero p{font-size:18px}
+.hint{margin-top:34px;font:12px var(--mono);color:var(--muted)}
+.end h2{font-size:clamp(48px,6vw,88px)}
+.end{min-height:100vh}
+
+@media (max-width:760px){
+  .scrim{display:none}
+  section{align-items:flex-end;padding:0 22px 140px}
+  .copy{max-width:none;background:linear-gradient(transparent,var(--sheet) 22%);padding-top:40px}
+  .titleblock{left:14px;right:14px;min-width:0}
+  .tag{font-size:10px}
+  .tag small{display:none}
+}
+
+</style>
+</head>
+<body>
+<div class="paper" aria-hidden="true"></div>
+<canvas id="scene" aria-label="Line drawing of Even Realities G2 glasses and the Focal agent system behind them"></canvas>
+<div id="labels" aria-hidden="true"></div>
+<div class="frame" aria-hidden="true"></div>
+<a class="studio-link" href="dashboard.html">Open Studio</a>
+<div class="scrim" aria-hidden="true"></div>
+
+<main>
+  <section class="hero" data-sheet="1">
+    <div class="copy">
+      <p class="sheetno">Sheet 1 of 7</p>
+      <h1>Focal</h1>
+      <p>A team of AI agents behind your glasses. Glance at a product and they tell you whether it's the right price, the right product, and worth buying.</p>
+      <p class="hint">Scroll to build it</p>
+    </div>
+  </section>
+  <section data-sheet="2">
+    <div class="copy">
+      <p class="sheetno">Sheet 2 of 7</p>
+      <h2>One glance, one answer.</h2>
+      <p>Look at a product page. Focal puts one line on your Even Realities G2: the best price it can source and what you'd save. Then it gets out of the way.</p>
+    </div>
+  </section>
+  <section data-sheet="3">
+    <div class="copy">
+      <p class="sheetno">Sheet 3 of 7</p>
+      <h2>Simple to wear, not simple inside.</h2>
+      <p>The glasses hand the page to Focal's orchestrator. It works out what you need, checks what you've allowed, and keeps track of every approval.</p>
+    </div>
+  </section>
+  <section data-sheet="4">
+    <div class="copy">
+      <p class="sheetno">Sheet 4 of 7</p>
+      <h2>Three specialists, at the same time.</h2>
+      <p>The Focal coordinator on Fetch.ai Agentverse sends the price, alternatives and reviews agents out in parallel. Each one fails on its own, so one slow site never blocks the answer.</p>
+    </div>
+  </section>
+  <section data-sheet="5">
+    <div class="copy">
+      <p class="sheetno">Sheet 5 of 7</p>
+      <h2>No source, no number.</h2>
+      <p>Every price comes back with where it was found and how far to trust it. If a number can't be backed up, Focal doesn't show it.</p>
+    </div>
+  </section>
+  <section data-sheet="6">
+    <div class="copy">
+      <p class="sheetno">Sheet 6 of 7</p>
+      <h2>Nothing happens without your OK.</h2>
+      <p>Ask Focal to add something to your Amazon cart and it shows you the exact listing first. You approve, it adds it and checks it's there. It has no way to check out. Messages to friends work the same way: you see the draft, you send it.</p>
+    </div>
+  </section>
+  <section data-sheet="7">
+    <div class="copy">
+      <p class="sheetno">Sheet 7 of 7</p>
+      <h2>A team that remembers you.</h2>
+      <p>Tell Focal Studio what matters once: price, quality or balanced. Every agent works to it, and your choices carry across the glasses and the Studio.</p>
+    </div>
+  </section>
+  <section class="end" data-sheet="7">
+    <div class="copy">
+      <h2>Your team, one glance away.</h2>
+      <p>Chase your goals. Keep your peace.</p>
+    </div>
+  </section>
+</main>
+
+<aside class="titleblock" aria-live="polite">
+  <div class="name"><b>Focal</b>Even Realities G2 · Fetch.ai Agentverse</div>
+  <div>Sheet<b id="tb-sheet">1 / 7</b></div>
+  <div>Drawing<b id="tb-title">The frame</b></div>
+  <div>Scale<b>1 : 1 glance</b></div>
+  <div>Team<b>LA Hacks 2026</b></div>
+</aside>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+</script>
+<script type="module">
+import * as THREE from "three";
+
+const css = getComputedStyle(document.documentElement);
+const INK = new THREE.Color(css.getPropertyValue("--ink").trim());
+const MUTED = new THREE.Color(css.getPropertyValue("--muted").trim());
+const LENS = new THREE.Color(css.getPropertyValue("--lens").trim());
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const canvas = document.getElementById("scene");
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1,1,1,-1,-100,100);
+
+/* ---------- helpers ---------- */
+const objects = [];   // {obj, mats, from, to, draw}
+function lineObj(points, color = INK, opacity = 1){
+  // points: flat array of segment pairs [a,b,a,b...] as Vector3
+  const g = new THREE.BufferGeometry().setFromPoints(points);
+  const m = new THREE.LineBasicMaterial({color, transparent:true, opacity});
+  const l = new THREE.LineSegments(g, m);
+  l.userData.total = points.length;
+  return l;
+}
+function polyline(pts){ const out=[]; for(let i=0;i<pts.length-1;i++) out.push(pts[i],pts[i+1]); return out; }
+function loop(pts){ return polyline([...pts, pts[0]]); }
+function boxEdges(w,h,d){
+  const g = new THREE.EdgesGeometry(new THREE.BoxGeometry(w,h,d));
+  const a = g.attributes.position; const pts=[];
+  for(let i=0;i<a.count;i++) pts.push(new THREE.Vector3().fromBufferAttribute(a,i));
+  return pts;
+}
+function track(obj, from, to = 99, draw = true){
+  scene.add(obj);
+  const mats=[]; obj.traverse(o=>{ if(o.material){ mats.push(o.material); o.material.userData.base = o.material.opacity; } });
+  objects.push({obj, mats, from, to, draw});
+  return obj;
+}
+
+/* ---------- the glasses (G2-like, built from lines) ---------- */
+function roundedRect(cx, cy, w, h, r, z, n = 10){
+  const pts=[]; const hw=w/2, hh=h/2;
+  const corners=[[cx+hw-r,cy+hh-r,0],[cx-hw+r,cy+hh-r,Math.PI/2],[cx-hw+r,cy-hh+r,Math.PI],[cx+hw-r,cy-hh+r,1.5*Math.PI]];
+  for(const [x,y,a0] of corners) for(let i=0;i<=n;i++){ const a=a0+(i/n)*Math.PI/2; pts.push(new THREE.Vector3(x+r*Math.cos(a), y+r*Math.sin(a), z)); }
+  return pts;
+}
+const glasses = new THREE.Group();
+{
+  const segs=[];
+  for(const side of [-1,1]){
+    const cx = side*0.8;
+    const front = roundedRect(cx,0,1.36,0.98,0.4, 0.05);
+    const back  = roundedRect(cx,0,1.36,0.98,0.4,-0.05);
+    const inner = roundedRect(cx,0,1.2,0.84,0.34, 0.05);
+    segs.push(...loop(front), ...loop(inner), ...loop(back));
+    for(let i=0;i<front.length;i+=5) segs.push(front[i], back[i]);
+    // hinge block
+    const hx = side*1.52;
+    for(const p of boxEdges(0.14,0.22,0.24)) segs.push(p.clone().add(new THREE.Vector3(hx,0.22,-0.08)));
+    // temple arm: top and bottom rails, then down over the ear
+    const arm = (dy)=>[
+      new THREE.Vector3(hx,0.28+dy,-0.2), new THREE.Vector3(hx+side*0.04,0.26+dy,-1.6),
+      new THREE.Vector3(hx+side*0.06,0.22+dy,-2.7), new THREE.Vector3(hx+side*0.05,0.02+dy,-3.05),
+      new THREE.Vector3(hx+side*0.03,-0.28+dy,-3.25)];
+    const top=arm(0), bot=arm(-0.11);
+    segs.push(...polyline(top), ...polyline(bot));
+    for(let i=0;i<top.length;i++) segs.push(top[i], bot[i]);
+  }
+  // bridge, front and back
+  for(const z of [0.05,-0.05]){
+    const b=[]; for(let i=0;i<=12;i++){ const t=i/12; b.push(new THREE.Vector3(-0.12+0.24*t, 0.22+Math.sin(t*Math.PI)*0.1, z)); }
+    segs.push(...polyline(b));
+  }
+  // nose pads
+  for(const s of [-1,1]) segs.push(...loop([new THREE.Vector3(s*0.14,-0.05,0.0),new THREE.Vector3(s*0.2,-0.25,-0.06),new THREE.Vector3(s*0.12,-0.3,-0.1)]));
+  const frame = lineObj(segs, INK, 1);
+  glasses.add(frame);
+
+  // lens glass: faint diagonal hatching, like a drafted transparent surface
+  const hatch=[];
+  for(const side of [-1,1]) for(let k=-6;k<=6;k++){
+    const x0=side*0.8+k*0.1;
+    hatch.push(new THREE.Vector3(x0-0.18,-0.3,0.02), new THREE.Vector3(x0+0.18,0.3,0.02));
+  }
+  const h = lineObj(hatch, MUTED, 0.35);
+  glasses.add(h);
+
+  // the display in the right lens
+  const displayRect = lineObj(loop(roundedRect(0.8,0.02,0.86,0.42,0.04,0.06,3)), LENS, 1);
+  glasses.add(displayRect);
+  glasses.userData.display = displayRect;
+}
+glasses.position.set(-6.4,1.8,0);
+track(glasses, 0);
+
+/* lens HUD: what the G2 actually shows */
+function hudTexture(){
+  const c=document.createElement("canvas"); c.width=860; c.height=420;
+  const x=c.getContext("2d");
+  x.fillStyle = css.getPropertyValue("--lens").trim(); x.font="400 46px 'JetBrains Mono', monospace";
+  x.globalAlpha=.6; x.fillText("SONY WH-1000XM5",40,90);
+  x.globalAlpha=1; x.font="400 62px 'JetBrains Mono', monospace"; x.fillText("Best price: Best Buy",40,200);
+  x.globalAlpha=.85; x.font="400 42px 'JetBrains Mono', monospace"; x.fillText("cheaper than this page",40,290);
+  x.globalAlpha=.55; x.fillText("tap for sources",40,360);
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; return t;
+}
+const hud = new THREE.Mesh(new THREE.PlaneGeometry(0.82,0.4), new THREE.MeshBasicMaterial({map:hudTexture(), transparent:true, opacity:0, depthWrite:false}));
+hud.position.set(0.8,0.02,0.07);
+glasses.add(hud);
+document.fonts?.ready.then(()=>{ hud.material.map = hudTexture(); hud.material.needsUpdate = true; });
+
+/* ---------- the system underneath, on the ground plane ---------- */
+// Laid out as a left-to-right flow: glasses, orchestrator, coordinator, specialists.
+// The approval path runs along the front edge.
+const P = {
+  glasses: new THREE.Vector3(-6.4,1.8,0),
+  orch:    new THREE.Vector3(-2.6,0,0),
+  memory:  new THREE.Vector3(-4.6,0,2.8),
+  coord:   new THREE.Vector3(0.9,0,0),
+  price:   new THREE.Vector3(4.6,0,-2.6),
+  alts:    new THREE.Vector3(4.6,0,0),
+  reviews: new THREE.Vector3(4.6,0,2.6),
+  youtube: new THREE.Vector3(2.4,0,-3.7),
+  msg:     new THREE.Vector3(2.4,0,3.7),
+  gate:    new THREE.Vector3(-1.0,0,6.6),
+  cart:    new THREE.Vector3(0.8,0,6.6),
+  stop:    new THREE.Vector3(2.9,0,6.6),
+  studio:  new THREE.Vector3(-7.0,0,4.8),
+};
+function node(pos, w, h, d, from, color=INK, opacity=1){
+  const o = lineObj(boxEdges(w,h,d).map(p=>p.add(pos).add(new THREE.Vector3(0,h/2,0))), color, opacity);
+  return track(o, from);
+}
+// Agentverse floor: dashed boundary around the agent team
+{
+  const r=[new THREE.Vector3(-0.3,0,-4.7),new THREE.Vector3(5.9,0,-4.7),new THREE.Vector3(5.9,0,4.7),new THREE.Vector3(-0.3,0,4.7)];
+  const segs=[]; const edges=loop(r);
+  for(let i=0;i<edges.length;i+=2){ const a=edges[i], b=edges[i+1]; const n=Math.round(a.distanceTo(b)/0.25);
+    for(let k=0;k<n;k+=2) segs.push(a.clone().lerp(b,k/n), a.clone().lerp(b,(k+1)/n)); }
+  track(lineObj(segs, MUTED, .8), 3);
+}
+node(P.orch, 1.6, 0.7, 1.0, 2);
+node(P.memory, 1.2, 0.5, 0.9, 2.3, MUTED);
+// memory as a stack of discs (a database, drawn)
+{
+  const segs=[];
+  for(let k=0;k<3;k++){ const ring=[]; for(let i=0;i<=24;i++){ const a=i/24*Math.PI*2; ring.push(new THREE.Vector3(P.memory.x+Math.cos(a)*0.45, 0.62+k*0.16, P.memory.z+Math.sin(a)*0.3)); } segs.push(...polyline(ring)); }
+  track(lineObj(segs, INK, .9), 2.3);
+}
+node(P.coord, 1.4, 0.8, 1.0, 3);
+node(P.price, 1.1, 0.6, 0.9, 3.15);
+node(P.alts, 1.1, 0.6, 0.9, 3.25);
+node(P.reviews, 1.1, 0.6, 0.9, 3.35);
+node(P.youtube, 0.9, 0.45, 0.8, 3.6, MUTED, .8);
+node(P.msg, 0.9, 0.45, 0.8, 3.7, MUTED, .8);
+node(P.cart, 1.1, 0.6, 0.9, 5);
+// the gate: two posts and a bar that lifts on approval
+const gate = new THREE.Group(); gate.position.copy(P.gate);
+gate.add(lineObj([...boxEdges(0.08,0.9,0.08).map(p=>p.add(new THREE.Vector3(0,0.45,-0.45))), ...boxEdges(0.08,0.9,0.08).map(p=>p.add(new THREE.Vector3(0,0.45,0.45)))]));
+const bar = new THREE.Group(); bar.position.set(0,0.6,-0.45);
+bar.add(lineObj(boxEdges(0.06,0.06,0.92).map(p=>p.add(new THREE.Vector3(0,0,0.46)))));
+gate.add(bar); track(gate, 5);
+// checkout: a wall Focal never crosses
+{
+  const s=P.stop, segs=[];
+  segs.push(...loop([new THREE.Vector3(s.x,0,s.z-0.7),new THREE.Vector3(s.x,1.1,s.z-0.7),new THREE.Vector3(s.x,1.1,s.z+0.7),new THREE.Vector3(s.x,0,s.z+0.7)]));
+  segs.push(new THREE.Vector3(s.x,0,s.z-0.7),new THREE.Vector3(s.x,1.1,s.z+0.7), new THREE.Vector3(s.x,1.1,s.z-0.7),new THREE.Vector3(s.x,0,s.z+0.7));
+  track(lineObj(segs, MUTED, .9), 5.2);
+}
+// Studio: a panel with a priority slider
+const studio = new THREE.Group(); studio.position.copy(P.studio);
+{
+  const segs=[...loop([new THREE.Vector3(-1,0,-0.7),new THREE.Vector3(1,0,-0.7),new THREE.Vector3(1,0,0.7),new THREE.Vector3(-1,0,0.7)])];
+  segs.push(new THREE.Vector3(-0.7,0,0.1),new THREE.Vector3(0.7,0,0.1));
+  for(const x of [-0.7,0,0.7]) segs.push(new THREE.Vector3(x,0,0.02),new THREE.Vector3(x,0,0.18));
+  studio.add(lineObj(segs));
+  const knob = lineObj(loop(Array.from({length:16},(_,i)=>{const a=i/16*Math.PI*2;return new THREE.Vector3(Math.cos(a)*0.09,0,0.1+Math.sin(a)*0.09);})), LENS);
+  studio.add(knob); studio.userData.knob = knob;
+}
+track(studio, 6);
+
+/* ---------- wires and the data that moves along them ---------- */
+const wires = [];
+function wire(a, b, from, lift=0.35, color=MUTED){
+  const mid = a.clone().lerp(b,.5); mid.y += lift;
+  const curve = new THREE.QuadraticBezierCurve3(a.clone().setY(a.y+0.02), mid, b.clone().setY(b.y+0.02));
+  const l = lineObj(polyline(curve.getPoints(40)), color, .9);
+  track(l, from);
+  const w = {curve, from, packets:[]}; wires.push(w); return w;
+}
+const W = {
+  down:    wire(P.glasses.clone().add(new THREE.Vector3(0,-0.45,0)), P.orch.clone().setY(0.7), 2, 0.2),
+  memory:  wire(P.orch, P.memory, 2.3),
+  coord:   wire(P.orch, P.coord, 3),
+  price:   wire(P.coord, P.price, 3.15),
+  alts:    wire(P.coord, P.alts, 3.25),
+  reviews: wire(P.coord, P.reviews, 3.35),
+  youtube: wire(P.coord, P.youtube, 3.6, .25, MUTED),
+  msg:     wire(P.coord, P.msg, 3.7, .25, MUTED),
+  gate:    wire(P.orch, P.gate, 5),
+  cart:    wire(P.gate, P.cart, 5),
+  studio:  wire(P.studio, P.memory, 6),
+};
+const packetGeo = new THREE.SphereGeometry(0.045, 10, 8);
+function packets(w, n, opts={}){
+  for(let i=0;i<n;i++){
+    const m = new THREE.Mesh(packetGeo, new THREE.MeshBasicMaterial({color:LENS, transparent:true, opacity:0}));
+    m.userData = {phase:i/n, ...opts}; scene.add(m); w.packets.push(m);
+  }
+}
+packets(W.down, 2, {stage:[2.3,99], dir:1});
+packets(W.memory, 1, {stage:[2.3,99], dir:1, speed:.5});
+packets(W.coord, 2, {stage:[3,99], dir:1});
+for(const k of ["price","alts","reviews"]) packets(W[k], 1, {stage:[3.2,99], dir:1, sync:true});
+for(const k of ["price","alts","reviews"]) packets(W[k], 1, {stage:[4,99], dir:-1, sync:true, source:true});
+packets(W.gate, 1, {stage:[5,99], dir:1, gated:true});
+packets(W.cart, 1, {stage:[5,99], dir:1, afterGate:true});
+packets(W.studio, 2, {stage:[6,99], dir:1, speed:.6});
+
+/* ---------- labels ---------- */
+const labelsEl = document.getElementById("labels");
+const labels = [];
+function label(text, sub, pos, from, to=99, cls=""){
+  const el = document.createElement("div"); el.className = "tag " + cls;
+  el.innerHTML = text + (sub ? `<small>${sub}</small>` : "");
+  labelsEl.append(el); labels.push({el, pos, from, to}); return el;
+}
+const G = P.glasses;
+const above = (p, y) => p.clone().add(new THREE.Vector3(0, y, 0));
+label("Even Realities G2", "no camera", G.clone().add(new THREE.Vector3(-1.9,0.6,0)), 0.15, 1.9, "lead");
+label("Micro-display in each lens", "green, monochrome", G.clone().add(new THREE.Vector3(1.4,0.55,0.05)), 0.35, 1.9, "lead");
+label("Touch and ring input", "temple touch or R1 ring", G.clone().add(new THREE.Vector3(1.6,0.3,-1.6)), 0.55, 1.9, "lead");
+label("On the lens", "one answer, then it clears", G.clone().add(new THREE.Vector3(1.3,-0.45,0.05)), 1.25, 2.4, "lead live");
+label("Orchestrator", "reads the page, checks permissions", above(P.orch, 1.15), 2.15);
+label("Memory", "approvals, history, preferences", above(P.memory, 1.35), 2.4);
+label("Fetch.ai Agentverse", "", new THREE.Vector3(-0.3,0,-4.7), 3.0, 99, "lead");
+label("Focal coordinator", "delegates in parallel", above(P.coord, 1.25), 3.05);
+label("Price", "", above(P.price, 0.95), 3.2);
+label("Alternatives", "", above(P.alts, 0.95), 3.3);
+label("Reviews", "", above(P.reviews, 0.95), 3.4);
+label("YouTube finder", "on request", above(P.youtube, 0.8), 3.65);
+label("Messenger", "drafts, you send", above(P.msg, 0.8), 3.75);
+label("bestbuy.com", "high trust, read from the page", P.price.clone().add(new THREE.Vector3(0.75,0.3,0)), 4.1, 99, "lead live");
+label("amazon.com", "high trust", P.alts.clone().add(new THREE.Vector3(0.75,0.3,0)), 4.2, 99, "lead live");
+label("Reviewer sources", "pros and cons cited", P.reviews.clone().add(new THREE.Vector3(0.75,0.3,0)), 4.3, 99, "lead live");
+label("Your approval", "the exact listing or message", above(P.gate, 1.3), 5.05);
+label("Amazon cart", "adds, then verifies", above(P.cart, 0.95), 5.15);
+label("Checkout", "no code path", above(P.stop, 1.45), 5.25);
+label("Focal Studio", "price, balanced or quality", above(P.studio, 0.45), 6.05);
+
+/* ---------- camera choreography, one keyframe per sheet ---------- */
+const K = [
+  {t:G.clone().add(new THREE.Vector3(0,-0.2,-1.2)), zoom:1.25, az:-0.75, el:0.38},
+  {t:G.clone().add(new THREE.Vector3(0.4,-0.05,0)), zoom:2.1, az:-0.22, el:0.14},
+  {t:new THREE.Vector3(-4.6,0.8,0.8), zoom:0.95, az:-0.4, el:0.45},
+  {t:new THREE.Vector3(2.7,0,0), zoom:0.7, az:-0.4, el:0.6},
+  {t:new THREE.Vector3(3.6,0,0), zoom:0.82, az:-0.4, el:0.66},
+  {t:new THREE.Vector3(-0.4,0.2,5.0), zoom:1.0, az:-0.4, el:0.5},
+  {t:new THREE.Vector3(-1.4,0.4,1.6), zoom:0.48, az:-0.4, el:0.58},
+];
+const titles = ["The frame","On the lens","Orchestrator","Agentverse","Sources","Approval gate","Studio"];
+const ease = x => x<.5 ? 4*x*x*x : 1-Math.pow(-2*x+2,3)/2;
+const clamp = (x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+
+let s = 0, sTarget = 0;
+function readScroll(){
+  const secs = document.querySelectorAll("main section");
+  // A sheet changes when its section crosses the middle of the screen; the first sheet
+  // starts at the very top so the page opens on sheet 1 exactly.
+  const y = scrollY + innerHeight*0.5;
+  let v = 0;
+  secs.forEach((el,i)=>{
+    const top = i === 0 ? innerHeight*0.5 : el.offsetTop, h = el.offsetTop + el.offsetHeight - top;
+    if(y >= top) v = Math.min(i, 6) + (i < 6 ? clamp((y-top)/h) : 0);
+  });
+  sTarget = clamp(v, 0, 6.999);
+}
+addEventListener("scroll", readScroll, {passive:true});
+
+function resize(){
+  const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false);
+  const a = w/h, view = 6;
+  camera.left = -view*a/2; camera.right = view*a/2; camera.top = view/2; camera.bottom = -view/2;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize); resize(); readScroll();
+
+const tbSheet = document.getElementById("tb-sheet"), tbTitle = document.getElementById("tb-title");
+let lastSheet = -1;
+const v = new THREE.Vector3();
+let clock = 0, gateOpen = 0;
+
+function draw(dt){
+  clock += dt;
+  s += (sTarget - s) * (reduced ? 1 : Math.min(1, dt*6));
+
+  // camera between keyframes; on narrow screens shift the subject up so copy can sit below
+  const i = Math.floor(s), f = ease(s - i), a = K[i], b = K[Math.min(i+1, K.length-1)];
+  const t = a.t.clone().lerp(b.t, f);
+  const narrow = innerWidth < 760, wide = innerWidth > 1100;
+  const zoom = THREE.MathUtils.lerp(a.zoom, b.zoom, f) * (narrow ? 0.62 : 1);
+  const az = THREE.MathUtils.lerp(a.az, b.az, f) + (reduced ? 0 : Math.sin(clock*0.15)*0.03);
+  const el = THREE.MathUtils.lerp(a.el, b.el, f);
+  camera.position.set(t.x + Math.sin(az)*Math.cos(el)*20, t.y + Math.sin(el)*20, t.z + Math.cos(az)*Math.cos(el)*20);
+  camera.lookAt(t); camera.zoom = zoom; camera.updateProjectionMatrix();
+  // keep the drawing clear of the copy column
+  const shift = wide ? -0.16 : narrow ? 0 : -0.1;
+  camera.setViewOffset(innerWidth, innerHeight, shift*innerWidth, narrow ? innerHeight*0.16 : 0, innerWidth, innerHeight);
+
+  // draw-in and fade per object
+  // the glasses draw themselves once on load, then scrolling takes over
+  const intro = reduced ? 1 : clamp((performance.now() - 300) / 2400);
+  for(const o of objects){
+    const p = o.from === 0 ? Math.max(ease(intro), clamp(s / 0.6)) : clamp((s - o.from) / 0.6);
+    const out = clamp((s - o.to) / 0.4);
+    o.obj.visible = p > 0;
+    o.obj.traverse(c=>{
+      if(c.isLineSegments && o.draw){ const n = c.userData.total; c.geometry.setDrawRange(0, Math.floor(n*p/2)*2); }
+    });
+    for(const m of o.mats) m.opacity = m.userData.base * (o.draw ? 1 : p) * (1-out);
+  }
+  const recede = 1 - 0.75*clamp((s-3)/0.6);
+  for(const m of objects[0].mats) m.opacity *= recede;
+  // HUD on the lens: visible on sheet 2, clears after
+  const hudA = clamp((s-1.15)/0.35) * (1 - clamp((s-2.5)/0.4));
+  hud.material.opacity = hudA;
+  glasses.userData.display.material.opacity = Math.max(0.25, hudA);
+  glasses.rotation.y = reduced ? 0 : Math.sin(clock*0.4)*0.05*(1-clamp(s-1));
+
+  // the approval gate opens partway through sheet 6
+  gateOpen += ((s > 5.45 ? 1 : 0) - gateOpen) * Math.min(1, dt*4);
+  bar.rotation.x = -gateOpen * 1.25;
+
+  // studio priority knob slides between price, balanced and quality
+  studio.userData.knob.position.x = reduced ? 0 : Math.sin(clock*0.6)*0.7;
+
+  // packets
+  for(const w of wires) for(const m of w.packets){
+    const u = m.userData, on = s >= u.stage[0] && s < u.stage[1];
+    const speed = u.speed || 0.8;
+    let p = ((clock*speed + (u.sync ? 0 : u.phase)) % 1);
+    if(u.dir < 0) p = 1 - p;
+    if(u.gated){ p = Math.min(p, gateOpen > 0.5 ? 1 : 0.92); }
+    if(u.afterGate && gateOpen < 0.5){ m.material.opacity = 0; continue; }
+    if(reduced) p = 0.5;
+    w.curve.getPoint(p, m.position);
+    m.material.opacity = on ? Math.sin(Math.PI*p)*0.9+0.1 : 0;
+    m.scale.setScalar(u.source ? 0.8 : 1);
+  }
+
+  // labels follow their anchor points
+  for(const l of labels){
+    const op = (l.from < 1 ? clamp((performance.now()/1000 - 1.6 - l.from*2)/0.5) : clamp((s - l.from)/0.3)) * (1 - clamp((s - l.to)/0.3));
+    v.copy(l.pos).project(camera);
+    const x = (v.x*.5+.5)*innerWidth, y = (-v.y*.5+.5)*innerHeight;
+    l.el.style.left = x+"px"; l.el.style.top = y+"px"; l.el.style.opacity = op;
+  }
+
+  const sheet = Math.min(6, Math.floor(s + 0.15));
+  if(sheet !== lastSheet){ lastSheet = sheet; tbSheet.textContent = `${sheet+1} / 7`; tbTitle.textContent = titles[sheet]; }
+
+  renderer.render(scene, camera);
+}
+function frame(now){
+  const dt = Math.min(0.25, (now - (frame.last || now))/1000); frame.last = now;
+  draw(dt); requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+// Scrolling redraws immediately, so the drawing never lags the copy even when frames are throttled.
+addEventListener("scroll", ()=>{ s = sTarget; draw(0); }, {passive:true});
+// Render one sheet exactly (used to check every sheet): focalRender(3.5) shows sheet 4 mid-way.
+window.focalRender = (sheet, at = 6) => { sTarget = s = sheet; clock = at; draw(0); };
+</script>
+</body>
+</html>
