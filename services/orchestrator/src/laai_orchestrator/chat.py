@@ -1449,6 +1449,40 @@ async def on_laptop(text: str, history, config: Config, http: httpx.AsyncClient,
     return None
 
 
+CONFIRMATIONS = {
+    "yes",
+    "confirm buy",
+    "yes confirm buy",
+    "confirm purchase",
+    "yes confirm purchase",
+    "confirm add to cart",
+    "yes confirm add to cart",
+    "add to cart",
+    "yes add to cart",
+}
+
+
+def normalize(text: str) -> str:
+    normalized = re.sub(r"[^a-z ]", "", text.lower()).replace("kart", "cart").strip()
+    return re.sub(r"\s+", " ", normalized)
+
+
+def is_confirmation(normalized: str, purchase_confirmation: str | None) -> bool:
+    """A reply that approves the cart addition waiting behind purchase_confirmation."""
+    return normalized in CONFIRMATIONS or bool(
+        purchase_confirmation and re.fullmatch(CART_PRONOUN, normalized)
+    )
+
+
+def awaiting_recipient(history: list[ChatMessage]) -> str | None:
+    """Answer to "What would you like to say to Jonathan?": the name, so this text is the message."""
+    asked = next((m for m in reversed(history[:-1]) if m.role == "assistant"), None)
+    awaiting = asked and re.fullmatch(
+        r"What would you like to say to (.{1,80})\?", asked.content.strip()
+    )
+    return awaiting[1] if awaiting and not _is_message_request(history[-1].content) else None
+
+
 async def chat(
     history: list[ChatMessage],
     config: Config,
@@ -1481,19 +1515,8 @@ async def chat(
                                    else prepare_message(text, config, http, emit))])
     if act_on_laptop and (done := await on_laptop(text, history, config, http, emit)):
         return done
-    normalized = re.sub(r"[^a-z ]", "", text.lower()).replace("kart", "cart").strip()
-    normalized = re.sub(r"\s+", " ", normalized)
-    confirming = normalized in {
-        "yes",
-        "confirm buy",
-        "yes confirm buy",
-        "confirm purchase",
-        "yes confirm purchase",
-        "confirm add to cart",
-        "yes confirm add to cart",
-        "add to cart",
-        "yes add to cart",
-    } or bool(purchase_confirmation and re.fullmatch(CART_PRONOUN, normalized))
+    normalized = normalize(text)
+    confirming = is_confirmation(normalized, purchase_confirmation)
     amazon_url = re.search(r"https://(?:www\.)?amazon\.com/[^\s]+", text, re.IGNORECASE)
     cart_request = re.search(CART_REQUEST, text, re.IGNORECASE)
     buying = (

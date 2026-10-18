@@ -15,6 +15,12 @@ function orb(v,size=40,idle=false){
   if(v===7){for(let i=0;i<n;i++)el+=`<rect x="0" y="${(i*st+1).toFixed(1)}" width="${size}" height="1" fill="${g}"/>`;
     const b=Math.max(1.2,size/14);el+=`<rect x="${(size*.2).toFixed(1)}" y="${(size*.3).toFixed(1)}" width="${(size*.22).toFixed(1)}" height="${(size*.2).toFixed(1)}" fill="${m}" opacity=".85"/>`;
     [[.48,.3,.32],[.48,.42,.26],[.2,.58,.6],[.2,.7,.48]].forEach(([x,y,w],k)=>el+=`<rect class="s7" style="animation-delay:${(k*0.22).toFixed(2)}s" x="${(x*size).toFixed(1)}" y="${(y*size).toFixed(1)}" width="${(w*size).toFixed(1)}" height="${b.toFixed(1)}" fill="${m}"/>`)}
+  // Verifier: a tick draws itself over scanlines.
+  if(v===8){for(let i=0;i<n;i++)el+=`<rect x="0" y="${(i*st+1).toFixed(1)}" width="${size}" height="1" fill="${g}"/>`;
+    el+=`<path class="s8" pathLength="1" d="M${(size*.28).toFixed(1)} ${(size*.52).toFixed(1)}L${(size*.44).toFixed(1)} ${(size*.68).toFixed(1)}L${(size*.74).toFixed(1)} ${(size*.34).toFixed(1)}" fill="none" stroke="${m}" stroke-width="${Math.max(1.4,size/13).toFixed(1)}" stroke-linecap="round" stroke-linejoin="round"/>`}
+  // Memory: stored records light up one after another.
+  if(v===9){for(let i=0;i<n;i++)el+=`<rect x="${(i*st+1).toFixed(1)}" y="0" width="1" height="${size}" fill="${g}"/>`;
+    const h=Math.max(1.6,size/11);[.3,.46,.62].forEach((y,k)=>el+=`<rect class="s9" style="animation-delay:${(k*0.35).toFixed(2)}s" x="${(size*.25).toFixed(1)}" y="${(y*size).toFixed(1)}" width="${(size*.5).toFixed(1)}" height="${h.toFixed(1)}" rx="${(h/2).toFixed(1)}" fill="${m}"/>`)}
   if(v===3){for(let i=0;i<n;i++)el+=`<rect x="0" y="${(i*st+1).toFixed(1)}" width="${size}" height="1" fill="${g}"/>`;
     [[.28,.3,1.9],[.45,.25,2.6],[.62,.2,2.2],[.8,.15,3.1]].forEach(([y,w,d],k)=>el+=`<rect class="s3" style="animation-duration:${d}s;animation-delay:${(-k*0.7).toFixed(2)}s" x="0" y="${(y*size).toFixed(1)}" width="${(w*size).toFixed(1)}" height="${Math.max(1,size/16).toFixed(1)}" fill="${m}"/>`)}
   return `<svg class="orb${idle?" idle":""}" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><defs><clipPath id="${id}"><circle cx="${c}" cy="${c}" r="${r}"/></clipPath></defs><circle cx="${c}" cy="${c}" r="${r}" fill="#16191c"/><g clip-path="url(#${id})">${el}</g><circle cx="${c}" cy="${c}" r="${r-.5}" fill="none" stroke="#5a626a" stroke-width="1"/></svg>`;
