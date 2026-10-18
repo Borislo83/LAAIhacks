@@ -147,3 +147,28 @@ async def test_store_lookups_are_cached_without_the_key(monkeypatch):
     await stores._get_json("https://serpapi.com/search.json", {**params, "api_key": "secret-2"})
     assert len(calls) == 1
     assert all("secret" not in str(key) for key in stores._CACHE)
+
+
+def test_budget_phrases_stripped_from_the_query_also_set_the_budget():
+    for text in ("Sony headphones less than $300", "Sony headphones max $300"):
+        assert coordinator.search_phrase(text) == "Sony headphones"
+        assert coordinator.budget_from(text) == 300.0
+
+
+async def test_store_cache_is_bounded(monkeypatch):
+    async def fetch(url, params):
+        return {"organic_results": []}
+
+    monkeypatch.setattr(stores, "_fetch_json", fetch)
+    monkeypatch.setattr(stores, "_CACHE", {})
+    monkeypatch.setattr(stores, "CACHE_SIZE", 3)
+    for q in "abcde":
+        await stores._get_json("https://serpapi.com/search.json", {"k": q})
+    assert [key[1] for key in stores._CACHE] == [(("k", "c"),), (("k", "d"),), (("k", "e"),)]
+
+
+def test_model_name_max_is_not_a_budget():
+    text = "iPhone 16 Pro Max 256GB price"
+    assert coordinator.budget_from(text) is None
+    assert "Max 256GB" in coordinator.search_phrase(text)
+    assert coordinator.budget_from("earbuds maximum of $80") == 80.0

@@ -94,6 +94,9 @@ async def compare(req):
         if not listings:
             raise
         sources, meta = [], {"data_source": "store_api", "sources": [], "notice": None}
+    except BaseException:
+        listings_task.cancel()
+        raise
     offers = await _candidates(sources, name)
     if not offers:
         # A second, store-focused query widens the pool only when the first found nothing.
@@ -206,9 +209,10 @@ async def alternatives(req):
         raise found
     sources, meta = found
     report("comparing", f"Comparing {len(results)} candidates against the budget")
-    priced, unpriced = [], await store_alternatives(name, known, req.max_price)
+    # Store-search alternatives are always priced; catalog leads may not be.
+    priced, unpriced = await store_alternatives(name, known, req.max_price), []
     for product, result in zip(candidates, results):
-        best = None if isinstance(result, Exception) else result.best
+        best = None if isinstance(result, BaseException) else result.best
         if best is None:
             # Stores often block automated reads; keep the candidate, flag the price.
             unpriced.append(
@@ -234,9 +238,7 @@ async def alternatives(req):
             )
         )
         sources.extend(result.sources)
-    # Store-search alternatives are priced; catalog leads without a price stay last.
-    priced += [a for a in unpriced if a.price is not None]
-    unpriced = [a for a in unpriced if a.price is None]
+    # Catalog leads without a price stay last.
     priced = list({a.product.lower(): a for a in reversed(priced)}.values())
     priced.sort(key=lambda a: (-(a.rating or 0), a.price))
     options = priced + unpriced
@@ -293,7 +295,7 @@ def merge_notes(notes: list[str], new: list[str]) -> list[str]:
 
 async def reviews(req):
     from .expert_reviews import parse_review, site_name
-    from .merchants import fetch_page
+    from .merchants import MALFORMED, fetch_page
 
     name = product_name(req.product)
     sources, meta = await search(f"{name} independent review")
@@ -305,7 +307,7 @@ async def reviews(req):
     for url, page in zip(urls, pages):
         try:
             rating, good, bad = parse_review(page, url, name) if page else (None, [], [])
-        except ValueError:  # malformed markup
+        except MALFORMED:
             continue
         # One score per site: a review page and a product page can both carry it.
         if rating and rating.source not in {r.source for r in ratings}:

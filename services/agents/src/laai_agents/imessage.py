@@ -22,6 +22,7 @@ import time
 from collections import OrderedDict, deque
 from datetime import UTC, datetime, timedelta
 from typing import Literal
+from urllib.parse import quote
 from uuid import uuid4
 
 from pydantic.v1 import Field, SecretStr
@@ -64,7 +65,8 @@ class MessageDraftRequest(Model):
 
 
 class MessageDraftResponse(Model):
-    status: Literal["ready", "ambiguous", "unknown_contact", "needs_details"]
+    # needs_message: the contact is known but no text was given, so ask for it.
+    status: Literal["ready", "ambiguous", "unknown_contact", "needs_details", "needs_message"]
     draft_id: str | None = None
     recipient_name: str | None = None
     recipient_masked: str | None = None
@@ -82,9 +84,11 @@ class MessageSendRequest(Model):
 
 
 class MessageSendResponse(Model):
-    status: Literal["sent", "failed", "needs_permission"]
+    status: Literal["sent", "failed", "needs_permission", "open_link"]
     summary: str
     dry_run: bool = False
+    # Link delivery: an sms: URL that opens Messages with the approved draft.
+    open_url: str | None = None
 
 
 class DryRunLogRequest(Model):
@@ -144,7 +148,7 @@ def resolve(name: str, book: dict[str, str]) -> list[str]:
 
 
 VERB = re.compile(
-    r"^(?:please\s+|can you\s+|could you\s+)?"
+    r"^(?:(?:hey|hi|ok|okay|yo)[\s,!]+)?(?:please\s+|can you\s+|could you\s+)?"
     r"(?:send\s+(?:an?\s+)?(?:imessage|text|message)\s+to|imessage|text|message|tell)\s+(.+)$",
     re.IGNORECASE | re.DOTALL,
 )
@@ -165,7 +169,24 @@ def extract_by_pattern(request: str, book: dict[str, str]) -> tuple[str, str] | 
     else:
         recipient, _, body = rest.partition(" ")
     body = LINK.sub("", body.strip(), count=1).strip()
-    return (recipient, body) if recipient and body else None
+    # A known contact with no text yet ("send a message to Jonathan") still parses;
+    # prepare() then asks what to say.
+    return (recipient.strip(" .,!?"), body) if recipient else None
+
+
+def tidy(text: str) -> str:
+    """Light formatting only: no wrapping quotes, a capital first letter, end punctuation."""
+    text = " ".join(text.split())
+    # Only a message wrapped in one matching pair of quotes loses them; inner quotes stay.
+    for left, right in (('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’")):
+        if len(text) > 1 and text[0] == left and text[-1] == right and right not in text[1:-1]:
+            text = text[1:-1].strip()
+            break
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+    if text and text[-1].isalnum():
+        text += "."
+    return text
 
 
 async def extract(request: str, book: dict[str, str]) -> tuple[str, str] | None:
@@ -211,6 +232,7 @@ async def prepare(req: MessageDraftRequest) -> MessageDraftResponse:
             summary='Say who to message and what to say, e.g. "text Alex running late".',
         )
     recipient, text = parsed
+    text = tidy(text)
     if len(text) > 1000:
         return MessageDraftResponse(
             status="needs_details",
@@ -229,11 +251,18 @@ async def prepare(req: MessageDraftRequest) -> MessageDraftResponse:
         return MessageDraftResponse(
             status="ambiguous",
             candidates=matches,
-            text=text,
+            text=text or None,
             error="More than one contact matches",
             summary=f"Which one did you mean: {', '.join(matches)}?",
         )
     name = matches[0]
+    if not text:
+        return MessageDraftResponse(
+            status="needs_message",
+            recipient_name=name,
+            recipient_masked=mask(book[name]),
+            summary=f"What would you like to say to {name}?",
+        )
     draft_id = uuid4().hex
     if len(_drafts) >= MAX_DRAFTS:
         _drafts.popitem(last=False)
@@ -287,12 +316,8 @@ def _refused(summary: str) -> MessageSendResponse:
     return MessageSendResponse(status="failed", summary=summary)
 
 
-async def send(req: MessageSendRequest) -> MessageSendResponse:
-    if not authorized(req.executor_token):
-        return _refused("The iMessage sender is not configured or authorized. Nothing was sent.")
-    dry = dry_run()
-    if not dry and sys.platform != "darwin":
-        return _refused("iMessage sending needs macOS with the Messages app. Nothing was sent.")
+def _claim(req: MessageSendRequest) -> dict | MessageSendResponse:
+    """The approved draft, now used and rate-counted, or the refusal to return instead."""
     _prune()
     draft = _drafts.get(req.draft_id)
     if draft is None:
@@ -306,6 +331,35 @@ async def send(req: MessageSendRequest) -> MessageSendResponse:
     # Single use from here on: an uncertain attempt is never repeated automatically.
     draft["used"] = True
     _sent_at.append(time.monotonic())
+    return draft
+
+
+def delivery() -> str:
+    """'imessage' sends through Messages on macOS; 'link' hands the user an sms: link.
+
+    Link delivery is opt-in with IMESSAGE_DELIVERY=link (for example on Windows, where
+    Messages can't be automated); otherwise sending goes through iMessage as before.
+    """
+    value = os.getenv("IMESSAGE_DELIVERY", "").strip().lower()
+    return "link" if value == "link" else "imessage"
+
+
+def sms_link(handle: str, text: str) -> str:
+    """Opens the Messages app with the recipient and text filled in; the user taps Send."""
+    return f"sms:{handle}?&body={quote(text, safe='')}"
+
+
+async def send(req: MessageSendRequest) -> MessageSendResponse:
+    if not authorized(req.executor_token):
+        return _refused("The iMessage sender is not configured or authorized. Nothing was sent.")
+    if delivery() == "link":
+        return _send_link(req)
+    dry = dry_run()
+    if not dry and sys.platform != "darwin":
+        return _refused("iMessage sending needs macOS with the Messages app. Nothing was sent.")
+    draft = _claim(req)
+    if isinstance(draft, MessageSendResponse):
+        return draft
     argv = osascript_argv(draft["handle"], draft["text"])
     if dry:
         masked = mask(draft["handle"])
@@ -350,6 +404,19 @@ async def send(req: MessageSendRequest) -> MessageSendResponse:
     return _refused(
         "Messages could not send this. Check that you are signed in to iMessage "
         "and the contact can receive iMessages."
+    )
+
+
+def _send_link(req: MessageSendRequest) -> MessageSendResponse:
+    """The approved draft as an Open-in-Messages link, with the same draft checks."""
+    draft = _claim(req)
+    if isinstance(draft, MessageSendResponse):
+        return draft
+    log.info("iMessage draft %s: approved as a Messages link to %s", req.draft_id, mask(draft["handle"]))
+    return MessageSendResponse(
+        status="open_link",
+        open_url=sms_link(draft["handle"], draft["text"]),
+        summary=f"Approved. Open it in Messages and tap Send to text {draft['name']}.",
     )
 
 

@@ -134,3 +134,11 @@ async def test_repeated_approvals_reuse_one_tab(monkeypatch):
     for _ in range(3):
         assert (await amazon_cart.add_to_cart(URL, 1))["status"] == "cart_added"
     assert len(opened) == 1
+
+
+async def test_open_context_without_tabs_gets_a_tab_not_a_relaunch(monkeypatch):
+    page = Page(added=True)
+    opened = browser_fixture(monkeypatch, page)
+    amazon_cart._browser.pages = []  # user closed the tab; the profile is still locked
+    assert (await amazon_cart.add_to_cart(URL, 1))["status"] == "cart_added"
+    assert opened == [page]

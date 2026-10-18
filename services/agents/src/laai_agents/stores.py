@@ -14,6 +14,7 @@ import time
 
 import aiohttp
 
+from . import net
 from .carts import amazon_cart_link, bestbuy_cart_link
 from .models import Offer
 
@@ -58,24 +59,27 @@ def _offer(product, store, price, url, cart_url, rating, reviews, source):
 # hour are answered from memory. Keys are left out of the cache key.
 _CACHE: dict[tuple, tuple[float, dict]] = {}
 CACHE_SECONDS = 1800
+CACHE_SIZE = 256
 
 
 async def _get_json(url: str, params: dict) -> dict:
     key = (url, tuple(sorted((k, str(v)) for k, v in params.items() if "key" not in k.lower())))
+    now = time.monotonic()
     cached = _CACHE.get(key)
-    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+    if cached and now - cached[0] < CACHE_SECONDS:
         return cached[1]
     data = await _fetch_json(url, params)
     if data:
+        for stale in [k for k, (at, _) in _CACHE.items() if now - at >= CACHE_SECONDS]:
+            del _CACHE[stale]
+        while len(_CACHE) >= CACHE_SIZE:
+            del _CACHE[next(iter(_CACHE))]  # oldest first: insertion order
         _CACHE[key] = (time.monotonic(), data)
     return data
 
 
 async def _fetch_json(url: str, params: dict) -> dict:
-    async with (
-        aiohttp.ClientSession(timeout=TIMEOUT) as session,
-        session.get(url, params=params) as response,
-    ):
+    async with net.session().get(url, params=params, timeout=TIMEOUT) as response:
         if response.status != 200:
             return {}
         return await response.json(content_type=None)

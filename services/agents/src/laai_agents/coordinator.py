@@ -31,8 +31,10 @@ DEFAULT_TIMEOUT = 45
 
 
 BUDGET = re.compile(
-    r"(?:under|below|less than|up to|at most|max(?:imum)?|budget(?:\s+of)?)\s*\$?\s*\d[\d,]*(?:\.\d{1,2})?"
-    r"(?:\s*(?:dollars|usd|bucks))?",
+    r"(?:(?:under|below|less than|up to|at most|budget(?:\s+of)?)\s*"
+    # Bare "max" is often a model name ("Pro Max 256GB"), so it needs a currency.
+    r"|max(?:imum)?(?:\s+of)?\s*(?=\$|\d[\d,]*(?:\.\d{1,2})?\s*(?:dollars|usd|bucks)\b))"
+    r"\$?\s*(\d[\d,]*(?:\.\d{1,2})?)(?:\s*(?:dollars|usd|bucks))?",
     re.IGNORECASE,
 )
 FILLER = re.compile(
@@ -53,11 +55,7 @@ def search_phrase(text: str) -> str:
 
 
 def budget_from(text: str) -> float | None:
-    match = re.search(
-        r"(?:under|below|up to|at most|budget(?:\s+of)?)\s*\$?\s*(\d[\d,]*(?:\.\d{1,2})?)",
-        text,
-        re.IGNORECASE,
-    )
+    match = BUDGET.search(text)
     return float(match[1].replace(",", "")) if match else None
 
 

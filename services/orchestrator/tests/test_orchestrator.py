@@ -657,3 +657,75 @@ async def test_coordinator_picks_reach_the_chat_reply():
             [ChatMessage(role="user", content="Are there Sony headphones under $300?")], config(), http
         )
     assert reply.source == "coordinator" and reply.picks == [pick]
+
+
+async def test_reply_to_what_to_say_becomes_the_draft():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    seen = []
+
+    def handle(request):
+        seen.append(json.loads(request.content)["request"])
+        return httpx.Response(200, json={"status": "ready", "summary": "Draft ready."})
+
+    history = [
+        ChatMessage(role="user", content="Hey send a message to jonathan"),
+        ChatMessage(role="assistant", content="What would you like to say to Jonathan?"),
+        ChatMessage(role="user", content="running 10 minutes late"),
+    ]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        reply = await chat.chat(history, config(), http)
+    assert seen == ["text Jonathan running 10 minutes late"]
+    assert reply.calls[0].kind == "message"
+
+
+@pytest.mark.parametrize(
+    "text, is_message",
+    [
+        ("Hey send a message to jonathan", True),
+        ("send a text to Jonathan saying hi", True),
+        ("Text Jonathan I'm outside", True),
+        ("tell me about the Sony XM5", False),
+        ("text scale is too small", False),
+    ],
+)
+def test_message_requests_are_recognized(text, is_message):
+    from laai_orchestrator.chat import _is_message_request
+
+    assert _is_message_request(text) is is_message
+
+
+def test_message_sent_accepts_only_sms_links():
+    from pydantic import ValidationError
+
+    from laai_orchestrator.models import MessageSent
+
+    ok = MessageSent(status="open_link", summary="s", open_url="sms:+12137930070?&body=Hi.")
+    assert ok.open_url.startswith("sms:+1213")
+    with pytest.raises(ValidationError):
+        MessageSent(status="open_link", summary="s", open_url="javascript:alert(1)")
+
+
+def test_budget_routing_matches_the_coordinators_phrases():
+    import re
+
+    from laai_orchestrator.chat import COORDINATE
+
+    for text in ("headphones less than $300", "earbuds max $80", "a tv maximum 500 dollars"):
+        assert re.search(COORDINATE, text, re.IGNORECASE), text
+    assert not re.search(COORDINATE, "iPhone 16 Pro Max 256GB price", re.IGNORECASE)
+
+
+async def test_buyer_non_object_reply_is_an_agent_error():
+    from types import SimpleNamespace
+
+    from laai_orchestrator.chat import buyer_call
+
+    class Http:
+        async def post(self, url, **_):
+            return httpx.Response(200, json=["not", "an", "object"], request=httpx.Request("POST", url))
+
+    config = SimpleNamespace(agents_url="http://agents.test")
+    call = await buyer_call({"product": "Sony XM5"}, config, Http())
+    assert call.result is None and call.error == "Amazon cart agent unavailable"
