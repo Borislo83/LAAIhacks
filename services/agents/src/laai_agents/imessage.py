@@ -417,8 +417,13 @@ async def send(req: MessageSendRequest) -> MessageSendResponse:
         return MessageSendResponse(
             status="sent", summary=f"Sent your iMessage to {draft['name']}."
         )
-    if "-1743" in stderr or "not authorized to send apple events" in stderr.lower():
-        log.info("iMessage draft %s: Automation permission missing", req.draft_id)
+    error_code, reason = applescript_error(stderr, draft["handle"], draft["text"])
+    if (
+        error_code in PERMISSION_ERRORS
+        or "-1743" in stderr
+        or "not authorized to send apple events" in stderr.lower()
+    ):
+        log.info("iMessage draft %s: Automation permission missing (%s)", req.draft_id, error_code)
         return MessageSendResponse(
             status="needs_permission",
             summary=(
@@ -427,11 +432,39 @@ async def send(req: MessageSendRequest) -> MessageSendResponse:
                 "Messages, then prepare the message again."
             ),
         )
-    log.info("iMessage draft %s: osascript exited with %s", req.draft_id, code)
-    return _refused(
-        "Messages could not send this. Check that you are signed in to iMessage "
-        "and the contact can receive iMessages."
+    log.info("iMessage draft %s: osascript exited with %s (%s)", req.draft_id, code, error_code)
+    hint = ERROR_HINTS.get(
+        error_code,
+        "Check that you are signed in to iMessage and the contact can receive iMessages.",
     )
+    detail = f" Messages said: {reason}" if reason else ""
+    return _refused(f"Messages could not send this to {draft['name']}. {hint}{detail}")
+
+
+# -1743: not allowed to send Apple events; -1744: the event would need the user's consent.
+PERMISSION_ERRORS = {"-1743", "-1744"}
+ERROR_HINTS = {
+    "-1728": "Messages could not find that contact on iMessage. Check the number or email.",
+    "-1719": "Messages could not find that contact on iMessage. Check the number or email.",
+    "-600": "Messages is not running. Open the Messages app and try again.",
+    "-10000": "Messages rejected the request. Check that iMessage is signed in and enabled.",
+}
+APPLESCRIPT_ERROR = re.compile(r"(?:^\s*\d+:\d+:\s*)?(?:execution error:\s*)?(.*?)\s*\((-?\d+)\)\s*$")
+
+
+def applescript_error(stderr: str, handle: str, text: str) -> tuple[str | None, str]:
+    """('-1728', 'Messages got an error: …') from osascript's stderr, handle and text removed.
+
+    The reason is shown to the owner, so the handle is masked and the message body dropped.
+    """
+    line = next((ln for ln in reversed(stderr.strip().splitlines()) if ln.strip()), "")
+    match = APPLESCRIPT_ERROR.match(line)
+    code, reason = (match[2], match[1]) if match else (None, line.strip())
+    if handle:
+        reason = reason.replace(handle, mask(handle))
+    if text:
+        reason = reason.replace(text, "…")
+    return code, reason[:200]
 
 
 def _send_link(req: MessageSendRequest) -> MessageSendResponse:
