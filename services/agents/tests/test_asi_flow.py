@@ -148,9 +148,12 @@ async def test_full_flow_from_intent_to_watch_with_cards():
     assert ctx.card_kinds()[-1] == "form"
 
     await step(ctx, SHOPPER, json.dumps(
-        {"focal_action": "focal_wrapup", "watch": True, "message": True, "friend": "Alex", "remember": True}
+        {"focal_action": "focal_wrapup", "watch": True, "message": True, "friend": "Alex", "remember": True,
+         "remind": True, "remind_when": "14d", "remind_about": "the return window"}
     ))
     assert SHOPPER in ctx.storage["watches"]
+    assert ctx.storage["reminders"][0]["about"] == "the return window"
+    assert "reminder set" in ctx.texts()
     assert "saved to the profile" in ctx.texts()
     assert ctx.card_kinds()[-1] == "review"  # iMessage draft, only because it was asked for
 
