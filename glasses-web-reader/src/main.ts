@@ -56,6 +56,8 @@ const HANDS_FREE_KEY = 'webreader.v1.handsFree'
 const RECOMMENDATIONS_KEY = 'webreader.v1.recommendations'
 /** Must match the server's WAKE_NAME. Not "Hey Even": that wakes the system assistant. */
 const WAKE_PHRASE = 'Hey Focal'
+/** Requests only the laptop's agents can do (play, message, cart). */
+const LAPTOP_ASK = /\b(?:spotify|you\s*tube|i?message|text|cart)\b/i
 /** The assistant's name on the glasses card and spinner. */
 const ASSISTANT = 'Focal'
 /** The recommendation strip pops up no sooner than this long after a page finishes loading. */
@@ -1454,6 +1456,9 @@ function injectCommand(text: string) {
 /** Sends a heard (or typed) command to the Focal agents, else opens a web search for it. */
 async function runCommand(command: string, seq: number, signal: AbortSignal, quiet: boolean, fadeLater: () => void) {
   logHeard({ text: command, command: true })
+  // Signed out (the laptop's gateway restarted, say): sign in again before anything else.
+  if (!backend.agents) await connectLocalDev()
+  if (seq !== voiceSeq) return
   // "Hide the display" blanks the lens; "show the display" brings it back.
   const display = displayCommand(command)
   if (display) {
@@ -1501,6 +1506,15 @@ async function runCommand(command: string, seq: number, signal: AbortSignal, qui
   // Signed in: the Focal agents get the first try. Anything chat can't route,
   // and any gateway or chat failure, falls through to the web search below.
   const client = backend.agents
+  // Laptop actions need the agents: a web search would only open a web page.
+  if (!client && LAPTOP_ASK.test(command)) {
+    voiceUi = { phase: 'error', text: command }
+    stopLoading()
+    await renderAssistant('Not connected to the laptop, so nothing was done. Rescan the pairing QR.',
+      quiet ? `Say "${WAKE_PHRASE}" to ask again` : VOICE_HINT)
+    fadeLater()
+    return
+  }
   if (client) {
     void renderThinking(command, 'Asking the agents')
     const asking = loading
