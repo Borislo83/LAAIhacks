@@ -281,7 +281,7 @@ def best_offer(offers: list[Offer]) -> Offer | None:
     return None
 
 
-async def fetch_page(url: str) -> str | None:
+async def fetch_page(url: str, limit: int = LIMIT) -> str | None:
     """Read one public HTML page, re-checking every redirect; None if not readable."""
     try:
         for _ in range(MAX_REDIRECTS + 1):
@@ -300,7 +300,7 @@ async def fetch_page(url: str) -> str | None:
                 chunks, size = [], 0
                 async for chunk in response.content.iter_chunked(65536):
                     size += len(chunk)
-                    if size > LIMIT:
+                    if size > limit:
                         return None
                     chunks.append(chunk)
                 page = b"".join(chunks).decode("utf-8", errors="replace")

@@ -1,6 +1,7 @@
 """Focal coordinator: actual typed messages to three specialist uAgents."""
 
 import asyncio
+import os
 import re
 import time
 from collections import defaultdict
@@ -57,6 +58,51 @@ def search_phrase(text: str) -> str:
     return " ".join(text.split())[:120]
 
 
+STORE = re.compile(
+    # "I'm on Best Buy" is where the user is shopping now, not a store to limit to.
+    r"(?<!i'm )(?<!im )(?<!i am )(?<!i’m )"
+    r"\b(?:in|at|on|from|off)\s+(?:the\s+)?(amazon|best\s*buy|walmart|target|ebay|costco)"
+    r"(?:\.com)?\b",
+    re.IGNORECASE,
+)
+STORE_DOMAINS = {
+    "amazon": "amazon.com", "bestbuy": "bestbuy.com", "walmart": "walmart.com",
+    "target": "target.com", "ebay": "ebay.com", "costco": "costco.com",
+}  # fmt: skip
+# "Are there any smart watches under $50", "show me headphones on Amazon": a category to
+# browse, not one product to research.
+LISTING_ASK = re.compile(
+    r"^\s*(?:(?:are|is)\s+there|any|show\s+me|list|find\s+(?:me\s+)?(?:some|any)|"
+    r"what\s+(?:are\s+(?:the|some)|kind\s+of))\b",
+    re.IGNORECASE,
+)
+CATEGORY_WORDS = {
+    "smart", "watch", "watches", "smartwatch", "smartwatches", "fitness", "tracker", "trackers",
+    "running", "headphones", "headphone", "earbuds", "earphones", "headset", "headsets",
+    "wireless", "bluetooth", "noise", "cancelling", "canceling", "gaming", "phone", "phones",
+    "smartphone", "smartphones", "laptop", "laptops", "tablet", "tablets", "tv", "tvs",
+    "speaker", "speakers", "camera", "cameras", "keyboard", "keyboards", "mouse", "monitor",
+    "monitors", "charger", "chargers", "kids", "men", "mens", "women", "womens", "portable",
+    "over", "ear", "in", "for", "cheap", "budget", "good", "decent", "new", "4k", "usb", "c",
+}  # fmt: skip
+
+
+def store_from(text: str) -> str | None:
+    match = STORE.search(text)
+    return STORE_DOMAINS[re.sub(r"\s+", "", match[1].lower())] if match else None
+
+
+def is_listing(text: str, product: str) -> bool:
+    """A category ("smart watches"), or any ask to list a store's products, not one model."""
+    if catalog.find_product(product) or re.search(r"\d", product):
+        return False
+    words = re.findall(r"[a-z0-9]+", product.lower())
+    if not words:
+        return False
+    generic = all(w in CATEGORY_WORDS for w in words)
+    return generic or bool(LISTING_ASK.search(text) and store_from(text))
+
+
 def budget_from(text: str) -> float | None:
     match = BUDGET.search(text)
     return float(match[1].replace(",", "")) if match else None
@@ -75,9 +121,21 @@ async def parse_request(text: str) -> ConsiderRequest | None:
     elif llm.has_key():
         product = await llm.extract_product(text)
     else:
-        # No LLM: "Are there Sony headphones under 300 dollars?" -> "Sony headphones".
-        product = search_phrase(text) or text
-    return ConsiderRequest(product=product[:500], max_price=budget_from(text))
+        # No LLM: "Are there Sony headphones under 300 dollars?" -> "Sony headphones";
+        # "Is there a better alternative for the Garmin 55?" -> "Garmin 55".
+        from .live import clean_query
+
+        cleaned = clean_query(STORE.sub(" ", text))
+        product = search_phrase(cleaned) or cleaned
+    product = " ".join(STORE.sub(" ", product).split()) or product
+    max_price = budget_from(text)
+    store = store_from(text)
+    return ConsiderRequest(
+        product=product[:500],
+        max_price=max_price,
+        store=store,
+        browse=is_listing(text, product) and (max_price is not None or store is not None),
+    )
 
 
 def compare_reviews(main: ReviewsResponse, alt: ReviewsResponse) -> str:
@@ -177,12 +235,27 @@ async def consider(
     req: ConsiderRequest,
     on_update: Update | None = None,
 ) -> ConsiderResponse:
+    if req.browse:
+        return await browse(ctx, addresses, req, on_update)
+    # A loose or misspelled product ("garmin 5 forerunning watch") is resolved once to
+    # its real name ("Garmin Forerunner 55") so every specialist researches the same thing.
+    if os.getenv("PRODUCT_DATA_MODE", "live") == "live":
+        from .live import resolve_product
+
+        try:
+            resolved = await asyncio.wait_for(resolve_product(req.product), timeout=8)
+        except (TimeoutError, ValueError):
+            resolved = req.product
+        if resolved != req.product:
+            publish(req.progress_id, "coordinator", "identified", f"Researching {resolved}")
+            req = req.copy(update={"product": resolved})
     specs = [
         (
             "price",
             "laai-price-compare",
             PriceCompareRequest(
-                product=req.product, progress_id=req.progress_id, max_price=req.max_price
+                product=req.product, progress_id=req.progress_id, max_price=req.max_price,
+                store=req.store,
             ),
             PriceCompareResponse,
         ),
@@ -287,6 +360,7 @@ async def consider(
                         product=req.product,
                         progress_id=req.progress_id,
                         max_price=req.max_price,
+                        store=req.store,
                         deep=True,
                     ),
                     PriceCompareResponse,
@@ -340,6 +414,7 @@ async def consider(
     return ConsiderResponse(
         product=req.product,
         max_price=req.max_price,
+        store=req.store,
         errors=errors,
         timings_ms=timings,
         summary="\n\n".join(sections),
@@ -347,6 +422,76 @@ async def consider(
         verification=verification.model_dump() if verification else None,
         **values,
     )
+
+
+def listing_picks(offers) -> list[Pick]:
+    """Most popular, best rated (with enough ratings to mean something) and cheapest."""
+    from .live import _popularity
+
+    if not offers:
+        return []
+    rated = [o for o in offers if (o.review_count or 0) >= 100] or offers
+    choices = [
+        ("Most popular", max(offers, key=lambda o: o.review_count or 0)),
+        ("Best rated", max(rated, key=lambda o: (o.rating or 0, o.review_count or 0))),
+        ("Cheapest", min(offers, key=lambda o: o.price)),
+        ("Also good", max(offers, key=_popularity)),
+    ]
+    picks, taken = [], set()
+    for label, o in choices:
+        if o.url in taken or len(picks) == 3:
+            continue
+        taken.add(o.url)
+        stars = f"{o.rating}★" + (f" from {o.review_count:,} ratings" if o.review_count else "")
+        picks.append(
+            Pick(label=label, product=o.product, price=o.price, store=o.store, url=o.url,
+                 cart_url=o.cart_url, rating=o.rating,
+                 reason=f"{stars}, ${o.price:.2f} on {o.store}" if o.rating
+                 else f"${o.price:.2f} on {o.store}")
+        )  # fmt: skip
+    return picks
+
+
+async def browse(ctx, addresses, req: ConsiderRequest, on_update=None) -> ConsiderResponse:
+    """A category in budget: the price agent reads the store's listings."""
+    where = req.store or "Amazon and Best Buy"
+    publish(req.progress_id, "coordinator", "identified", f"Listing {req.product} at {where}")
+    started = time.perf_counter()
+    request = PriceCompareRequest(
+        product=req.product, progress_id=req.progress_id, max_price=req.max_price,
+        store=req.store, browse=True,
+    )  # fmt: skip
+    publish(req.progress_id, "price", "delegated", "Coordinator sent work to specialist")
+    price = None
+    for attempt in range(ATTEMPTS):
+        if attempt:
+            await asyncio.sleep(RETRY_DELAY * attempt)
+        try:
+            answer, _ = await ctx.send_and_receive(
+                addresses["laai-price-compare"], request, PriceCompareResponse,
+                timeout=DEFAULT_TIMEOUT,
+            )  # fmt: skip
+        except Exception:  # noqa: BLE001 -- a failed specialist is reported, not raised
+            answer = None
+        if isinstance(answer, PriceCompareResponse):
+            price = answer
+            break
+    elapsed = round((time.perf_counter() - started) * 1000)
+    if on_update:
+        await on_update("price", price, elapsed)
+    if price is None:
+        return ConsiderResponse(
+            product=req.product, max_price=req.max_price, store=req.store, mode="browse",
+            errors={"price": "Specialist unavailable; no result was fabricated."},
+            timings_ms={"price": elapsed},
+            summary="The price agent is unavailable right now. Try again in a moment.",
+        )  # fmt: skip
+    return ConsiderResponse(
+        product=req.product, max_price=req.max_price, store=req.store, mode="browse",
+        price=price, picks=listing_picks(price.offers),
+        errors={"price": price.error} if price.error else {},
+        timings_ms={"price": elapsed}, summary=price.summary,
+    )  # fmt: skip
 
 
 def build_coordinator(addresses: dict[str, str]):
@@ -364,6 +509,8 @@ def build_coordinator(addresses: dict[str, str]):
             )
         if req.max_price is not None:
             parsed.max_price = req.max_price
+        if req.store:
+            parsed.store = req.store
         parsed.progress_id = req.progress_id
         return await consider(ctx, addresses, parsed)
 

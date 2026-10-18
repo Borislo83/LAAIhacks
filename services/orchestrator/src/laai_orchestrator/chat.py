@@ -458,6 +458,25 @@ SHOPPING_WORDS = (
     r"|\bvs\b|\bversus\b|\bworth\b|\bbuy\b"
 )
 MEDIA_WORDS = r"\bsongs?\b|\bvideos?\b|\bplay\b|\bmusic\b|\blisten to\b"
+STRONG_MEDIA = r"\bsongs?\b|\bplay\b|\blisten to\b|\bmusic videos?\b"
+
+
+def media_ask(text: str) -> bool:
+    """A song or video request ("a song like the ...", "play Bad Guy"), not shopping."""
+    # "Play", "song" and "music video" are asks for media; bare "music" or "video" next to a
+    # shopping word ("is this music speaker good") is a product.
+    strong = re.search(STRONG_MEDIA, text, re.IGNORECASE)
+    shoppy = any(re.search(p, text, re.IGNORECASE) for p in KEYWORDS.values())
+    return bool(
+        re.search(r"youtube", text, re.IGNORECASE)
+        or (
+            re.search(MEDIA_WORDS, text, re.IGNORECASE)
+            and (strong or not shoppy)
+            and not re.search(SHOPPING_WORDS, text, re.IGNORECASE)
+            # "video doorbells under 100 dollars" is shopping with a budget.
+            and not re.search(r"\b(?:under|below|less than)\s*\$?\s*\d", text, re.IGNORECASE)
+        )
+    )
 # Requests that need all three agents with a budget go to the coordinator:
 # "consider X", "under $100", "like the X", "similar to X", "instead of X".
 COORDINATE = (
@@ -468,10 +487,18 @@ COORDINATE = (
     r"|\bmax(?:imum)?(?: of)?\s*(?:\$\s*\d|\d[\d,.]*\s*(?:dollars|usd|bucks)\b)"
     # "I'd like a ..." / "would like a ..." are wishes, not comparisons.
     r"|(?<!'d )(?<!would )\b(?:like|similar to|instead of|alternatives? to)\s+(?:the|my|a|an|this|that)\b"
+    # A store constraint: "smart watches on Amazon", "AirPods at Best Buy".
+    # "I'm on Best Buy" is where the user is shopping now, not a constraint.
+    r"|(?<!i'm )(?<!im )(?<!i am )(?<!i’m )"
+    r"\b(?:in|at|on|from)\s+(?:the\s+)?(?:amazon|best\s*buy|walmart|target)(?:\.com)?\b"
 )
 # Without an LLM, "Cheaper anywhere?" / "any alternatives?" also get the full
 # comparison; with one, the model routes them and keeps details like the store.
-COORDINATE_WITHOUT_LLM = r"\b(?:cheaper|alternatives?)\b"
+# Typos count ("alteranate", "alterntive"), and so do "better option"/"replacement for".
+COORDINATE_WITHOUT_LLM = (
+    r"\b(?:cheaper|alt[ae]r[an]+\w*|replacements?\s+(?:for|to)|substitutes?\s+(?:for|to)|"
+    r"competitors?\s+(?:to|of)|better\s+(?:option|choice|one|pick)s?)\b"
+)
 KEYWORDS = {
     TaskKind.PRICE: r"price|cheap|deal|cost|buy|sale|store|\$",
     TaskKind.ALTERNATIVES: r"alternative|instead|similar|other|cheaper|\bvs\b|versus|compare",
@@ -546,9 +573,9 @@ async def chat_with_rules(
     ):
         args = ToolArgs(query=text[:300])
         return rules_reply([await call_agent(AgentKind.NEWS, args, config, http, emit)])
-    if youtube or (
-        not kinds and re.search(MEDIA_WORDS, text, re.IGNORECASE)
-    ):
+    # A song or video ask goes to YouTube even when a title word looks like shopping
+    # ("Play Bad Guy"); real shopping words keep "video doorbell reviews" a product.
+    if youtube or media_ask(text):
         # Media requests go to YouTube alone; "video doorbell reviews" stays shopping.
         media = (
             "video" if re.search(r"video", text, re.IGNORECASE)
@@ -757,9 +784,12 @@ async def chat(
             calls=[],
             source="buyer",
         )
-    coordinate = re.search(COORDINATE, text, re.IGNORECASE) or (
-        not config.asi_one_api_key.get_secret_value()
-        and re.search(COORDINATE_WITHOUT_LLM, text, re.IGNORECASE)
+    coordinate = not media_ask(text) and (
+        re.search(COORDINATE, text, re.IGNORECASE)
+        or (
+            not config.asi_one_api_key.get_secret_value()
+            and re.search(COORDINATE_WITHOUT_LLM, text, re.IGNORECASE)
+        )
     )
     if coordinate or all(
         re.search(pattern, text, re.IGNORECASE) for pattern in (r"price", r"review", r"alternative")
@@ -773,7 +803,8 @@ async def chat(
                 ("alternatives", TaskKind.ALTERNATIVES),
                 ("alternative_reviews", TaskKind.REVIEWS),
             ):
-                if field == "alternative_reviews" and not data.get(field):
+                # A browse answer only has listings; agents that weren't asked show nothing.
+                if not data.get(field) and field not in data.get("errors", {}):
                     continue
                 payload = {"product": (data.get(field) or {}).get("product", data["product"])}
                 if kind == TaskKind.ALTERNATIVES:

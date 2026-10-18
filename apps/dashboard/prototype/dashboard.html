@@ -222,6 +222,10 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
 .composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--hair)}
 .composer input{flex:1;min-width:0;font:15px var(--sans);border:1px solid var(--hair);border-radius:var(--r);padding:10px 12px;background:var(--well);color:var(--ink)}
 .starters{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 4px}
+.starters.busy .chip{opacity:.45;pointer-events:none}
+.verdict{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.verdict h4{margin:0;font:500 11px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--signal)}
+.verdict p{margin:0;font-size:14px;line-height:22px}
 /* live agent work: each agent's own orb animates beside a shimmering status line until it finishes */
 .work{display:flex;flex-direction:column;font-size:13px}
 .work-row{display:flex;gap:10px;align-items:center;min-height:30px;padding:3px 0}
@@ -483,7 +487,10 @@ const VIEW={
   },
   price(d){
     const best=d.best;
-    const rows=d.offers.map(o=>`<a href="${esc(o.url)}" target="_blank" rel="noopener" class="${best&&o.store===best.store?"best":""}"><span>${esc(o.store)}</span><span class="p">${money(o.price)}</span></a>`).join("");
+    // Store listings in a category are different products, so each row names its product.
+    const many=new Set(d.offers.map(o=>o.product)).size>1;
+    const label=o=>many?`${o.product.length>64?o.product.slice(0,63)+"…":o.product}${o.rating!=null?` · ${Number(o.rating).toFixed(1)}★`:""}${o.review_count?` (${o.review_count.toLocaleString()})`:""} · ${storeName(o.store)}`:o.store;
+    const rows=d.offers.map(o=>`<a href="${esc(o.url)}" target="_blank" rel="noopener" class="${best&&o.url===best.url?"best":""}"><span>${esc(label(o))}</span><span class="p">${money(o.price)}</span></a>`).join("");
     const main=best?`${money(best.price)} at ${best.store}`:"No offers";
     const sub=d.savings>0?`${money(d.savings)} less than here · tap to open`:d.savings!=null?"already the best price":`${d.offers.length} sellers checked`;
     return {lens:lens(d.product,main,sub),body:rows?`<div class="list">${rows}</div>`:`<p class="muted">${esc(d.summary)}</p>`};
@@ -547,12 +554,14 @@ const VIEW={
     const rows=rated.length
       ?rated.map(r=>`<a href="${esc(r.url)}" target="_blank" rel="noopener"><span>${esc(r.source)}</span><span class="p">${Number(r.rating).toFixed(1)}★</span></a>`).join("")
       :d.review_url?`<a href="${esc(d.review_url)}" target="_blank" rel="noopener"><span>Read full reviews</span><span class="p">↗</span></a>`:"";
-    const n=(d.sources||[]).length;
+    const n=(d.sources||[]).length,read=d.read_from||[];
     const main=d.rating!=null
       ?`${Number(d.rating).toFixed(1)}★ ${rated.length?`avg of ${d.review_count} expert reviews`:`from ${d.review_count.toLocaleString()} reviews`}`
-      :n?`${n} review sources`:"No reviews found";
-    const sub=d.pros[0]?`“${d.pros[0].toLowerCase()}” · glance down`:d.rating==null&&n?"no published rating · open sources":"";
-    return {lens:lens(d.product,main,sub),body:pc+(rows?`<div class="list">${rows}</div>`:"")};
+      :read.length?`Advice from ${read.length} reviews`:n?`${n} review sources`:"No reviews found";
+    const sub=d.pros[0]?`“${d.pros[0].toLowerCase()}” · glance down`:d.rating==null&&n&&!d.verdict?"no published rating · open sources":"";
+    // The reviewers' verdict first: what they conclude and who it suits.
+    const verdict=d.verdict?`<div class="verdict"><h4>Verdict</h4><p>${esc(d.verdict)}</p>${read.length?`<span class="story-read">From ${read.map(esc).join(", ")}</span>`:""}</div>`:"";
+    return {lens:lens(d.product,main,sub),body:verdict+pc+(rows?`<div class="list">${rows}</div>`:"")};
   },
 };
 
@@ -615,7 +624,7 @@ $("#ask").onsubmit=async e=>{
   const product=$("#product").value.trim(),amazonUrl=$("#amazon-url").value.trim();
   if(!product&&!amazonUrl)return;
   if(!product&&amazonUrl){selected=new Set(["buyer"]);updateRoster()}
-  if(!selected.size)return;
+
   const num=id=>{const v=$(id).value;return v===""?null:Number(v)};
   const bodies={
     price:{product,current_store:$("#store").value.trim()||null,current_price:num("#price")},
@@ -626,7 +635,12 @@ $("#ask").onsubmit=async e=>{
     news:{query:product},
   };
   // Messenger is chat-only: a message needs the conversation's context and a reviewed draft.
-  const ks=KEYS.filter(k=>selected.has(k)&&bodies[k]);
+  // What was asked wins over the selection: a song or video goes to YouTube and a news ask
+  // to News, even when those agents aren't selected.
+  const shopping=/\b(?:prices?|cheap\w*|deals?|reviews?|worth|buy|alternatives?|compare)\b|\$/i.test(product);
+  const asked=shopping?null:/\b(?:songs?|music|videos?|play|listen\s+to|youtube)\b/i.test(product)?"youtube":/\b(?:news|headlines?|brief\s+me|current\s+events)\b/i.test(product)?"news":null;
+  const ks=asked?[asked]:KEYS.filter(k=>selected.has(k)&&bodies[k]);
+  if(!ks.length)return;
   $("#results").innerHTML=ks.map(cardShell).join("");
   $("#go").disabled=true;
   await Promise.all(ks.map(async k=>{const progress=makeProgress($("#card-"+k+" .thinking"));const r=await call(k,bodies[k],progress.update);progress.finish(r.ok);record(k,r);const card=$("#card-"+k);morph(card,()=>{fill(k,r);card.append(progress.el)})}));
@@ -653,7 +667,8 @@ let activePurchase=null;
 const isCartRelated=text=>!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
 const STARTERS=["Brief me on the news today.","Consider Sony XM5 and recommend an alternative under $300.","I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?","Earbuds like the Galaxy Buds3 Pro but under $100","Find the song Blinding Lights","Text Alex that I'm running 10 minutes late"];
 $("#starters").innerHTML=STARTERS.map(t=>`<button type="button" class="chip" data-start="${esc(t)}">${esc(t)}</button>`).join("");
-document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
+// A click while a reply is still coming in would start a second request; ignore it.
+document.querySelectorAll("[data-start]").forEach(b=>b.onclick=()=>{if($("#send").disabled)return;$("#chat-input").value=b.dataset.start;$("#chat-form").requestSubmit()});
 
 /* Claude-style scrolling: follow new output only while the reader is at the bottom, so
    scrolling up to reread is never interrupted. One rAF-throttled jump per frame, no smooth
@@ -790,7 +805,8 @@ function makeProgress(container,outs){
 $("#chat-form").onsubmit=async e=>{
   e.preventDefault();
   const input=$("#chat-input"), text=input.value.trim(); if(!text)return;
-  input.value=""; $("#send").disabled=true; $("#starters").hidden=true;
+  // Suggestions stay listed after the first message; they're paused while this runs.
+  input.value=""; $("#send").disabled=true; $("#starters").classList.add("busy");
   bubble(esc(text),"user");
   convo.push({role:"user",content:text});
   const pending=bubble(`${logoOrb()}<div class="body"><div class="progress-host"></div><div class="outs"></div></div>`,"bot");
@@ -819,7 +835,7 @@ $("#chat-form").onsubmit=async e=>{
       body.insertAdjacentHTML("beforeend",`<p class="err">${esc(err.message)}. ${tried?`Tried ${ATTEMPTS} times; is the orchestrator running?`:"No automatic retry was sent."}</p>`);
     });
   }
-  $("#send").disabled=false; input.focus();
+  $("#send").disabled=false; $("#starters").classList.remove("busy"); input.focus();
 };
 
 document.addEventListener("click",e=>{
