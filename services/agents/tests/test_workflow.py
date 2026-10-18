@@ -141,7 +141,7 @@ async def test_alternatives_keep_candidates_when_stores_hide_prices(monkeypatch)
     assert "Alternatives to consider" in result.summary
 
 
-async def test_free_search_retries_other_backends_and_caches(monkeypatch):
+async def test_free_search_races_engines_falls_back_and_caches(monkeypatch):
     from collections import OrderedDict
 
     import ddgs
@@ -156,15 +156,23 @@ async def test_free_search_retries_other_backends_and_caches(monkeypatch):
 
         def text(self, query, region, max_results, backend):
             calls.append(backend)
-            if backend == search_module.BACKENDS[0]:
+            if backend != search_module.FALLBACK and query == "all limited":
                 raise ddgs.exceptions.DDGSException("rate limited")
-            return [{"title": "t", "href": "https://a.example/p", "body": "b"}]
+            if backend == search_module.RACE[0]:
+                raise ddgs.exceptions.DDGSException("rate limited")
+            return [{"title": backend, "href": "https://a.example/p", "body": "b"}]
 
     monkeypatch.setattr(ddgs, "DDGS", FakeDDGS)
     monkeypatch.setattr(search_module, "_CACHE", OrderedDict())
     first = await search_module.free_search("cache me")
     second = await search_module.free_search("cache me")
-    assert first == second and calls == list(search_module.BACKENDS[:2])
+    # The engines are asked together; one failing doesn't matter, and nothing is re-asked.
+    assert first == second and first[0].title in search_module.RACE[1:]
+    assert set(calls) <= set(search_module.RACE) and search_module.FALLBACK not in calls
+    calls.clear()
+    # Every racing engine failing falls back to ddgs's own rotation.
+    assert (await search_module.free_search("all limited"))[0].title == search_module.FALLBACK
+    assert calls[-1] == search_module.FALLBACK
 
 
 async def test_live_prices_keep_snippet_leads_but_reject_variants_and_ambiguity(
@@ -265,10 +273,13 @@ def test_merchant_offers_are_broad_but_drop_clear_mismatches():
     for key, value in [
         ("priceCurrency", "CAD"),
         ("availability", "https://schema.org/OutOfStock"),
-        ("itemCondition", "https://schema.org/UsedCondition"),
     ]:
         bad = dict(product, offers=dict(product["offers"], **{key: value}))
         assert not parse_offers(page(bad), "https://www.bestbuy.com/p", "Sony XM5")
+    # A used offer is kept, labeled, and never verified.
+    used = dict(product, offers=dict(product["offers"], itemCondition="https://schema.org/UsedCondition"))
+    [offer] = parse_offers(page(used), "https://www.bestbuy.com/p", "Sony XM5")
+    assert offer.condition == "used/refurb"
     meta = (
         '<meta property="og:title" content="Sony WH-1000XM5 Headphones">'
         '<meta property="product:price:amount" content="1,299.00">'
@@ -677,7 +688,7 @@ async def test_result_conflict_for_still_approved_action_keeps_blocking(tmp_path
 async def test_unparseable_pages_are_skipped_not_raised(monkeypatch):
     from laai_agents import merchants
 
-    async def comment_only(url):
+    async def comment_only(url, limit=None, timeout=None):
         return "<!-- nothing here -->"
 
     monkeypatch.setattr(merchants, "fetch_page", comment_only)

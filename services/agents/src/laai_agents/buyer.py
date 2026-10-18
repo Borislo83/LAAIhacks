@@ -1,5 +1,6 @@
 """Amazon cart-only buying agent. Real cart additions; checkout and payment disabled."""
 
+import asyncio
 import os
 import re
 import secrets
@@ -15,9 +16,10 @@ from uagents import Model
 from . import catalog, llm
 from .agents import make_agent
 from .chat import build_chat_protocol
+from .live import names_product
 from .models import EvidenceResponse
 from .progress import report, tracked
-from .search import SearchUnavailable, search
+from .search import search
 
 _quotes = OrderedDict()
 
@@ -71,12 +73,43 @@ def amazon_listing(url):
             or parsed.port not in {None, 443}
         ):
             return None
+        # Search engines now mostly return Amazon's /clp/<ASIN> landing pages.
         match = re.search(
-            r"/(?:dp|gp/product)/([A-Z0-9]{10})(?:/|$)", parsed.path, re.IGNORECASE
+            r"/(?:dp|gp/product|gp/aw/d|clp)/([A-Z0-9]{10})(?:/|$)", parsed.path, re.IGNORECASE
         )
         return "https://www.amazon.com/dp/" + match[1].upper() if match else None
     except ValueError:
         return None
+
+
+LISTING_SECONDS = 4
+MAX_CANDIDATES = 8
+
+
+async def amazon_listings(name: str) -> list[dict]:
+    """Listings on Amazon's search page that are this product: new ones first, used or
+    renewed ones labeled. Each carries its ASIN link and the listed price."""
+    from .merchants import is_accessory
+    from .stores import amazon_page_search
+
+    offers = [
+        o
+        for o in await amazon_page_search(name)
+        if names_product(o.product, name) and not is_accessory(o.product, name)
+    ]
+    offers.sort(key=lambda o: (o.condition != "new", o.price))
+    return [
+        {
+            "title": o.product,
+            "url": o.url,
+            "price": o.price,
+            "condition": o.condition,
+            "rating": o.rating,
+            "source": "amazon_search_page",
+        }
+        for o in offers
+        if amazon_listing(o.url)
+    ]
 
 
 def prune():
@@ -122,26 +155,41 @@ async def prepare(req: BuyRequest) -> BuyResponse:
         return result
     if not known:
         name = await llm.extract_product(name)
-    try:
-        sources, meta = await search(f"site:amazon.com {name}")
-    except SearchUnavailable:
-        return BuyResponse(
-            product=name,
-            status="needs_listing",
-            data_source="unavailable",
-            error="Amazon listing search unavailable",
-            summary="Search is unavailable. Paste the Amazon product link to prepare a cart addition.",
-        )
-    candidates = {}
+    # Amazon's own search page (real listings with ASIN and price) and a web search for
+    # amazon.com links run together; neither may hold the answer up for long.
+    listed, found = await asyncio.gather(
+        asyncio.wait_for(amazon_listings(name), LISTING_SECONDS),
+        asyncio.wait_for(search(f"site:amazon.com {name}"), LISTING_SECONDS),
+        return_exceptions=True,
+    )
+    if isinstance(listed, BaseException) and not isinstance(listed, Exception):
+        raise listed
+    if isinstance(found, BaseException) and not isinstance(found, Exception):
+        raise found
+    listed = [] if isinstance(listed, BaseException) else listed
+    if isinstance(found, BaseException):
+        if not listed:
+            return BuyResponse(
+                product=name,
+                status="needs_listing",
+                data_source="unavailable",
+                error="Amazon listing search unavailable",
+                summary="Search is unavailable. Paste the Amazon product link to prepare a cart addition.",
+            )
+        sources, meta = [], {"data_source": "amazon_search_page", "sources": [], "notice": None}
+    else:
+        sources, meta = found
+    candidates = {c["url"]: c for c in listed}
     for source in sources:
         url = amazon_listing(source.url)
-        if url:
-            candidates[url] = {"title": source.title, "url": url}
+        title = re.sub(r"^Amazon\.com\s*:\s*", "", source.title)
+        if url and url not in candidates and names_product(title, name):
+            candidates[url] = {"title": title, "url": url}
     return BuyResponse(
         product=name,
         quantity=req.quantity,
         status="choose_listing",
-        candidates=list(candidates.values())[:5],
+        candidates=list(candidates.values())[:MAX_CANDIDATES],
         search_url="https://www.amazon.com/s?k=" + quote(name),
         summary=(
             "Select an Amazon listing to prepare a real cart addition. "

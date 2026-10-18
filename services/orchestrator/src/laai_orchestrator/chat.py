@@ -1041,6 +1041,130 @@ def cart_product(history: list[ChatMessage]) -> str:
     return text
 
 
+# --- Fast path ------------------------------------------------------------------------
+# Clear commands skip the ASI:One routing round-trip and go straight to the agents that
+# the keyword rules would pick. Anything ambiguous or conversational still goes to ASI:One.
+# Each pattern must match the whole (politeness-trimmed) message.
+FAST_PREFIX = re.compile(
+    r"^(?:(?:hey|hi|ok|okay|please|pls|focal|can\s+you|could\s+you|would\s+you)\b[\s,]*)+",
+    re.IGNORECASE,
+)
+_ARTICLE = r"(?:the\s+|an?\s+|my\s+)?"
+FAST_PRICE = re.compile(
+    r"(?:compare\s+(?:the\s+)?prices?\s+(?:for|of|on)"
+    r"|(?:what(?:'|’)?s\s+|what\s+is\s+)?(?:the\s+)?(?:best\s+|lowest\s+|current\s+)?prices?\s+(?:of|for|on)"
+    r"|how\s+much\s+(?:is|are|does|do)"
+    r"|where\s+(?:can\s+i|should\s+i|to)\s+buy"
+    r"|(?:find\s+(?:me\s+)?)?(?:the\s+)?cheapest\s+(?:price\s+(?:for|on|of)\s+)?)"
+    rf"\s+{_ARTICLE}(?P<product>.+?)(?:\s+(?:cost|costs|go\s+for|prices?))?",
+    re.IGNORECASE,
+)
+FAST_RIVALS = re.compile(
+    rf"compare\s+{_ARTICLE}(?P<product>.+?)\s+(?:with|to|against)\s+(?:its\s+|the\s+|other\s+)?"
+    r"(?:rivals?|alternatives?|competitors?|competition|others?)",
+    re.IGNORECASE,
+)
+FAST_CHEAPER = re.compile(
+    r"(?:(?:find|show|give)\s+(?:me\s+)?|any\s+|what\s+are\s+(?:some\s+)?(?:the\s+)?)?"
+    r"(?:cheaper|better|good|best)\s+(?:alternatives?|options?|rivals?|competitors?)\s+(?:to|for|than)"
+    rf"\s+{_ARTICLE}(?P<product>.+)",
+    re.IGNORECASE,
+)
+FAST_VERSUS = re.compile(
+    rf"compare\s+{_ARTICLE}(?P<product>.+?)\s+(?:vs\.?|versus|with|to|and|against)\s+{_ARTICLE}(?P<other>.+)",
+    re.IGNORECASE,
+)
+FAST_YOUTUBE = re.compile(
+    r"(?:play|watch|put\s+on|find|show\s+me)\s+(?P<query>.+?)\s+(?:on|from)\s+youtube",
+    re.IGNORECASE,
+)
+FAST_NEWS = re.compile(
+    r"(?:(?:what(?:'|’)?s|what\s+is)\s+the\s+)?(?:latest|recent|any)\s+(?:news|headlines)\s+(?:on|about|for)\s+.+"
+    r"|(?:(?:what(?:'|’)?s|what\s+is)\s+the\s+)?latest\s+(?:on|about)\s+.+"
+    r"|(?:news|headlines)\s+(?:on|about|for)\s+.+",
+    re.IGNORECASE,
+)
+# A budget, a store or "consider" is the coordinator's job; the fast path leaves those.
+CONSTRAINED = re.compile(
+    r"\b(?:consider|evaluate|assess)\b|\$\s*\d|\b(?:under|below|less\s+than|up\s+to|at\s+most|"
+    r"budget(?:\s+of)?)\s*\$?\s*\d|\b(?:in|at|on|from)\s+(?:the\s+)?"
+    r"(?:amazon|best\s*buy|walmart|target)(?:\.com)?\b",
+    re.IGNORECASE,
+)
+FAST_REVIEWS = re.compile(r"\breviews?\b|\bratings?\b", re.IGNORECASE)
+
+
+PRONOUN = re.compile(r"(?:it|this|that|them|these|those|one|both|prices?|reviews?)", re.IGNORECASE)
+
+
+def _product(text: str) -> str:
+    """The product named in a command, or "" for a pronoun ("how much is it")."""
+    product = text.strip(" \"'“”?.!,")[:200]
+    return "" if PRONOUN.fullmatch(product) else product
+
+
+def fast_route(text: str) -> list[tuple[AgentKind, ToolArgs | SpotifyArgs]] | None:
+    """The agents a clear command needs, decided without the LLM, or None."""
+    clean = FAST_PREFIX.sub("", " ".join(text.split())).strip(" ?.!,")
+    if not clean:
+        return None
+    if spotify := spotify_request(text):
+        return [(AgentKind.SPOTIFY, grounded_spotify(spotify, text))]
+    if match := FAST_YOUTUBE.fullmatch(clean):
+        if not _product(match["query"]):
+            return None
+        media = "video" if re.search(r"video", clean, re.IGNORECASE) else (
+            "song" if re.search(r"\bsongs?\b|\bmusic\b", clean, re.IGNORECASE) else "auto"
+        )
+        return [(AgentKind.YOUTUBE, ToolArgs(query=text[:300], kind=media))]
+    if FAST_NEWS.fullmatch(clean) and not re.search(SHOPPING_WORDS, clean, re.IGNORECASE):
+        return [(AgentKind.NEWS, ToolArgs(query=text[:300]))]
+    if CONSTRAINED.search(clean) or media_ask(clean):
+        return None
+    reviews = bool(FAST_REVIEWS.search(clean))
+    if match := FAST_RIVALS.fullmatch(clean) or FAST_CHEAPER.fullmatch(clean):
+        product = _product(match["product"])
+        if not product:
+            return None
+        kinds = [AgentKind.PRICE, AgentKind.ALTERNATIVES] + ([AgentKind.REVIEWS] if reviews else [])
+        return [(kind, ToolArgs(product=product)) for kind in kinds]
+    if match := FAST_PRICE.fullmatch(clean):
+        product = _product(match["product"])
+        if not product or FAST_VERSUS.fullmatch(product):
+            return None
+        kinds = [AgentKind.PRICE] + ([AgentKind.REVIEWS] if reviews else [])
+        return [(kind, ToolArgs(product=product)) for kind in kinds]
+    if match := FAST_VERSUS.fullmatch(clean):
+        first, second = _product(match["product"]), _product(match["other"])
+        if not first or not second:
+            return None
+        calls = [(AgentKind.PRICE, ToolArgs(product=first)), (AgentKind.PRICE, ToolArgs(product=second))]
+        if reviews:
+            calls += [(AgentKind.REVIEWS, ToolArgs(product=first)), (AgentKind.REVIEWS, ToolArgs(product=second))]
+        return calls
+    return None
+
+
+async def fast_path(
+    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, emit=None
+) -> ChatReply | None:
+    """Run a clear command's agents at once; None when the message needs ASI:One."""
+    text = history[-1].content
+    route = fast_route(text)
+    if not route:
+        return None
+    if emit:
+        emit({"type": "progress", "kind": "coordinator", "stage": "planning",
+              "message": "Clear request; asking the agents directly"})  # fmt: skip
+    calls = list(
+        await asyncio.gather(*(call_agent(kind, args, config, http, emit) for kind, args in route))
+    )
+    if route[0][0] == AgentKind.YOUTUBE and wants_playback(text):
+        calls[0] = await play_on_laptop(calls[0], config, http, emit)
+    reply = rules_reply(calls)
+    return reply.model_copy(update={"reply": laptop_honest(reply.reply, calls)})
+
+
 async def chat(
     history: list[ChatMessage],
     config: Config,
@@ -1125,6 +1249,8 @@ async def chat(
             calls=[],
             source="buyer",
         )
+    if fast := await fast_path(history, config, http, emit):
+        return fast
     coordinate = not media_ask(text) and (
         re.search(COORDINATE, text, re.IGNORECASE)
         or (

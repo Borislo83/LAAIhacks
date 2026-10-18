@@ -130,11 +130,15 @@ export function compareTable(reply: ChatReply): CompareTable | undefined {
   const price = result('price'), alts = result('alternatives')
   const offerColumn = (o: Rec): CompareColumn => ({
     head: str(o.store) || 'Store', price: money(o.price) || 'No price',
-    note: o.trust === 'high' ? 'Verified' : 'Unverified',
+    // The price agent marks each offer: verified (major store, new), or why not.
+    note: o.condition === 'used/refurb' ? 'Used/refurb'
+      : (o.verified ?? o.trust === 'high') ? 'Verified' : 'Unverified',
     extra: typeof o.rating === 'number' ? `${o.rating}★` : undefined,
   })
   const ranked = recs(price?.offers).filter(o => typeof o.price === 'number')
-    .sort((a, b) => (TRUST_RANK[str(a.trust)] ?? 3) - (TRUST_RANK[str(b.trust)] ?? 3) || (a.price as number) - (b.price as number))
+    .sort((a, b) => (TRUST_RANK[str(a.trust)] ?? 3) - (TRUST_RANK[str(b.trust)] ?? 3)
+      || Number(a.condition === 'used/refurb') - Number(b.condition === 'used/refurb')
+      || (a.price as number) - (b.price as number))
   const rivals = recs(alts?.alternatives)
   if (rivals.length) {
     const product = str(price?.product) || str(alts?.product) || str(reply.product)
