@@ -2902,6 +2902,11 @@
             "type": "string",
             "maxLength": 2000,
             "title": "Summary"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
           }
         },
         "type": "object",
