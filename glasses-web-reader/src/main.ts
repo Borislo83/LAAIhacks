@@ -29,6 +29,7 @@ import { guardGlyphs } from './lensos/glyphs'
 import { ActionPopup, POPUP_TAP_GRACE_MS, popupAllowed } from './lensos/action-popup'
 import { AgentCard, askAgents, compareSpec, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
+import { routeFor } from '../shared/routes'
 import { capabilityCommand, isRecommendationsCommand, STRIP_HEADING, type RecommendationBatch, type RecommendationContext, type RecommendedAction } from '../shared/recommendations'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
@@ -1388,6 +1389,14 @@ async function stopVoice(send: boolean) {
     report({ voice: rec.durationMs, chars: command.length })
     if (!command) return void fail("Sorry, I didn't catch that.", "Couldn't make that out.")
     logHeard({ text: command, command: true })
+    // Hardcoded routes ("open the AirPods page on Apple") go straight to a known page.
+    const routed = routeFor(command)
+    if (routed) {
+      voiceUi = { phase: 'done', text: command, url: routed }
+      logHeard({ text: routed, opened: true })
+      void load(routed, 0, true, true)
+      return
+    }
     // "Show recommendations": this page's strip again, not a chat or web search.
     if (isRecommendationsCommand(command)) {
       voiceUi = { phase: 'done', text: command }
