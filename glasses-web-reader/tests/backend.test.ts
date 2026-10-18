@@ -158,3 +158,14 @@ test('the laptop opens only hardcoded routes, for this machine or a paired phone
   assert.equal((await open('Bearer local-dev', 'spotify:')).status, 401)
   assert.deepEqual(opened, ['https://www.youtube.com/', 'spotify:'])
 })
+
+test('the packaged Even Hub app (a non-web origin) is accepted with a valid pairing code only', async () => {
+  const secret = 'q'.repeat(32)
+  const transport = (async () => new Response('{}', { status: 200 })) as typeof fetch
+  const app = new Hono().route('/api/backend', orchestratorGateway({ base: 'http://127.0.0.1:8001', transport, devToken: 'demo-all', pairSecret: secret, peerAddress: () => '203.0.113.9' }))
+  const get = (origin: string, auth: string) => app.request('/api/backend/v1/preferences', { headers: { Origin: origin, Authorization: auth } })
+  assert.equal((await get('null', `Bearer pair-${secret}`)).status, 200)
+  assert.equal((await get('evenhub://app', `Bearer pair-${secret}`)).status, 200)
+  assert.equal((await get('null', 'Bearer pair-wrong')).status, 401)
+  assert.equal((await get('https://evil.example', `Bearer pair-${secret}`)).status, 403)
+})

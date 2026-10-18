@@ -79,7 +79,7 @@ export function orchestratorGateway(options: Options) {
   // for this machine or a paired phone only. Any other URL is refused.
   gateway.post('/laptop/open', async c => {
     const origin = c.req.header('origin')
-    if (origin && ![new URL(c.req.url).origin, ...(options.origins ?? [])].includes(origin)) return c.json({ error: 'Origin not allowed' }, 403)
+    if (origin && /^https?:/i.test(origin) && ![new URL(c.req.url).origin, ...(options.origins ?? [])].includes(origin)) return c.json({ error: 'Origin not allowed' }, 403)
     const auth = c.req.header('authorization') ?? ''
     if (!((auth === LOCAL_DEV_BEARER && !!options.devToken && isLocal(c)) || paired(auth))) return c.json({ error: 'Pair the glasses to open things on the laptop.' }, 401)
     const { url } = await c.req.json<{ url?: unknown }>().catch(() => ({ url: undefined }))
@@ -97,7 +97,9 @@ export function orchestratorGateway(options: Options) {
     if (!routes.some(([method, pattern]) => method === c.req.method && pattern.test(path))) return c.json({ error: 'Route unavailable' }, 404)
     const origin = c.req.header('origin')
     const allowed = [new URL(c.req.url).origin, 'http://localhost:5173', 'http://127.0.0.1:5173', ...(options.origins ?? [])]
-    if (origin && !allowed.includes(origin)) return c.json({ error: 'Origin not allowed' }, 403)
+    // Browser pages are held to the allowed origins. The packaged Even Hub app runs from its
+    // own (non-web) origin and still needs a valid bearer, which a page can't borrow.
+    if (origin && /^https?:/i.test(origin) && !allowed.includes(origin)) return c.json({ error: 'Origin not allowed' }, 403)
     let auth = c.req.header('authorization') ?? ''
     // Local dev sign-in (this machine), or a phone that scanned this run's pairing QR.
     const devLocal = (auth === LOCAL_DEV_BEARER && !!options.devToken && isLocal(c)) || paired(auth)
