@@ -84,6 +84,15 @@ async def test_llm_extraction_is_used_when_available(monkeypatch):
     assert (result.status, result.recipient_name, result.text) == ("ready", "Sam", "See you soon.")
 
 
+async def test_llm_extraction_drops_a_leading_linking_word(monkeypatch):
+    async def complete(system, user):
+        return json.dumps({"recipient": "sam", "message": "that the glasses demo works"})
+
+    monkeypatch.setattr(imessage.llm, "complete", complete)
+    result = await draft("text Sam that the glasses demo works")
+    assert result.text == "The glasses demo works."
+
+
 async def test_prepare_returns_a_masked_draft_and_never_sends(setup):
     result = await draft()
     assert result.status == "ready" and result.draft_id
