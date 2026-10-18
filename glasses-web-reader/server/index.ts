@@ -2,13 +2,15 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { stream } from 'hono/streaming'
-import type { CondensedPage, CondenseEvent } from '../shared/types'
+import type { CondensedPage, CondenseEvent, VoiceCommand } from '../shared/types'
 import { extract } from './extract'
 import { FetchError, safeFetch } from './safe-fetch'
 import { buildDeck } from './deck'
 import { renderPage } from './render'
 import { isMangaDex, mangaPage, mangaStrip, type MangaStyle } from './manga'
 import type { Extracted } from './extract'
+import { parseWake, transcribe } from './voice'
+import { findPage } from './search'
 
 // Condense server: GET /api/condense?url=<page>
 //
@@ -24,6 +26,8 @@ const CACHE_MAX = 100
 // Below this the fast path probably hit a bot check or a JS-only shell.
 const THIN_WORDS = 150
 // Interstitials that render as a short "page" of their own.
+// 15 s of 16 kHz s16le mono is 480 KB; leave headroom.
+const MAX_VOICE_BYTES = 1_000_000
 const BOT_WALL =
   /prove your humanity|human verification|verify (that )?you are (a )?human|are you a robot|just a moment|attention required|access denied|captcha|unusual traffic/i
 
@@ -179,6 +183,47 @@ app.get('/api/condense', async c => {
       await s.write(JSON.stringify(e) + '\n')
     }
   })
+})
+
+// POST /api/voice?rate=16000&mode=check|partial|final — body: raw PCM (s16le mono)
+// from the glasses mic. check = hands-free "is this for us?" on the start of an
+// utterance; partial = live preview; final = the instruction, which is where a
+// spoken search enters the backend.
+app.post('/api/voice', async c => {
+  const mode = c.req.query('mode') ?? 'final'
+  const rate = Number(c.req.query('rate') ?? 16000)
+  if (!Number.isInteger(rate) || rate < 8000 || rate > 48000) return c.json({ error: 'Bad sample rate' }, 400)
+  const pcm = new Uint8Array(await c.req.arrayBuffer())
+  if (pcm.length < rate / 5) return c.json({ error: 'Too short - hold on and speak a little longer' }, 400)
+  if (pcm.length > MAX_VOICE_BYTES) return c.json({ error: 'Too long - keep it under 15 seconds' }, 413)
+  const durationMs = Math.round((pcm.length / 2 / rate) * 1000)
+  try {
+    const transcript = await transcribe(pcm, rate, mode === 'final')
+    const reply = { transcript, ...parseWake(transcript), durationMs } satisfies VoiceCommand
+    if (mode === 'check' && reply.wake) console.log(`[voice] wake: ${JSON.stringify(transcript)}`)
+    if (mode !== 'final') return c.json(reply)
+    console.log(`[voice] command (${durationMs}ms): ${JSON.stringify(reply.command)}`)
+    return c.json(reply)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[voice] ${message}`)
+    return c.json({ error: message }, 502)
+  }
+})
+
+// GET /api/search?q=<voice command> — Claude searches the web and picks one page to open.
+app.get('/api/search', async c => {
+  const q = c.req.query('q')?.trim()
+  if (!q) return c.json({ error: 'Missing ?q=' }, 400)
+  try {
+    const result = await findPage(q)
+    console.log(`[search] ${JSON.stringify(q)} → ${result.url}`)
+    return c.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[search] ${JSON.stringify(q)}: ${message}`)
+    return c.json({ error: message }, 502)
+  }
 })
 
 // GET /api/manga/strip?chapter=<id>&page=<0-based>&strip=<n, or -1 for the last>&style=natural|lines

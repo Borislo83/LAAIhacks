@@ -9,13 +9,19 @@ import {
   TextContainerUpgrade,
   ImageRawDataUpdate,
   OsEventTypeList,
+  AudioInputSource,
 } from '@evenrealities/even_hub_sdk'
 import { pxTruncate } from '@evenrealities/pretext'
 import type { CondensedPage, MangaStrip, Screen } from '../shared/types'
-import { condense, fetchStrip, report, type MangaStyle } from './api'
-import { renderScreen, screenTitle, type PageSpec, type TextBox } from './screens'
-import { mountCompanion, type Companion } from './companion'
+import { condense, fetchStrip, report, searchPage, sendVoice, type MangaStyle } from './api'
+import type { VoiceCommand } from '../shared/types'
+import {
+  FLOW_LINES, FLOW_STEP, flowLines, flowSpec, isFlowable, progressBar, renderScreen, screenTitle,
+  type PageSpec, type TextBox,
+} from './screens'
+import { mountCompanion, type Companion, type HeardLine, type VoiceUi } from './companion'
 import { clockFrame, loadingSpec, spinnerFrame, SPIN_MS } from './loading'
+import { VoiceRecorder, WakeListener, concat } from './voice'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
 // Status:  body 0..252 (9 lines at 27px)  +  footer 252..288 (1 line)
@@ -32,10 +38,15 @@ const IMAGE_TIMEOUT_MS = 10_000
 const STATE_KEY = 'webreader.v2.state'
 const RECENT_KEY = 'webreader.v1.recent'
 const MANGA_STYLE_KEY = 'webreader.v1.mangaStyle'
+const HANDS_FREE_KEY = 'webreader.v1.handsFree'
+/** Must match the server's WAKE_NAME. Not "Hey Even": that wakes the system assistant. */
+const WAKE_PHRASE = 'Hey Search'
+/** The assistant's name on the glasses card and spinner. */
+const ASSISTANT = 'Search'
 const MAX_RECENT = 15
 const MAX_HISTORY = 10
 
-type View = 'reader' | 'deck' | 'manga' | 'menu' | 'contents' | 'links' | 'recent'
+type View = 'reader' | 'deck' | 'manga' | 'menu' | 'contents' | 'links' | 'recent' | 'voice'
 interface Recent {
   url: string
   title: string
@@ -56,11 +67,12 @@ Type or paste a URL in the Even app on your phone. Each site gets screens built 
 
 Swipe: next / previous
 Tap: open item or menu
+Say "${WAKE_PHRASE}", then your question
 Double-tap: exit`
 
 // ── State ───────────────────────────────────────────────────────────────────
 let view: View = 'reader'
-let onScreen: 'reader' | 'manga' | 'loading' | 'other' = 'reader'
+let onScreen: 'reader' | 'manga' | 'loading' | 'assistant' | 'other' = 'reader'
 /** Set while a page is opening; shown as the spinner screen. */
 let loading: { title: string; host: string; step: string; frame: number } | null = null
 let spinTimer: ReturnType<typeof setInterval> | undefined
@@ -68,6 +80,15 @@ let spinBusy = false
 let doc: CondensedPage | null = null
 let screens: Screen[] = []
 let screenIdx = 0
+/** First stream line shown while `screenIdx` is in a run of flowing text screens. */
+let flowOffset = 0
+/** Where the stream is rolling to; equals flowOffset when it's still. */
+let flowTarget = 0
+let flowRolling = false
+/** How long one swipe's roll takes, however fast BLE is. */
+const FLOW_ROLL_MS = 260
+let rollFrom = 0
+let rollStart = 0
 /** More screens are still streaming in from the server. */
 let deckLoading = false
 let loadAbort: AbortController | null = null
@@ -94,6 +115,23 @@ let renderSeq = 0
 let mirror: PageSpec = { texts: [], images: [] }
 /** Container ID of the shown deck screen's first text box (1 when it has no capture layer). */
 let deckTextId = 2
+/** Set while the glasses mic is capturing a voice command. */
+let recorder: VoiceRecorder | null = null
+/** Set while hands-free is waiting for the wake phrase (and no command is being captured). */
+let wake: WakeListener | null = null
+let handsFree = true
+let micOn = false
+let voiceSeq = 0
+let voiceUi: VoiceUi = { phase: 'idle', text: '' }
+/** The capture in progress came from the wake phrase: the glasses show only the words. */
+let wakeCapture = false
+/** Everything heard while hands-free, newest first (the phone shows it all). */
+let heard: HeardLine[] = []
+/** Each ambient utterance's wake check, how much of it that check covered, and its line on the phone. */
+const wakeChecks = new WeakMap<
+  Uint8Array[],
+  { result: Promise<VoiceCommand | null>; bytes: number; line?: HeardLine }
+>()
 
 const bridge = await waitForEvenAppBridge()
 
@@ -149,8 +187,9 @@ function bodyText() {
 }
 
 function footerText() {
-  if (doc) return pxTruncate(doc.title, INNER_W)
-  return status ? 'Web Reader' : 'Web Reader · waiting for a URL'
+  const mic = wake ? '◉ ' : ''
+  if (doc) return pxTruncate(mic + doc.title, INNER_W)
+  return mic + (status ? 'Web Reader' : 'Web Reader · waiting for a URL')
 }
 
 const created = await bridge.createStartUpPageContainer(
@@ -169,9 +208,12 @@ function showContent() {
 
 async function renderReader() {
   view = 'reader'
+  await showText(bodyText(), footerText())
+}
+
+/** Body + footer text on the reader layout, shared by the reader and voice screens. */
+async function showText(body: string, footer: string) {
   renderSeq++
-  const body = bodyText()
-  const footer = footerText()
   mirror = readerSpec(body, footer)
   companion.update()
   if (onScreen !== 'reader') {
@@ -305,9 +347,106 @@ function base64ToBytes(b64: string) {
 
 function deckContext() {
   return {
-    position: `${screenIdx + 1} / ${screens.length}${deckLoading ? '+' : ''}`,
+    position: progressBar(screenIdx, screens.length),
     selected: selected.get(screenIdx) ?? 0,
     upcoming: screens.slice(screenIdx + 1).map(s => screenTitle(s)),
+  }
+}
+
+/** The run of flowing text screens around `i`, as [start, end), or null for a slide. */
+function flowRun(i: number): [number, number] | null {
+  if (!screens[i] || !isFlowable(screens[i])) return null
+  let a = i
+  let b = i + 1
+  while (a > 0 && isFlowable(screens[a - 1])) a--
+  while (b < screens.length && isFlowable(screens[b])) b++
+  return [a, b]
+}
+
+const flowMax = (lines: string[]) => Math.max(0, lines.length - FLOW_LINES)
+
+/** Index within the run of the section at the top of the window. */
+function flowTop(starts: number[], offset: number) {
+  let k = 0
+  while (k + 1 < starts.length && starts[k + 1] <= offset) k++
+  return k
+}
+
+/** Points the deck at a screen; a flowing one opens at its section (or the run's end). */
+function enterScreen(index: number, fromEnd = false) {
+  screenIdx = index
+  const run = flowRun(index)
+  if (!run) return
+  const { lines, starts } = flowLines(screens.slice(...run))
+  flowOffset = flowTarget = fromEnd ? flowMax(lines) : Math.min(starts[index - run[0]], flowMax(lines))
+  if (fromEnd) screenIdx = run[0] + flowTop(starts, flowOffset)
+}
+
+function currentSpec(): PageSpec {
+  const run = flowRun(screenIdx)
+  if (!run) return renderScreen(screens[screenIdx], deckContext())
+  const { lines } = flowLines(screens.slice(...run))
+  flowOffset = Math.min(flowOffset, flowMax(lines))
+  if (!flowRolling) flowTarget = flowOffset
+  // The hint names what comes after the stream, not sections already in view.
+  return flowSpec(lines, flowOffset, { ...deckContext(), upcoming: screens.slice(run[1]).map(s => screenTitle(s)) })
+}
+
+/**
+ * Swipe inside a run: move the stream FLOW_STEP lines, leaving the run at its
+ * ends. A swipe during the roll extends it instead of leaving.
+ */
+function flowStep(delta: 1 | -1): boolean {
+  const run = isDeck() && !status ? flowRun(screenIdx) : null
+  if (!run) return false
+  const { lines } = flowLines(screens.slice(...run))
+  const next = Math.min(flowMax(lines), Math.max(0, flowTarget + delta * FLOW_STEP))
+  if (next === flowTarget) {
+    if (flowRolling) return true
+    if (delta > 0) goToScreen(run[1])
+    else goToScreen(run[0] - 1, true)
+    return true
+  }
+  flowTarget = next
+  scheduleSave()
+  void flowRoll()
+  return true
+}
+
+/**
+ * Fakes a scroll animation with text upgrades (same two boxes, so no redraw).
+ * Each roll is timed, not counted: it eases out over FLOW_ROLL_MS, and when
+ * BLE is slower than one line per frame it skips lines to finish on time.
+ * A swipe mid-roll restarts the clock from where the stream is now.
+ */
+async function flowRoll() {
+  if (flowRolling) {
+    rollFrom = flowOffset
+    rollStart = performance.now()
+    return
+  }
+  flowRolling = true
+  rollFrom = flowOffset
+  rollStart = performance.now()
+  try {
+    while (flowOffset !== flowTarget && view === 'deck' && !status) {
+      const run = flowRun(screenIdx)
+      if (!run) break
+      const t = Math.min(1, (performance.now() - rollStart) / FLOW_ROLL_MS)
+      const eased = 1 - (1 - t) ** 3
+      const want = t >= 1 ? flowTarget : rollFrom + Math.round((flowTarget - rollFrom) * eased)
+      if (want === flowOffset) {
+        await new Promise(r => setTimeout(r, 16))
+        continue
+      }
+      flowOffset = want
+      const { starts } = flowLines(screens.slice(...run))
+      screenIdx = run[0] + flowTop(starts, flowOffset)
+      await refreshDeck()
+    }
+  } finally {
+    flowTarget = flowOffset
+    flowRolling = false
   }
 }
 
@@ -315,7 +454,7 @@ async function renderDeck() {
   view = 'deck'
   onScreen = 'other'
   const seq = ++renderSeq
-  const spec = renderScreen(screens[screenIdx], deckContext())
+  const spec = currentSpec()
   mirror = spec
   companion.update()
 
@@ -375,9 +514,8 @@ async function renderDeck() {
  */
 async function refreshDeck() {
   if (view !== 'deck' || status) return
-  const current = screens[screenIdx]
   const before = mirror
-  const spec = renderScreen(current, deckContext())
+  const spec = currentSpec()
   const sameBoxes =
     spec.texts.length === before.texts.length &&
     spec.images.length === before.images.length &&
@@ -407,7 +545,7 @@ function stepList(delta: 1 | -1): boolean {
   const sel = selected.get(screenIdx) ?? 0
   const next = sel + delta
   if (next < 0) {
-    goToScreen(screenIdx - 1)
+    goToScreen(screenIdx - 1, true)
     return true
   }
   if (next >= s.items.length) {
@@ -632,9 +770,9 @@ async function renderList(next: View, title: string, items: MenuItem[]) {
 }
 
 // ── Navigation ──────────────────────────────────────────────────────────────
-function goToScreen(index: number) {
+function goToScreen(index: number, fromEnd = false) {
   if (!doc || status || index < 0 || index >= screens.length) return
-  screenIdx = index
+  enterScreen(index, fromEnd)
   scheduleSave()
   renderDeck().catch(console.error)
 }
@@ -648,8 +786,8 @@ function goTo(index: number) {
 function step(delta: 1 | -1) {
   if (loading && !status) return
   if (isManga() && !status) return mangaStep(delta)
-  if (stepList(delta)) return
-  goToScreen(screenIdx + delta)
+  if (stepList(delta) || flowStep(delta)) return
+  goToScreen(screenIdx + delta, delta < 0)
 }
 
 /** Tap: open the selected list item, otherwise the menu. */
@@ -684,6 +822,14 @@ function openMenu() {
       },
     })
   }
+  items.push({ label: 'Voice search', run: startVoice })
+  items.push({
+    label: handsFree ? `Hands-free "${WAKE_PHRASE}": on` : `Hands-free "${WAKE_PHRASE}": off`,
+    run: () => {
+      setHandsFree(!handsFree)
+      openMenu()
+    },
+  })
   const prev = history[history.length - 1]
   if (prev) {
     items.push({
@@ -722,6 +868,278 @@ function openRecent() {
   renderList('recent', 'Recent pages', [back, ...items]).catch(console.error)
 }
 
+// ── Voice ───────────────────────────────────────────────────────────────────
+// Hands-free (like "Hey Even"): the mic stays on and the start of each utterance
+// is checked for the wake phrase. "Hey Search" pops up the card, then the next
+// thing said is the question (two steps, like "Hey Even").
+// Voice search in the menu does the same without the wake phrase.
+// While capturing: tap sends early, swipe cancels, a pause ends it. The server
+// transcribes the command and owns what happens next.
+// Both ways in use the same card; voice search by hand also shows the gestures,
+// since the user started it with a tap and may want to send early.
+const VOICE_HINT = 'Tap: try again   Swipe: back'
+const LISTEN_HINT = 'Listening...   Tap: send   Swipe: cancel'
+/** How often the audio so far is re-sent for a live transcript. */
+const PARTIAL_MS = 1200
+/** A hands-free result stays on the glasses this long, then the page comes back. */
+const WAKE_RESULT_MS = 6000
+const MAX_HEARD = 40
+
+// Voice card, like a system assistant popping up: a name line, a bordered
+// card with the greeting or your words, and a status line. Built once, then the
+// card and status are swapped in place as the words come in.
+const GREETING = 'Hey! What can I find for you?'
+
+function assistantSpec(card: string, status: string): PageSpec {
+  return {
+    texts: [
+      { x: 32, y: 14, w: 512, h: 36, text: `◉ ${ASSISTANT}`, pad: 4 },
+      { x: 32, y: 56, w: 512, h: 160, text: card, pad: 16, border: 2, color: 13, radius: 12 },
+      { x: 32, y: 226, w: 512, h: 36, text: status, pad: 4 },
+    ],
+    images: [],
+  }
+}
+
+async function renderAssistant(card: string, status: string) {
+  view = 'voice'
+  renderSeq++
+  const spec = assistantSpec(card, status)
+  mirror = spec
+  companion.update()
+  if (onScreen !== 'assistant') {
+    onScreen = 'assistant'
+    stopLoading()
+    // A full-screen capture layer under the card takes the taps and swipes.
+    const capture = new TextContainerProperty({
+      xPosition: 0, yPosition: 0, width: 576, height: 288,
+      borderWidth: 0, borderColor: 0, paddingLength: 0,
+      containerID: 1, containerName: 'capture',
+      content: ' ',
+      isEventCapture: 1,
+    })
+    const texts = [capture, ...spec.texts.map((t, i) => textContainer(t, i + 2))]
+    await enqueue(() =>
+      bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum: texts.length, textObject: texts })),
+    )
+    return
+  }
+  for (const id of [3, 4]) {
+    const content = spec.texts[id - 2].text || ' '
+    await enqueue(() => bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: `t${id}`, content })))
+  }
+}
+
+/** Processing: the page-loading spinner, titled with the command, until the page opens. */
+function renderThinking(command: string, step: string) {
+  if (loading?.host === ASSISTANT) return loadingProgress(step, command)
+  loading = { title: command, host: ASSISTANT, step, frame: 0 }
+  return renderLoading()
+}
+
+function logHeard(line: HeardLine) {
+  if (!line.text) return
+  heard = [line, ...heard].slice(0, MAX_HEARD)
+  companion.update()
+}
+
+/** Turns the glasses mic on or off, skipping calls that wouldn't change anything. */
+async function setMic(on: boolean): Promise<boolean> {
+  if (on === micOn) return true
+  micOn = on
+  const ok = await enqueue(() => bridge.audioControl(on, AudioInputSource.Glasses)).catch(() => false)
+  if (!ok && on) micOn = false
+  return ok
+}
+
+/** Starts waiting for the wake phrase when hands-free is on and nothing else is listening. */
+async function armWake() {
+  if (!handsFree || recorder || wake) return
+  wake = new WakeListener(
+    utterance => void checkWake(utterance),
+    utterance => void transcribeAmbient(utterance),
+  )
+  if (view === 'reader') void renderReader()
+  companion.update()
+  if (!(await setMic(true))) {
+    wake = null
+    voiceUi = { phase: 'error', text: "Couldn't turn on the glasses microphone." }
+    companion.update()
+  }
+}
+
+function disarmWake() {
+  if (!wake) return
+  wake = null
+  if (view === 'reader') void renderReader()
+}
+
+function setHandsFree(on: boolean) {
+  handsFree = on
+  void enqueue(() => bridge.setLocalStorage(HANDS_FREE_KEY, on ? '1' : '0')).catch(() => {})
+  if (on) void armWake()
+  else {
+    disarmWake()
+    if (!recorder) void setMic(false)
+    companion.update()
+  }
+}
+
+/** Sends the start of an ambient utterance to see whether it opens with the wake phrase. */
+async function checkWake(utterance: Uint8Array[]) {
+  const listener = wake
+  const pcm = concat(utterance)
+  const result = sendVoice(pcm, 'check').catch(err => {
+    if (wake === listener) {
+      voiceUi = { phase: 'idle', text: '', note: err instanceof Error ? err.message : String(err) }
+      companion.update()
+    }
+    return null
+  })
+  const check: { result: typeof result; bytes: number; line?: HeardLine } = { result, bytes: pcm.length }
+  wakeChecks.set(utterance, check)
+  const res = await result
+  if (res && !res.wake && res.transcript) {
+    // Show the start right away; transcribeAmbient fills in the rest when the sentence ends.
+    check.line = { text: res.transcript, pending: true }
+    logHeard(check.line)
+  }
+  if (!listener || !res?.wake || wake !== listener || recorder) return
+  wake = null
+  void capture(wakeSeed(listener, utterance), true)
+}
+
+/**
+ * Audio the question capture starts from. Words in the wake sentence itself are
+ * not the question; but the check takes a moment, so anything said since it
+ * ended is kept. If the user is still talking in that same breath, the whole
+ * sentence is kept and the server strips everything up to "Hey Search".
+ */
+function wakeSeed(listener: WakeListener, utterance: Uint8Array[]): Uint8Array[] {
+  const live = listener.current
+  return live === utterance ? utterance.slice() : live.slice()
+}
+
+/**
+ * Puts a finished ambient utterance on the phone's transcript (wake commands log
+ * themselves). The wake check only hears the start, so a slow "Hey... Search",
+ * or one later in a sentence, is caught here from the whole sentence instead.
+ */
+async function transcribeAmbient(utterance: Uint8Array[]) {
+  const listener = wake
+  const check = wakeChecks.get(utterance)
+  const res = await check?.result
+  if (!check || !res || res.wake) return
+  const pcm = concat(utterance)
+  // The check only covered the start; transcribe the whole thing for the phone.
+  const full = pcm.length > check.bytes ? await sendVoice(pcm, 'check').catch(() => null) : null
+  if (full?.wake && listener && wake === listener && !recorder) {
+    wake = null
+    void capture(wakeSeed(listener, utterance), true)
+  }
+  const text = full?.transcript || res.transcript
+  if (check.line) {
+    check.line.text = text
+    check.line.pending = false
+    companion.update()
+  } else logHeard({ text })
+}
+
+/** Voice search from the menu, phone or a tap on the voice screen: capture without the wake phrase. */
+function startVoice() {
+  if (recorder) return
+  wake = null
+  void capture([], false)
+}
+
+async function capture(seed: Uint8Array[], fromWake: boolean) {
+  const seq = ++voiceSeq
+  const rec = (recorder = new VoiceRecorder(reason => void stopVoice(reason !== 'no-speech'), seed))
+  wakeCapture = fromWake
+  voiceUi = { phase: 'listening', text: '' }
+  await renderAssistant(GREETING, fromWake ? 'Listening...' : LISTEN_HINT)
+  if (await setMic(true)) {
+    if (seq === voiceSeq) void livePreview(rec, seq)
+  } else if (seq === voiceSeq) {
+    recorder = null
+    voiceUi = { phase: 'error', text: "Couldn't turn on the glasses microphone." }
+    await renderAssistant("Couldn't turn on the microphone.", VOICE_HINT)
+  }
+}
+
+/** While listening, re-transcribes the audio so far so the words show up as they're spoken. */
+async function livePreview(rec: VoiceRecorder, seq: number) {
+  let sentMs = 0
+  while (seq === voiceSeq) {
+    await new Promise(r => setTimeout(r, PARTIAL_MS))
+    if (seq !== voiceSeq) return
+    if (!rec.hasSpeech || rec.durationMs === sentMs) continue
+    sentMs = rec.durationMs
+    try {
+      const { command } = await sendVoice(rec.pcm(), 'partial')
+      if (seq !== voiceSeq || !command) continue
+      voiceUi = { phase: 'listening', text: command }
+      await renderAssistant(`"${command}"`, wakeCapture ? 'Listening...' : LISTEN_HINT)
+    } catch (err) {
+      if (seq !== voiceSeq) return
+      voiceUi = { ...voiceUi, note: err instanceof Error ? err.message : String(err) }
+      companion.update()
+    }
+  }
+}
+
+async function stopVoice(send: boolean) {
+  const rec = recorder
+  if (!rec) return
+  recorder = null
+  const seq = ++voiceSeq
+  // Hands-free keeps the mic on and goes back to waiting for the wake phrase.
+  if (handsFree) void armWake()
+  else void setMic(false)
+  if (!send) {
+    voiceUi = { phase: 'idle', text: '' }
+    return void showContent()
+  }
+  const quiet = wakeCapture
+  // Hands-free results fade back to the page, like a notification.
+  const fadeLater = () =>
+    quiet && setTimeout(() => seq === voiceSeq && view === 'voice' && !recorder && void showContent(), WAKE_RESULT_MS)
+  const fail = async (message: string, detail = message) => {
+    voiceUi = { phase: 'error', text: detail }
+    if (loading?.host === ASSISTANT) stopLoading()
+    await renderAssistant(message, quiet ? `Say "${WAKE_PHRASE}" to try again` : VOICE_HINT)
+    fadeLater()
+  }
+  if (!rec.hasSpeech) {
+    voiceUi = { phase: 'error', text: "Didn't hear anything. Is the mic on?" }
+    if (quiet) return void showContent()
+    return void renderAssistant("Sorry, I didn't hear anything.", VOICE_HINT)
+  }
+  voiceUi = { phase: 'sending', text: voiceUi.text }
+  void renderThinking(voiceUi.text || '...', 'Got it')
+  try {
+    const { command } = await sendVoice(rec.pcm())
+    if (seq !== voiceSeq) return
+    report({ voice: rec.durationMs, chars: command.length })
+    if (!command) return void fail("Sorry, I didn't catch that.", "Couldn't make that out.")
+    logHeard({ text: command, command: true })
+    voiceUi = { phase: 'searching', text: command }
+    void renderThinking(command, 'Searching the web')
+    const searching = loading
+    const page = await searchPage(command)
+    // Dropped if the user opened something else meanwhile.
+    if (seq !== voiceSeq || loading !== searching) return
+    voiceUi = { phase: 'done', text: command, url: page.url }
+    logHeard({ text: page.url, opened: true })
+    // Opens like a typed URL: the spinner carries on, then the page shows.
+    void load(page.url, 0, true)
+  } catch (err) {
+    if (seq !== voiceSeq) return
+    const detail = err instanceof Error ? err.message : String(err)
+    void fail("Sorry, I couldn't find that.", detail)
+  }
+}
+
 // ── Loading ─────────────────────────────────────────────────────────────────
 async function load(url: string, restore = 0, pushHistory = false) {
   const seq = ++loadSeq
@@ -746,7 +1164,8 @@ async function load(url: string, restore = 0, pushHistory = false) {
     stopLoading()
     status = null
     companion.setBusy(false)
-    void showContent()
+    // Don't pull the page over a voice command in progress; it shows when that ends.
+    if (view !== 'voice') void showContent()
   }
 
   let failed: string | null = null
@@ -770,7 +1189,7 @@ async function load(url: string, restore = 0, pushHistory = false) {
         screens.push(...event.screens)
         if (shown) void refreshDeck()
         else if (screens.length > restore) {
-          screenIdx = restore
+          enterScreen(restore)
           reveal()
         }
       } else if ('replace' in event) {
@@ -788,7 +1207,7 @@ async function load(url: string, restore = 0, pushHistory = false) {
       mangaStrip = mangaFromEnd ? -1 : 0
       mangaStrips = 0
     } else if (!shown) {
-      screenIdx = Math.max(0, Math.min(restore, screens.length - 1))
+      enterScreen(Math.max(0, Math.min(restore, screens.length - 1)))
     }
     scheduleSave()
   } catch (err) {
@@ -833,6 +1252,8 @@ async function restore() {
     recent = JSON.parse((await enqueue(() => bridge.getLocalStorage(RECENT_KEY))) || '[]')
     const saved = JSON.parse((await enqueue(() => bridge.getLocalStorage(STATE_KEY))) || 'null')
     if ((await enqueue(() => bridge.getLocalStorage(MANGA_STYLE_KEY)).catch(() => '')) === 'lines') mangaStyle = 'lines'
+    if ((await enqueue(() => bridge.getLocalStorage(HANDS_FREE_KEY)).catch(() => '')) === '0') handsFree = false
+    void armWake()
     companion.update()
     // Deep link: index.html?open=<page> opens straight into a page.
     // (Not ?url= — Vite reserves that query for asset imports.)
@@ -855,6 +1276,17 @@ function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeLis
 
 let cleanedUp = false
 const unsubscribe = bridge.onEvenHubEvent(event => {
+  if (event.audioEvent) {
+    const pcm = event.audioEvent.audioPcm
+    if (recorder) {
+      recorder.push(pcm)
+      if (recorder) companion.voiceLevel(recorder.level, recorder.durationMs)
+    } else if (wake) {
+      wake.push(pcm)
+      companion.voiceLevel(wake.level)
+    }
+    return
+  }
   const sysType = eventTypeOf(event.sysEvent)
   const textType = eventTypeOf(event.textEvent)
   const listType = eventTypeOf(event.listEvent)
@@ -865,14 +1297,33 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
     return
   }
   if (sysType === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
+    // The WebView may be suspended in the background; don't leave the mic on.
+    void stopVoice(false)
+    disarmWake()
+    void setMic(false)
     void flushSave()
     return
   }
   if (sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
+    void armWake()
     return
   }
   if (sysType === OsEventTypeList.SYSTEM_EXIT_EVENT || sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
     cleanup()
+    return
+  }
+
+  if (view === 'voice') {
+    if (textType === OsEventTypeList.SCROLL_TOP_EVENT || textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
+      if (recorder) void stopVoice(false)
+      else {
+        voiceSeq++ // drops a search still in flight
+        void showContent()
+      }
+    } else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
+      if (recorder) void stopVoice(true)
+      else startVoice()
+    }
     return
   }
 
@@ -892,6 +1343,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
 function cleanup() {
   if (cleanedUp) return
   cleanedUp = true
+  if (micOn) void bridge.audioControl(false)
   void flushSave()
   unsubscribe()
 }
@@ -906,8 +1358,13 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
     spec: mirror,
     position: isManga()
       ? `Page ${mangaPage + 1} / ${doc!.manga!.pages}${mangaStrips > 1 ? ` · ${mangaStrip + 1}/${mangaStrips}` : ''}`
-      : isDeck() ? deckContext().position : '',
+      : isDeck() ? `${screenIdx + 1} / ${screens.length}${deckLoading ? '+' : ''}` : '',
     kind: isDeck() ? doc?.deck?.kind : undefined,
+    voice: voiceUi,
+    handsFree,
+    listening: !!wake,
+    wakePhrase: WAKE_PHRASE,
+    heard,
   }),
   onLoad: url => void load(url),
   onStep: delta => {
@@ -917,6 +1374,11 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
   onSelect: () => {
     if (isContentView()) select()
   },
+  onVoice: () => {
+    if (recorder) void stopVoice(true)
+    else startVoice()
+  },
+  onHandsFree: setHandsFree,
 })
 
 companion.update()
