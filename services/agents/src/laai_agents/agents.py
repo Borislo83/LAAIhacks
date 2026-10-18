@@ -1,4 +1,4 @@
-"""The three uAgents: price comparison, competitor alternatives, reviews.
+"""The specialist uAgents: shopping research, YouTube, news and messaging.
 
 Each agent speaks a typed request/response protocol (agent-to-agent), a REST
 endpoint (for the orchestrator over plain HTTP) and the Agent Chat Protocol
@@ -15,6 +15,8 @@ from .chat import build_chat_protocol
 from .models import (
     AlternativesRequest,
     AlternativesResponse,
+    NewsRequest,
+    NewsResponse,
     PriceCompareRequest,
     PriceCompareResponse,
     ReviewsRequest,
@@ -29,6 +31,7 @@ ALTERNATIVES_SEED = os.getenv("ALTERNATIVES_AGENT_SEED", "laai alternatives agen
 REVIEWS_SEED = os.getenv("REVIEWS_AGENT_SEED", "laai reviews agent dev seed")
 YOUTUBE_SEED = os.getenv("YOUTUBE_AGENT_SEED", "laai youtube agent dev seed")
 MESSENGER_SEED = os.getenv("MESSENGER_AGENT_SEED", "laai messenger agent dev seed")
+NEWS_SEED = os.getenv("NEWS_AGENT_SEED", "laai news agent dev seed")
 
 
 def make_agent(name: str, seed: str, port: int | None = None) -> Agent:
@@ -58,11 +61,13 @@ def build_specialist(
     handler: Callable[[Model], Awaitable[Model]],
     port: int | None = None,
     chat_request: Callable[[str], Model] | None = None,
+    chat_reply: Callable[[Model], str] | None = None,
 ) -> Agent:
     """One specialist: typed protocol, REST endpoint and chat, all served by `handler`.
 
     Chat extracts a product name by default; `chat_request` builds the request from the
-    raw message text instead.
+    raw message text instead. Chat replies with the response's `summary` unless
+    `chat_reply` formats the response.
     """
     agent = make_agent(name, seed, port)
     proto = Protocol(name=request_type.__name__.removesuffix("Request"), version="0.1.0")
@@ -79,7 +84,8 @@ def build_specialist(
 
     async def answer(ctx: Context, text: str) -> str:
         request = chat_request(text) if chat_request else request_type(product=text)
-        return (await handler(request)).summary
+        result = await handler(request)
+        return chat_reply(result) if chat_reply else result.summary
 
     agent.include(proto, publish_manifest=True)
     agent.include(
@@ -137,6 +143,22 @@ def build_youtube_agent(port: int | None = None) -> Agent:
         find_video,
         port,
         chat_request=lambda text: YouTubeRequest(query=text[:300]),
+    )
+
+
+def build_news_agent(port: int | None = None) -> Agent:
+    from . import news
+
+    return build_specialist(
+        "laai-news",
+        NEWS_SEED,
+        "/news",
+        NewsRequest,
+        NewsResponse,
+        news.summarize_news,
+        port,
+        chat_request=lambda text: NewsRequest(query=text[:300]),
+        chat_reply=news.chat_reply,
     )
 
 

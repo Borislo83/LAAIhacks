@@ -132,3 +132,29 @@ class YouTubeResponse(Model):
     summary: str
     error: str | None = None
     data_source: str | None = None
+
+
+class NewsRequest(Model):
+    query: str = Field(min_length=1, max_length=300)
+    max_sources: int = Field(default=8, ge=3, le=12)
+    progress_id: str | None = Field(default=None, min_length=32, max_length=64)
+
+
+class NewsSource(Model):
+    title: str
+    url: str
+    publisher: str
+    published_at: str | None = None
+
+
+class NewsResponse(Model):
+    query: str
+    headline: str | None = None
+    # 2-4 plain sentences, at most 600 characters, drawn only from the sources.
+    summary: str | None = None
+    image_url: str | None = None
+    image_alt: str | None = None
+    image_source_url: str | None = None
+    # Most relevant first.
+    sources: list[NewsSource] = Field(default_factory=list, max_items=8)
+    error: str | None = None

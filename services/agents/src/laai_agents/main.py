@@ -16,6 +16,7 @@ from . import llm
 from .agents import (
     build_alternatives_agent,
     build_messenger_agent,
+    build_news_agent,
     build_price_agent,
     build_reviews_agent,
     build_youtube_agent,
@@ -28,6 +29,7 @@ BUILDERS = {
     "reviews": build_reviews_agent,
     "youtube": build_youtube_agent,
     "messenger": build_messenger_agent,
+    "news": build_news_agent,
     "buyer": build_buyer_agent,
 }
 
