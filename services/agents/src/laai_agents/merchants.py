@@ -18,10 +18,13 @@ from statistics import median
 from urllib.parse import urljoin, urlsplit
 
 import aiohttp
-from lxml import html
+from lxml import etree, html
 
 from . import net
 from .models import Offer, Source
+
+# lxml's parser errors ("Document is empty") are not ValueErrors.
+MALFORMED = (ValueError, etree.LxmlError)
 
 # Major retailers and brand stores. Listing here raises trust; it never gates a fetch.
 TRUSTED_STORES = {
@@ -311,5 +314,5 @@ async def fetch_offers(url: str, product: str) -> list[Offer]:
     page = await fetch_page(url)
     try:
         return parse_offers(page, url, product) if page else []
-    except ValueError:  # malformed markup
+    except MALFORMED:
         return []
