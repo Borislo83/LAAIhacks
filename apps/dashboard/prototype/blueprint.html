@@ -499,7 +499,7 @@ function pinCopy(){
   copyRest = copies.map((c,i)=>{
     if(i === 0) return c.getBoundingClientRect().top + scrollY;
     const top = innerHeight - c.offsetHeight - 40;
-    if(i < 7){
+    if(i < 7 && top >= 0){
       // sheets change when a section's top crosses mid-screen, so the copy pins at that moment
       sections[i].style.cssText = `align-items:flex-start;padding-top:${Math.max(0, top - innerHeight/2)}px;padding-bottom:0`;
       c.style.position = "sticky"; c.style.top = top+"px";
@@ -538,7 +538,7 @@ function layout(){
   const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false);
   camera.left = -VIEW*w/h/2; camera.right = VIEW*w/h/2; camera.top = VIEW/2; camera.bottom = -VIEW/2;
   camera.updateProjectionMatrix();
-  narrow = w < 760;
+  narrow = matchMedia("(max-width:760px)").matches;
   pinCopy();
   copyRight = Math.max(...copies.map(c=>c.getBoundingClientRect().right));
   if(!narrow){   // the scrim ends just past the copy instead of at a fixed width
