@@ -199,6 +199,10 @@ class NewsStory(Model):
     image_url: str | None = None
     # How many outlets in the results covered this story: a rough importance signal.
     coverage: int = 1
+    # Newsletter paragraph written from the full text of the articles read for it.
+    body: str = ""
+    # The outlets whose article text the paragraph was drawn from.
+    read_from: list[str] = Field(default_factory=list, max_items=3)
 
 
 class NewsResponse(Model):

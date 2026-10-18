@@ -197,7 +197,8 @@ details.sources .chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;ma
 .story h4{margin:0;font:500 15px/21px var(--sans);overflow-wrap:anywhere}
 .story h4 a{color:var(--ink);text-decoration:none}
 .story h4 a:hover{text-decoration:underline}
-.story p{margin:0;font-size:13px;line-height:20px;color:var(--ink);overflow-wrap:anywhere}
+.story p{margin:0;font-size:14px;line-height:22px;color:var(--ink);overflow-wrap:anywhere}
+.story-read{font-size:11px;color:var(--muted);font-style:italic}
 .story img{width:96px;height:72px;object-fit:cover;border-radius:8px;flex-shrink:0;background:#ECECE8}
 .news{display:grid;grid-template-columns:minmax(0,40%) minmax(0,1fr);gap:14px 18px;align-items:start;max-width:720px}
 .news-img{position:relative;margin:0;aspect-ratio:4/3;border-radius:10px;overflow:hidden;background:#ECECE8;border:1px solid var(--hair)}
@@ -529,7 +530,11 @@ const VIEW={
         const u=httpsUrl(s.url),img=httpsUrl(s.image_url),ago=relTime(s.published_at);
         const meta=[esc(s.publisher||(u?u.hostname.replace(/^www\./,""):"")),ago&&`<time datetime="${esc(s.published_at)}">${esc(ago)}</time>`,s.coverage>1&&`${Number(s.coverage)} outlets`].filter(Boolean).join(" · ");
         const head=u?`<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${esc(s.headline)}</a>`:esc(s.headline);
-        return `<li class="story"><div class="story-text"><span class="story-sec">${esc(s.section||"")}</span><h4>${head}</h4>${s.summary?`<p>${esc(s.summary)}</p>`:""}<span class="news-meta">${meta}</span></div>${img?`<img src="${esc(img.href)}" alt="" width="96" height="72" loading="lazy" referrerpolicy="no-referrer">`:""}</li>`}).join("");
+        // Newsletter paragraph from the full articles; the lead line when none could be read.
+        const text=s.body||s.summary;
+        const read=(s.read_from||[]).length?`<span class="story-read">Summarized from ${s.read_from.map(esc).join(" and ")}</span>`:"";
+        const fallback=!text&&u?`<p class="muted">Full story at <a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">${esc(s.publisher||u.hostname)}</a>.</p>`:"";
+        return `<li class="story"><div class="story-text"><span class="story-sec">${esc(s.section||"")}</span><h4>${head}</h4>${text?`<p>${esc(text)}</p>`:fallback}<span class="news-meta">${meta}</span>${read}</div>${img?`<img src="${esc(img.href)}" alt="" width="96" height="72" loading="lazy" referrerpolicy="no-referrer">`:""}</li>`}).join("");
       return {lens:lens("NEWS BRIEF",d.headline||"News brief",`${d.stories.length} stories · glance down`),
         body:`<div class="brief"><h3>${esc(d.headline||"News brief")}</h3><ol class="stories">${rows}</ol></div>`};
     }

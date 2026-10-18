@@ -205,7 +205,11 @@ async def alternatives(req):
         ),
         return_exceptions=True,
     )
-    if isinstance(found, BaseException):
+    if isinstance(found, SearchUnavailable):
+        # The category search only adds source links; the candidates are checked on their own.
+        found = ([], {"data_source": "unavailable", "sources": [],
+                      "notice": "Category search unavailable; each candidate was checked directly."})
+    elif isinstance(found, BaseException):
         raise found
     sources, meta = found
     report("comparing", f"Comparing {len(results)} candidates against the budget")
