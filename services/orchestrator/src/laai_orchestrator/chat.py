@@ -564,10 +564,13 @@ MESSAGE_FIELDS = (
 MESSAGE_BRIEF = ("summary", "recipient_masked", "text", "error")
 
 
-async def prepare_message(request: str, config: Config, http: httpx.AsyncClient, emit=None):
-    """Ask the iMessage agent for a draft. Sending is only ever POST /v1/messages/send."""
+async def prepare_message(
+    request: str, config: Config, http: httpx.AsyncClient, emit=None, to_default=False
+):
+    """Ask the iMessage agent for a draft. Sending is only ever POST /v1/messages/send.
+    `to_default`: from the glasses, the draft always goes to the default contact."""
     started = time.perf_counter()
-    payload = {"request": request}
+    payload = {"request": request, **({"to_default": True} if to_default else {})}
     if emit:
         emit(
             {
@@ -592,6 +595,35 @@ async def prepare_message(request: str, config: Config, http: httpx.AsyncClient,
         error=answer.get("error") if isinstance(answer.get("error"), str) else None,
         ms=round((time.perf_counter() - started) * 1000),
     )
+
+
+async def message_from_glasses(request: str, config: Config, http: httpx.AsyncClient, emit=None):
+    """A message asked for on the glasses: drafted to the default contact and sent at once
+    (the spoken request is the go-ahead). A draft that isn't ready (no text yet, no
+    default contact) comes back as is, so the lens asks for what is missing."""
+    call = await prepare_message(request, config, http, emit, to_default=True)
+    draft = call.result or {}
+    if call.error or not draft.get("draft_id") or not draft.get("text"):
+        return call
+    token = config.imessage_executor_token.get_secret_value()
+    if not token:
+        return call.model_copy(update={"error": "Sending isn't set up (IMESSAGE_EXECUTOR_TOKEN is empty). Nothing was sent."})
+    if emit:
+        emit({"type": "progress", "kind": "message", "stage": "delegated",
+              "message": f"Sending your iMessage to {draft.get('recipient_name') or 'your contact'}"})  # fmt: skip
+    try:
+        response = await http.post(
+            str(config.agents_url).rstrip("/") + "/imessage/send",
+            json={"draft_id": draft["draft_id"], "text": draft["text"], "executor_token": token},
+            timeout=60,
+        )
+        response.raise_for_status()
+        sent = response.json()
+        status, summary = str(sent.get("status")), str(sent.get("summary") or "")[:2000]
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+        status, summary = "failed", "No answer from Messages. Check Messages before trying again."
+    result = {k: v for k, v in draft.items() if k != "draft_id"} | {"status": status, "summary": summary}
+    return call.model_copy(update={"result": result, "error": None if status == "sent" else summary})
 
 
 def _numbers(text: str) -> set[float]:
@@ -674,7 +706,8 @@ NO_DRAFT = (
 
 
 async def chat_with_llm(
-    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, emit=None, preferences=None
+    history: list[ChatMessage], config: Config, http: httpx.AsyncClient, emit=None, preferences=None,
+    to_default=False,
 ) -> ChatReply:
     messages: list[dict[str, Any]] = [
         {
@@ -714,7 +747,8 @@ async def chat_with_llm(
             try:
                 if name == "message_friend":
                     request = MessageRequest.model_validate_json(arguments).request
-                    job = prepare_message(request, config, http, emit)
+                    job = (message_from_glasses(request, config, http, emit) if to_default
+                           else prepare_message(request, config, http, emit))
                 elif name == "control_spotify":
                     args = grounded_spotify(
                         SpotifyArgs.model_validate_json(arguments), history[-1].content
@@ -1004,6 +1038,16 @@ NOT_A_NAME = {
 def _is_message_request(text: str) -> bool:
     # A capitalized name keeps "tell me about..." and "text scale" out of messaging.
     if re.search(r"\bimessage\b", text, re.IGNORECASE):
+        return True
+    # No name: "send a message saying I'm on my way", "text: running late" (it goes to the
+    # default contact, shown on the draft before anything is sent).
+    if re.match(
+        r"(?:(?:hey|hi|ok|okay|yo)[\s,!]+)?(?:please\s+|can you\s+|could you\s+)?"
+        r"(?:send\s+(?:an?\s+)?(?:quick\s+)?(?:text|message|msg)|text|message)\s*"
+        r"(?:[:,]|saying\b|that\s+says\b|that\b)",
+        text,
+        re.IGNORECASE,
+    ):
         return True
     verb = re.match(
         r"(?:(?:hey|hi|ok|okay|yo)[\s,!]+)?(?:please\s+|can you\s+|could you\s+)?"
@@ -1426,12 +1470,15 @@ async def chat(
         return ChatReply(reply="OK, nothing will be sent.", calls=[], source="rules")
     # Only a plain reply is the message; another request ("find the song...") runs normally.
     if awaiting and not _is_message_request(text) and not _other_request(text):
-        call = await prepare_message(f"text {awaiting[1]} {text}", config, http, emit)
+        request = f"text {awaiting[1]} {text}"
+        call = await (message_from_glasses(request, config, http, emit) if act_on_laptop
+                      else prepare_message(request, config, http, emit))
         return rules_reply([call])
     # A message ask goes to the messenger agent before any shopping rule sees it
     # ("send Jonathan a message about the cheaper AirPods" is a message, not a search).
     if _is_message_request(text) and not re.search(CART_REQUEST, text, re.IGNORECASE):
-        return rules_reply([await prepare_message(text, config, http, emit)])
+        return rules_reply([await (message_from_glasses(text, config, http, emit) if act_on_laptop
+                                   else prepare_message(text, config, http, emit))])
     if act_on_laptop and (done := await on_laptop(text, history, config, http, emit)):
         return done
     normalized = re.sub(r"[^a-z ]", "", text.lower()).replace("kart", "cart").strip()
@@ -1547,7 +1594,8 @@ async def chat(
             )
     if config.asi_one_api_key.get_secret_value():
         try:
-            return await chat_with_llm(history, config, http, emit, preferences)
+            return await (chat_with_llm(history, config, http, emit, preferences, to_default=True) if act_on_laptop
+                          else chat_with_llm(history, config, http, emit, preferences))
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
             pass
     return await chat_with_rules(history, config, http, emit, preferences)

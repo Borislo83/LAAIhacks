@@ -30,6 +30,7 @@ import { ActionPopup, POPUP_TAP_GRACE_MS, popupAllowed } from './lensos/action-p
 import { AgentCard, askAgents, compareSpec, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
 import { matchRoute } from '../shared/routes'
+import { displayCommand } from '../shared/display'
 import { capabilityCommand, isRecommendationsCommand, STRIP_HEADING, type RecommendationBatch, type RecommendationContext, type RecommendedAction } from '../shared/recommendations'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ const MAX_HISTORY = 10
 
 type View =
   | 'reader' | 'deck' | 'manga' | 'menu' | 'contents' | 'links' | 'recent' | 'bookmarks'
-  | 'actions' | 'recommendations' | 'recommendation-layout' | 'voice' | 'action-popup'
+  | 'actions' | 'recommendations' | 'recommendation-layout' | 'voice' | 'action-popup' | 'hidden'
 interface Recent {
   url: string
   title: string
@@ -321,6 +322,13 @@ function showContent() {
 async function renderReader() {
   view = 'reader'
   await showText(bodyText(), footerText())
+}
+
+/** A blank lens until a tap, swipe or "Hey Focal, show the display"; the wake phrase
+ *  still listens. Popups wait while it is hidden. */
+async function hideDisplay() {
+  await showText('', '')
+  view = 'hidden'
 }
 
 /** Body + footer text on the reader layout, shared by the reader and voice screens. */
@@ -985,6 +993,7 @@ function openMenu() {
   if (bookmarks.length) items.push({ label: `Bookmarks (${bookmarks.length})`, run: openBookmarks })
   if (recent.length) items.push({ label: `Recent pages (${recent.length})`, run: openRecent })
   if (backend.state.connected) items.push({ label: 'Agent ▶', run: openAgentMenu })
+  items.push({ label: 'Hide display', run: () => void hideDisplay() })
   items.push({ label: 'Settings ▶', run: openSettings })
   items.push({ label: 'Exit', run: () => void bridge.shutDownPageContainer(1) })
   renderList('menu', doc ? `Menu · ${doc.site}` : 'Menu', items).catch(console.error)
@@ -1390,6 +1399,15 @@ async function stopVoice(send: boolean) {
     if (!command) return void fail("Sorry, I didn't catch that.", "Couldn't make that out.")
     logHeard({ text: command, command: true })
     // Hardcoded routes ("open the AirPods page on Apple") go straight to a known page.
+    // "Hide the display" blanks the lens; "show the display" brings it back.
+    const display = displayCommand(command)
+    if (display) {
+      voiceUi = { phase: 'done', text: command }
+      stopLoading()
+      if (display === 'hide') await hideDisplay()
+      else await showContent()
+      return
+    }
     // YouTube and Spotify open on the laptop; a product page opens there and on the glasses.
     const route = matchRoute(command)
     if (route) {
@@ -1742,6 +1760,13 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   const textType = eventTypeOf(event.textEvent)
   const listType = eventTypeOf(event.listEvent)
 
+  // Hidden: any tap, double-tap or swipe brings the display back.
+  if (view === 'hidden') {
+    const gestures = [OsEventTypeList.CLICK_EVENT, OsEventTypeList.DOUBLE_CLICK_EVENT,
+      OsEventTypeList.SCROLL_TOP_EVENT, OsEventTypeList.SCROLL_BOTTOM_EVENT]
+    if ([sysType, textType, listType].some(t => t !== null && gestures.includes(t))) void showContent()
+    return
+  }
   if ([sysType, textType, listType].includes(OsEventTypeList.DOUBLE_CLICK_EVENT)) {
     if (view === 'recommendations') { companion.closeRecommendations(); return }
     if (view === 'actions') { actionBack(); return }
@@ -1808,7 +1833,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
 
 /** A native glasses list (menu, contents, links...) is on screen. */
 function isListView() {
-  return !isContentView() && view !== 'actions' && view !== 'recommendations' && view !== 'voice' && view !== 'action-popup'
+  return !isContentView() && view !== 'actions' && view !== 'recommendations' && view !== 'voice' && view !== 'action-popup' && view !== 'hidden'
 }
 
 function cleanup() {

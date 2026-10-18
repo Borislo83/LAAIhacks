@@ -77,3 +77,45 @@ def test_other_requests_are_left_to_chat(calls):
     assert run("add it to my cart") is None
     assert run("compare prices for AirPods Pro 3") is None
     assert calls == []
+
+
+def test_a_glasses_message_is_drafted_to_the_default_and_sent(monkeypatch):
+    from types import SimpleNamespace
+
+    from pydantic import SecretStr
+
+    seen = {}
+
+    async def prepare_message(request, config, http, emit=None, to_default=False):
+        seen["to_default"] = to_default
+        return AgentCall(kind="message", payload={}, ms=0,
+                         result={"draft_id": "d" * 32, "recipient_name": "Legend Yang", "text": "On my way."})
+
+    class Http:
+        async def post(self, url, json, timeout):
+            seen["sent"] = (url, json["draft_id"], json["text"])
+            return SimpleNamespace(raise_for_status=lambda: None,
+                                   json=lambda: {"status": "sent", "summary": "Sent your iMessage to Legend Yang."})
+
+    monkeypatch.setattr(chat_mod, "prepare_message", prepare_message)
+    config = SimpleNamespace(imessage_executor_token=SecretStr("t"), agents_url="http://agents")
+    call = asyncio.run(chat_mod.message_from_glasses("text I'm on my way", config, Http()))
+    assert seen["to_default"] is True
+    assert seen["sent"] == ("http://agents/imessage/send", "d" * 32, "On my way.")
+    assert call.result["status"] == "sent" and "draft_id" not in call.result and call.error is None
+
+
+def test_an_unfinished_glasses_draft_is_not_sent(monkeypatch):
+    from types import SimpleNamespace
+
+    async def prepare_message(request, config, http, emit=None, to_default=False):
+        return AgentCall(kind="message", payload={}, ms=0,
+                         result={"recipient_name": "Legend Yang", "summary": "What would you like to say to Legend Yang?"})
+
+    class Http:
+        async def post(self, *a, **k):
+            raise AssertionError("must not send")
+
+    monkeypatch.setattr(chat_mod, "prepare_message", prepare_message)
+    call = asyncio.run(chat_mod.message_from_glasses("text Legend", SimpleNamespace(), Http()))
+    assert "draft_id" not in call.result
