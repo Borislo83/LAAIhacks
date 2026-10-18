@@ -11,7 +11,7 @@
       "name": "network",
       "desc": "Connects to your laptop running Focal (through your own HTTPS address) to read pages, run the agents and carry out actions you ask for.",
       "whitelist": [
-        "https://your-condense-server.example.com"
+        "https://prix-lean-technique-gps.trycloudflare.com"
       ]
     },
     {
