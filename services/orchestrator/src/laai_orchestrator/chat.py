@@ -689,7 +689,10 @@ def laptop_honest(reply: str, calls: list[AgentCall]) -> str:
         if laptop and "on your laptop" not in reply.lower():
             return _line(call) + (" " + reply if reply else "")
     # A message is drafted or sent only through the messenger: never take the model's word.
-    if not any(c.kind == "message" for c in calls) and MESSAGE_CLAIM.search(reply):
+    # Words quoted from an agent's own result ("SpaceX sent the probe to Mars" in a news
+    # brief) are the source talking, not a claim that a message went out.
+    claim = None if any(c.kind == "message" for c in calls) else MESSAGE_CLAIM.search(reply)
+    if claim and not any(claim[0].lower() in json.dumps(c.result or {}).lower() for c in calls):
         return NO_DRAFT
     return reply
 
