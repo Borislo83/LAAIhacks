@@ -138,6 +138,22 @@ body[data-density="compact"] .agent{padding:10px}
 .mini .bd{display:grid;grid-template-columns:1fr 240px;gap:14px;padding:12px 14px}
 .mini .list{margin-top:0}
 .mini .pc{margin-top:0}
+.sources{grid-column:1/-1;border-top:1px solid var(--hair);margin-top:4px;padding-top:8px;font-size:12px;color:var(--muted)}
+.sources summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:4px 0;user-select:none}
+.sources summary::-webkit-details-marker{display:none}
+.sources summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+.sources[open] summary::before{transform:rotate(45deg)}
+.sources summary:hover{color:var(--ink)}
+.sources .when{margin-left:auto;font-family:var(--mono);font-size:11px}
+.sources .note{margin:6px 0 4px;line-height:18px}
+.sources ul{list-style:none;margin:0;padding:0}
+.sources li{border-top:1px solid var(--hair)}
+.sources li a{display:flex;justify-content:space-between;gap:12px;padding:7px 0;color:var(--ink);text-decoration:none}
+.sources li a span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sources li a:hover span:first-child{text-decoration:underline}
+.sources .host{font-family:var(--mono);font-size:11px;color:var(--muted);flex-shrink:0}
+.warn-note{grid-column:1/-1;font-size:12px;color:var(--warn)}
+.mini .hd .tag{font-weight:400;color:var(--muted)}
 .composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--hair)}
 .composer input{flex:1;min-width:0;font:15px var(--sans);border:1px solid var(--hair);border-radius:8px;padding:11px 12px;background:var(--paper);color:var(--ink)}
 .starters{display:flex;gap:8px;flex-wrap:wrap;padding:0 20px 4px}
@@ -193,7 +209,6 @@ body[data-density="compact"] .agent{padding:10px}
       </div>
       <div class="row"><button class="btn dark" id="sign-in" type="submit">Sign in</button><button class="btn" id="sign-up" type="submit">Create account</button></div>
     </form>
-    </details>
     <p id="auth-message" role="status" style="margin-top:12px;font-size:14px"></p>
     <button type="button" class="linkbtn" id="auth-retry" hidden>Reconnect</button>
   </section>
@@ -321,19 +336,33 @@ function renderUsage(){
 $("#reset").onclick=()=>{usage=freshUsage();store.set("focal.usage",usage);renderUsage()};
 
 /* calls */
+const ATTEMPTS=3;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// Retry only when the orchestrator couldn't be reached at all. A stream that started, or any
+// cart action, is never resent, so nothing can be added to a cart twice.
+async function withRetry(run,onRetry,allowed=true){
+  for(let i=0;;i++){
+    try{return await run()}
+    catch(e){if(!allowed||!e.retryable||i>=ATTEMPTS-1)throw e;onRetry?.(i+2);await sleep(1000*(i+1))}
+  }
+}
 async function call(k,body,onProgress){
   const t0=performance.now();
   try{
     const path=k==="buyer"?"/v1/buyer/prepare/stream":`/v1/agents/${k}/stream`;
-    const result=await readEvents(path,body,onProgress||(()=>{}));
+    const progress=onProgress||(()=>{});
+    const result=await withRetry(()=>readEvents(path,body,progress),
+      n=>progress({kind:k,stage:"retrying",message:`Couldn't reach the orchestrator; retrying (${n} of ${ATTEMPTS})`}),k!=="buyer");
     if(result.result?.confirmation_token)activePurchase=result.result.confirmation_token;
-    return {ok:!!result.result&&!result.error,data:result.result,error:result.error,ms:performance.now()-t0};
-  }catch(e){return {ok:false,error:e.message||String(e),ms:performance.now()-t0}}
+    // A failed web search is still an answer: the agent is reachable.
+    return {ok:!!result.result&&!result.error,reachable:!!result.result,data:result.result,error:result.error,ms:performance.now()-t0};
+  }catch(e){return {ok:false,reachable:false,error:e.message||String(e),ms:performance.now()-t0}}
 }
 function record(k,res){
-  const u=usage.agents[k]; u.calls++; u.ms+=res.ms; if(!res.ok)u.errors++;
+  const u=usage.agents[k]; u.calls++; u.ms+=res.ms; if(!res.ok||res.data?.error)u.errors++;
   store.set("focal.usage",usage); renderUsage();
-  health[k]=res.ok; renderRoster();
+  // A failed web search is a result, not an outage.
+  health[k]=res.reachable??res.ok; renderRoster();
 }
 async function checkAll(){
   KEYS.forEach(k=>delete health[k]); renderRoster();
@@ -359,8 +388,8 @@ const VIEW={
   },
   alternatives(d){
     const a=d.alternatives[0];
-    const rows=d.alternatives.map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.product)} <span class="muted" style="font-size:12px">· ${esc(x.reason)}</span></span><span class="p">${money(x.price)} ${x.rating!=null?`· ${x.rating}★`:""}</span></a>`).join("");
-    return {lens:lens(d.product,a?`Try ${a.product}`:"No candidate established",a?`${money(a.price)} ${a.rating!=null?`· ${a.rating}★`:""} · open source`:"review sources or adjust the budget"),body:rows?`<div class="list">${rows}</div>`:`<p class="muted">${esc(d.summary)}</p>`};
+    const rows=d.alternatives.map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.product)} <span class="muted" style="font-size:12px">· ${esc(x.reason)}</span></span><span class="p">${x.price==null?"price ↗":money(x.price)} ${x.rating!=null?`· ${x.rating}★`:""}</span></a>`).join("");
+    return {lens:lens(d.product,a?`Try ${a.product}`:"No candidate established",a?`${a.price==null?"check price":money(a.price)} ${a.rating!=null?`· ${a.rating}★`:""} · open source`:"review sources or adjust the budget"),body:rows?`<div class="list">${rows}</div>`:`<p class="muted">${esc(d.summary)}</p>`};
   },
   reviews(d){
     const pc=(d.pros.length||d.cons.length)?`<div class="pc"><div><h4>Pros</h4><ul>${d.pros.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div><div><h4>Cons</h4><ul>${d.cons.map(p=>`<li>${esc(p)}</li>`).join("")}</ul></div></div>`:"";
@@ -370,8 +399,13 @@ const VIEW={
 };
 
 function evidence(d){
-  const links=(d.sources||[]).filter(s=>{try{return new URL(s.url).protocol==="https:"}catch{return false}}).slice(0,8).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.title)} ↗</a>`).join("<br>");
-  return `<div class="muted" style="font-size:12px;margin-top:12px">${esc(d.notice||"")}<br>${esc(d.data_source||"")} ${esc(d.fetched_at||"")}<br>${links}</div>`;
+  const seen=new Set();
+  const items=(d.sources||[]).map(s=>{try{const u=new URL(s.url);return u.protocol==="https:"?{s,u}:null}catch{return null}})
+    .filter(x=>x&&!seen.has(x.u.href)&&seen.add(x.u.href)).slice(0,10);
+  if(!items.length&&!d.notice)return "";
+  const when=d.fetched_at?new Date(d.fetched_at).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"}):"";
+  const links=items.map(({s,u})=>`<li><a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer"><span>${esc(s.title.split(/\.\.\.|…/)[0].trim()||u.hostname)}</span><span class="host">${esc(u.hostname.replace(/^www\./,""))} ↗</span></a></li>`).join("");
+  return `<details class="sources"><summary>Sources (${items.length})<span class="when">${esc(d.data_source||"")}${when?" · "+esc(when):""}</span></summary>${d.notice?`<p class="note">${esc(d.notice)}</p>`:""}<ul>${links}</ul></details>`;
 }
 
 function cardShell(k){
@@ -385,7 +419,7 @@ function fill(k,res){
   const box=el.querySelector(".thinking");
   if(!res.ok){box.outerHTML=`<div class="bd" style="grid-template-columns:1fr"><p class="err">Couldn't reach ${esc(AGENTS[k].route)}: ${esc(res.error)}. Is the backend running at ${esc(orch.value)}?</p></div>`;return}
   const v=VIEW[k](res.data);
-  box.outerHTML=`<div class="bd"><div><p class="summary">${esc(res.data.summary)}</p>${v.body}${evidence(res.data)}</div>${v.lens}</div>`;
+  box.outerHTML=`<div class="bd"><div><p class="summary">${esc(res.data.summary)}</p>${v.body}</div>${v.lens}${evidence(res.data)}</div>`;
 }
 
 /* form */
@@ -437,23 +471,30 @@ function bubble(html,cls){
   const el=document.createElement("div"); el.className="msg "+cls; el.innerHTML=html;
   $("#thread").appendChild(el); el.scrollIntoView({block:"end",behavior:"smooth"}); return el;
 }
-function miniCard(c){
+// Also called with one card for live previews, so `all` may be missing.
+function miniCard(c,i,all=[c]){
   const a=AGENTS[c.kind];
-  const head=`<div class="hd">${orb(a.v,22,true)}<b>${a.name}</b><span class="ms">${c.ms} ms</span></div>`;
+  const tag=c.kind==="reviews"&&all.filter(x=>x.kind==="reviews").length>1?` <span class="tag">· ${esc(c.result?.product||c.payload?.product||"")}</span>`:"";
+  const head=`<div class="hd">${orb(a.v,22,true)}<b>${a.name}${tag}</b><span class="ms">${c.ms} ms</span></div>`;
   if(!c.result)return `<div class="mini">${head}<div class="bd" style="grid-template-columns:1fr"><p class="err">${esc(c.error||"No result")}</p></div></div>`;
   const v=VIEW[c.kind](c.result);
-  return `<div class="mini">${head}<div class="bd"><div>${v.body||`<p class="muted" style="font-size:14px">${esc(c.result.summary)}</p>`}</div>${v.lens}${evidence(c.result)}</div></div>`;
+  const warn=c.result.error?`<p class="warn-note">${esc(c.result.error)}. The agent is fine; the free web search refused this request. Try again in a moment.</p>`:"";
+  return `<div class="mini">${head}<div class="bd"><div>${v.body||`<p class="muted" style="font-size:14px">${esc(c.result.summary)}</p>`}</div>${v.lens}${warn}${evidence(c.result)}</div></div>`;
 }
 async function readEvents(path,body,onProgress){
-  const response=await auth.request(path,{method:"POST",headers:{"accept":"text/event-stream"},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)});
-  if(!response.ok)throw new Error(`HTTP ${response.status}`);
+  let response;
+  try{response=await auth.request(path,{method:"POST",headers:{"accept":"text/event-stream"},body:JSON.stringify(body),signal:AbortSignal.timeout(180000)})}
+  // Only a network failure ("Failed to fetch") is worth retrying, not sign-in or timeouts.
+  catch(e){throw Object.assign(e instanceof Error?e:new Error(String(e)),{retryable:e instanceof TypeError})}
+  if(!response.ok)throw Object.assign(new Error(`HTTP ${response.status}`),{retryable:response.status>=502&&response.status<=504});
   if(!response.body)throw new Error("Streaming is unavailable in this browser");
   const reader=response.body.getReader(),decoder=new TextDecoder();let buffer="",result=null;
   function consume(frame){
     const raw=frame.split("\n").filter(line=>line.startsWith("data:")).map(line=>line.slice(5).trimStart()).join("\n");
     if(!raw)return;
     const event=JSON.parse(raw);
-    if(event.type==="progress")onProgress(event);
+    // A display problem in a progress update must never cancel the research itself.
+    if(event.type==="progress"){try{onProgress(event)}catch(err){console.error("progress update failed",err)}}
     if(event.type==="error")throw new Error(event.message);
     if(event.type==="result")result=event.data;
   }
@@ -491,10 +532,12 @@ $("#chat-form").onsubmit=async e=>{
   const progress=makeProgress(pending.querySelector(".progress-host"));
   progress.update({kind:"coordinator",stage:"connecting",message:"Connecting to the agent workflow"});
   try{
-    const d=await readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update);
+    const cartRelated=!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text);
+    const d=await withRetry(()=>readEvents("/v1/chat/stream",{messages:convo.slice(-20),purchase_confirmation:activePurchase},progress.update),
+      n=>progress.update({kind:"coordinator",stage:"retrying",message:`Couldn't reach the orchestrator; retrying (${n} of ${ATTEMPTS})`}),!cartRelated);
     d.calls.forEach(c=>{if(c.result?.confirmation_token)activePurchase=c.result.confirmation_token;if(c.result?.status==="cart_added")activePurchase=null;progress.update({kind:c.kind,stage:c.error?"failed":"completed",message:c.error||"Agent returned its result"})});
     progress.finish(true);
-    d.calls.forEach(c=>record(c.kind,{ok:!c.error,ms:c.ms}));
+    d.calls.forEach(c=>record(c.kind,{ok:!c.error,reachable:!!c.result,data:c.result,ms:c.ms}));
     convo.push({role:"assistant",content:d.reply||"(no reply)"});
     const via=d.calls.length?`called ${d.calls.map(c=>c.kind).join(", ")} · ${d.source==="buyer"?"Amazon cart workflow":d.source==="coordinator"?"Focal coordinator":d.source==="asi_one"?"ASI:One":"keyword rules"}`:(d.source==="asi_one"?"ASI:One · no agents needed":"keyword rules");
     pending.innerHTML=`${logoOrb()}<div class="body"><p>${esc(d.reply)}</p>${d.calls.map(miniCard).join("")}<span class="via">${esc(via)}</span></div>`;
@@ -502,7 +545,8 @@ $("#chat-form").onsubmit=async e=>{
   }catch(err){
     convo.pop();
     progress.finish(false);
-    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">${esc(err.message)}. No automatic retry was sent.</p></div>`;
+    const tried=err.retryable&&!(!!activePurchase||/\b(buy|purchase|order|cart)\b/i.test(text));
+    pending.innerHTML=`${logoOrb()}<div class="body"><p class="err">${esc(err.message)}. ${tried?`Tried ${ATTEMPTS} times; is the orchestrator running?`:"No automatic retry was sent."}</p></div>`;
     pending.querySelector(".body").append(progress.el);
   }
   pending.scrollIntoView({block:"end",behavior:"smooth"});

@@ -1,5 +1,6 @@
 """Chat orchestration: ASI:One picks which agents to call, then answers from their results."""
 
+import asyncio
 import json
 import re
 import time
@@ -64,6 +65,9 @@ TOOL_KINDS = {
     "find_alternatives": TaskKind.ALTERNATIVES,
     "get_reviews": TaskKind.REVIEWS,
 }
+# Each agent call is tried up to three times before it counts as failed.
+ATTEMPTS = 3
+RETRY_DELAY = 1.0
 FIELDS = {
     TaskKind.PRICE: ("product", "current_store", "current_price"),
     TaskKind.ALTERNATIVES: ("product", "max_price"),
@@ -85,16 +89,33 @@ async def call_agent(
                 "message": "Sending request to specialist",
             }
         )
-    try:
-        # Only an enum can select a route. No URL from chat/LLM data is fetched.
-        response = await agent_request(kind.value, payload, config, http, emit, timeout=90)
-        response.raise_for_status()
-        result = response.json()
-        if not isinstance(result, dict) or not isinstance(result.get("summary"), str):
-            raise TypeError("Invalid agent result")
-        error = result.get("error")
-    except (httpx.HTTPError, ValueError, TypeError):
-        result, error = None, "Agent unavailable or returned an invalid response"
+    result, error = None, "Agent unavailable or returned an invalid response"
+    for attempt in range(ATTEMPTS):
+        if attempt:
+            if emit:
+                emit(
+                    {
+                        "type": "progress",
+                        "kind": kind.value,
+                        "stage": "retrying",
+                        "message": f"No usable answer yet; retrying ({attempt + 1} of {ATTEMPTS})",
+                    }
+                )
+            await asyncio.sleep(RETRY_DELAY * attempt)
+        try:
+            # Only an enum can select a route. No URL from chat/LLM data is fetched.
+            response = await agent_request(kind.value, payload, config, http, emit, timeout=90)
+            response.raise_for_status()
+            answer = response.json()
+            if not isinstance(answer, dict) or not isinstance(answer.get("summary"), str):
+                raise TypeError("Invalid agent result")
+        except httpx.TimeoutException:
+            break  # Retrying a timed-out request would only multiply the wait.
+        except (httpx.HTTPError, ValueError, TypeError):
+            continue
+        result, error = answer, answer.get("error")
+        if not error:
+            break  # A failed web search is retried; a real answer is final.
     ms = round((time.perf_counter() - started) * 1000)
     if emit:
         emit(
@@ -218,12 +239,53 @@ async def chat_with_rules(
     """No LLM: pick agents by keyword and treat the message as the product name."""
     text = history[-1].content
     kinds = [k for k, pattern in KEYWORDS.items() if re.search(pattern, text, re.IGNORECASE)]
+    if kinds and TaskKind.REVIEWS not in kinds:
+        # Any shopping question is worth reviews, even without a review word in it.
+        kinds.append(TaskKind.REVIEWS)
     args = ToolArgs(product=text)
     kinds = kinds or list(TaskKind)
     if preferences:
         kinds = preferred_tasks(kinds, preferences.shopping_priority)
-    calls = [await call_agent(k, args, config, http, emit) for k in kinds]
+    # The agents are independent, so they run at the same time; order is kept.
+    calls = list(await asyncio.gather(*(call_agent(k, args, config, http, emit) for k in kinds)))
     return rules_reply(calls)
+
+
+async def consider(text: str, config: Config, http: httpx.AsyncClient, emit=None) -> dict:
+    """Ask the coordinator, retrying if it can't be reached (it retries specialists itself)."""
+    if emit:
+        emit(
+            {
+                "type": "progress",
+                "kind": "coordinator",
+                "stage": "planning",
+                "message": "Preparing the product consideration workflow",
+            }
+        )
+    for attempt in range(ATTEMPTS):
+        if attempt:
+            if emit:
+                emit(
+                    {
+                        "type": "progress",
+                        "kind": "coordinator",
+                        "stage": "retrying",
+                        "message": f"Coordinator unreachable; retrying ({attempt + 1} of {ATTEMPTS})",
+                    }
+                )
+            await asyncio.sleep(RETRY_DELAY * attempt)
+        try:
+            response = await agent_request(
+                "consider", {"product": text}, config, http, emit, timeout=240
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.TimeoutException:
+            raise
+        except (httpx.HTTPError, ValueError):
+            if attempt == ATTEMPTS - 1:
+                raise
+    raise RuntimeError("unreachable")
 
 
 async def buyer_call(payload, config, http, emit=None, confirmation=None):
@@ -321,25 +383,17 @@ async def chat(
         re.search(pattern, text, re.IGNORECASE) for pattern in (r"price", r"review", r"alternative")
     ):
         try:
-            if emit:
-                emit(
-                    {
-                        "type": "progress",
-                        "kind": "coordinator",
-                        "stage": "planning",
-                        "message": "Preparing the product consideration workflow",
-                    }
-                )
-            response = await agent_request("consider", {"product": text}, config, http, emit)
-            response.raise_for_status()
-            data = response.json()
+            data = await consider(text, config, http, emit)
             calls = []
             for field, kind in (
                 ("price", TaskKind.PRICE),
                 ("reviews", TaskKind.REVIEWS),
                 ("alternatives", TaskKind.ALTERNATIVES),
+                ("alternative_reviews", TaskKind.REVIEWS),
             ):
-                payload = {"product": data["product"]}
+                if field == "alternative_reviews" and not data.get(field):
+                    continue
+                payload = {"product": (data.get(field) or {}).get("product", data["product"])}
                 if kind == TaskKind.ALTERNATIVES:
                     payload["max_price"] = data.get("max_price")
                 calls.append(

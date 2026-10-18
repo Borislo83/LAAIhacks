@@ -410,7 +410,8 @@ def test_chat_ignores_unknown_tools_and_falls_back_without_llm():
         body = {"messages": [{"role": "user", "content": "Sony XM5 price"}]}
         data = client.post("/v1/chat", json=body).json()
     assert data["source"] == "rules"
-    assert [path for path, _ in backend.agent_calls] == ["/price"]
+    # A shopping question always brings reviews along with the matched agent.
+    assert [path for path, _ in backend.agent_calls] == ["/price", "/reviews"]
 
 
 def test_chat_drops_prices_and_stores_the_user_never_said():
@@ -472,3 +473,50 @@ def test_consider_routes_to_fetch_coordinator_and_exposes_partial_failures():
     assert data["calls"][1]["ms"] == 123
     assert data["calls"][2]["payload"]["max_price"] == 300
     assert len(seen) == 1
+
+
+async def test_agent_calls_retry_up_to_three_times(monkeypatch):
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import TaskKind, ToolArgs
+
+    monkeypatch.setattr(chat, "RETRY_DELAY", 0)
+    attempts = []
+
+    def handle(request):
+        attempts.append(request.url.path)
+        if len(attempts) == 1:
+            return httpx.Response(503)
+        if len(attempts) == 2:
+            return httpx.Response(200, json={"summary": "s", "error": "search down"})
+        return httpx.Response(200, json={"summary": "ok"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        call = await chat.call_agent(TaskKind.PRICE, ToolArgs(product="x"), config(), http)
+    assert len(attempts) == 3 and call.result == {"summary": "ok"} and call.error is None
+
+    attempts.clear()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: attempts.append(1) or httpx.Response(503))
+    ) as http:
+        call = await chat.call_agent(TaskKind.PRICE, ToolArgs(product="x"), config(), http)
+    assert len(attempts) == 3 and call.result is None and call.error
+
+
+async def test_rules_add_reviews_to_shopping_questions():
+    from laai_orchestrator import chat
+    from laai_orchestrator.models import ChatMessage
+
+    routes = []
+
+    def handle(request):
+        routes.append(request.url.path.strip("/"))
+        return httpx.Response(200, json={"summary": request.url.path})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        reply = await chat.chat_with_rules(
+            [ChatMessage(role="user", content="I'm on Best Buy looking at AirPods Pro 2. Cheaper anywhere?")],
+            config(),
+            http,
+        )
+    assert sorted(routes) == ["alternatives", "price", "reviews"]
+    assert [c.kind.value for c in reply.calls] == ["price", "alternatives", "reviews"]
