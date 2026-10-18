@@ -60,19 +60,12 @@ canvas#scene{position:fixed;inset:0;z-index:1;display:block;width:100%;height:10
 .studio-link:hover{background:transparent;color:var(--ink)}
 .studio-link:focus-visible{outline:2px solid var(--lens);outline-offset:3px}
 
-/* title block */
-.titleblock{
-  position:fixed;right:14px;bottom:14px;z-index:4;
-  display:grid;grid-template-columns:auto auto;min-width:300px;
-  border:1px solid var(--muted);background:var(--sheet);
-  font:12px/1.35 var(--mono);color:var(--muted);
+/* credits: shown on the landing view only, fades out once you scroll */
+.credits{
+  position:fixed;right:30px;bottom:28px;z-index:4;text-align:right;
+  font:12px/1.5 var(--mono);color:var(--muted);pointer-events:none;
 }
-.titleblock > div{padding:8px 10px;border-top:1px solid var(--grid-major)}
-.titleblock > div:nth-child(-n+2){border-top:0}
-.titleblock > div:nth-child(odd){border-right:1px solid var(--grid-major)}
-.titleblock b{display:block;color:var(--ink);font-weight:400;font-family:var(--sans);font-size:14px}
-.titleblock .name{grid-column:1/-1;border-right:0!important}
-.titleblock .name b{font-family:var(--serif);font-size:22px;line-height:1.1}
+.credits b{display:block;font:400 22px/1.1 var(--serif);color:var(--ink);margin-bottom:2px}
 
 /* scrolling copy */
 main{position:relative;z-index:3;pointer-events:none}
@@ -92,7 +85,7 @@ section:first-child{min-height:100vh}
   .scrim{display:none}
   section{align-items:flex-end;padding:0 22px 140px}
   .copy{max-width:none;background:linear-gradient(transparent,var(--sheet) 22%);padding-top:40px}
-  .titleblock{left:14px;right:14px;min-width:0}
+  .credits{display:none}
   .tag{font-size:10px}
   .tag small{display:none}
 }
@@ -166,12 +159,10 @@ section:first-child{min-height:100vh}
   </section>
 </main>
 
-<aside class="titleblock" aria-live="polite">
-  <div class="name"><b>Focal</b>Even Realities G2 · Fetch.ai Agentverse</div>
-  <div>Sheet<b id="tb-sheet">1 / 7</b></div>
-  <div>Drawing<b id="tb-title">The frame</b></div>
-  <div>Scale<b>1 : 1 glance</b></div>
-  <div>Team<b>LA Hacks 2026</b></div>
+<aside class="credits" id="credits">
+  <b>Focal</b>
+  <div>Even Realities G2 and Fetch.ai Agentverse</div>
+  <div>Team L-JEB</div>
 </aside>
 
 <script type="importmap">
@@ -438,7 +429,6 @@ const K = [
   {t:new THREE.Vector3(-0.4,0.2,5.0), zoom:1.0, az:-0.4, el:0.5},
   {t:new THREE.Vector3(-1.4,0.4,1.6), zoom:0.48, az:-0.4, el:0.58},
 ];
-const titles = ["The frame","On the lens","Orchestrator","Agentverse","Sources","Approval gate","Studio"];
 const ease = x => x<.5 ? 4*x*x*x : 1-Math.pow(-2*x+2,3)/2;
 const clamp = (x,a=0,b=1)=>Math.min(b,Math.max(a,x));
 
@@ -465,8 +455,7 @@ function resize(){
 }
 addEventListener("resize", resize); resize(); readScroll();
 
-const tbSheet = document.getElementById("tb-sheet"), tbTitle = document.getElementById("tb-title");
-let lastSheet = -1;
+const credits = document.getElementById("credits");
 const v = new THREE.Vector3();
 let clock = 0, gateOpen = 0;
 
@@ -536,8 +525,7 @@ function draw(dt){
     l.el.style.left = x+"px"; l.el.style.top = y+"px"; l.el.style.opacity = op;
   }
 
-  const sheet = Math.min(6, Math.floor(s + 0.15));
-  if(sheet !== lastSheet){ lastSheet = sheet; tbSheet.textContent = `${sheet+1} / 7`; tbTitle.textContent = titles[sheet]; }
+  credits.style.opacity = 1 - clamp(s / 0.35);
 
   renderer.render(scene, camera);
 }
