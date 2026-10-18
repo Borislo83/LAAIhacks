@@ -491,18 +491,26 @@ async def call_agent(
 # The verb must start the request, so "Is the Apple Watch worth it? find a youtube review"
 # and "how to start a car youtube" only find a video. "Watch band"/"watch face" are products.
 PLAY_WORDS = (
-    r"^(?:(?:hey|ok|okay|please|pls|can\s+you|could\s+you|would\s+you)\b[\s,]*)*"
+    # An optional greeting with the assistant's name, however speech-to-text spells it
+    # ("Hey, Foko!"), then polite words, then the verb.
+    r"^(?:(?:hey|hi|ok|okay|yo)\b[\s,!.]*(?:[a-z]+\b[\s,!.]+)?)?"
+    r"(?:(?:please|pls|can\s+you|could\s+you|would\s+you)\b[\s,]*)*"
     r"(?:play|put\s+on|listen\s+to|"
-    r"watch(?!\s+(?:bands?|faces?|straps?|series|ultra|se|chargers?|cases?)\b))\b"
+    r"watch(?!\s+(?:bands?|faces?|straps?|series|ultra|se|chargers?|cases?)\b)"
+    # "Open up Blinding Lights on YouTube": opening a video on YouTube means playing it.
+    r"|(?:open(?:\s+up)?|pull\s+up|bring\s+up|start)(?=.*\byou\s*tube\b))\b"
 )
 LINK_WORDS = r"\b(?:links?|urls?|send me|share)\b"
 
 
 def wants_playback(text: str) -> bool:
-    return bool(
-        re.search(PLAY_WORDS, text.strip(), re.IGNORECASE)
-        and not re.search(LINK_WORDS, text, re.IGNORECASE)
-    )
+    """Any sentence asks to play or open a video (a capture can hold several)."""
+    if re.search(LINK_WORDS, text, re.IGNORECASE):
+        return False
+    sentences = [t.strip() for t in re.split(r"(?<=[.!?])\s+", text.strip()) if t.strip()]
+    # "Hey, Foko! Play ..." splits after the greeting; rejoin it with what follows too.
+    candidates = sentences + [" ".join(sentences[i:i + 2]) for i in range(len(sentences) - 1)]
+    return any(re.search(PLAY_WORDS, t, re.IGNORECASE) for t in candidates)
 
 
 async def play_on_laptop(call: AgentCall, config: Config, http: httpx.AsyncClient, emit=None):

@@ -38,3 +38,9 @@ test('ordinary speech does not wake it', () => {
     'hey, call me later',
   ]) assert.equal(parseWake(said).wake, false, said)
 })
+
+test('common mishearings of "Focal" still wake it', () => {
+  for (const said of ['Hey, Foko! Play Blinding Lights on YouTube.', 'Hey, Foco. Open up Blinding Lights on YouTube.', 'Hey Focco, what is playing'])
+    assert.equal(parseWake(said).wake, true, said)
+  assert.equal(parseWake('Hey, Foko! Play Blinding Lights on YouTube.').command, 'Play Blinding Lights on YouTube.')
+})
