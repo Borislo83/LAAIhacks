@@ -159,7 +159,7 @@ VERB = re.compile(
     r"(?:send\s+(?:an?\s+)?(?:imessage|text|message)\s+to|imessage|text|message|tell)\s+(.+)$",
     re.IGNORECASE | re.DOTALL,
 )
-LINK = re.compile(r"^(?:that|saying|says|to say)\b\s*|^[:,\-–]\s*", re.IGNORECASE)
+LINK = re.compile(r"^(?:that|saying|says|to say)\b\s*|^[:,.;!\-–]\s*", re.IGNORECASE)
 
 
 # "Send Jonathan a message "lol"", "shoot Alex a quick text saying I'm late".
@@ -217,6 +217,11 @@ def tidy(text: str) -> str:
 
 
 async def extract(request: str, book: dict[str, str]) -> tuple[str, str] | None:
+    # The pattern keeps the user's exact words; when it names a known contact, trust it
+    # over the model, which has renamed recipients ("Text legend", "Test User").
+    pattern = extract_by_pattern(request, book)
+    if pattern and pattern[1] and resolve(pattern[0], book):
+        return pattern
     answer = await llm.complete(
         "Extract who the user wants to message and the exact message to send. Reply "
         'with JSON only: {"recipient": "<name>", "message": "<text>"}. Do not add, '
@@ -228,11 +233,12 @@ async def extract(request: str, book: dict[str, str]) -> tuple[str, str] | None:
         recipient, body = str(data["recipient"]).strip(), str(data["message"]).strip()
         # The model sometimes keeps the linking word ("that the demo works").
         body = LINK.sub("", body, count=1).strip()
-        if recipient and body:
+        # A recipient the model made up is no better than none.
+        if recipient and body and (resolve(recipient, book) or not pattern):
             return recipient, body
     except (ValueError, KeyError, TypeError):
         pass
-    return extract_by_pattern(request, book)
+    return pattern
 
 
 def _prune() -> None:

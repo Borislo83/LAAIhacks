@@ -465,3 +465,12 @@ async def test_consent_required_maps_to_needs_permission(monkeypatch):
 
     monkeypatch.setattr(imessage, "run_osascript", needs_consent)
     assert (await send(await draft())).status == "needs_permission"
+
+
+async def test_a_known_contact_from_the_pattern_beats_a_renamed_model_recipient(monkeypatch):
+    async def complete(system, user):
+        return json.dumps({"recipient": "Test User", "message": "Hey, I'm testing. Can you confirm?"})
+
+    monkeypatch.setattr(imessage.llm, "complete", complete)
+    result = await draft("Text sam. I'm testing the voice flow.")
+    assert (result.status, result.recipient_name, result.text) == ("ready", "Sam", "I'm testing the voice flow.")
