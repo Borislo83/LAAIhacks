@@ -297,8 +297,15 @@ To expose an individual specialist instead:
 
 Before deploying anywhere public, set your own seeds in `.env`. The seeds fix each agent's address, and the defaults are dev values that are in this repo.
 
-To register the whole team (each agent gets its own Agentverse profile), run the Bureau with
-`AGENTVERSE_MAILBOX=1` and connect every inspector link it prints.
+To register the whole team at once (each agent gets its own Agentverse profile with the
+description and README from `src/laai_agents/agent_profiles/`):
+
+1. Set private `*_AGENT_SEED` values in `.env`. Seeds fix the addresses, so set them first.
+2. Create an API key at agentverse.ai → Profile → API Keys and set `AGENTVERSE_API_KEY`.
+3. Run `uv run laai-register`. It prints each agent's profile URL; use these for the submission's agent list.
+4. Run `AGENTVERSE_MAILBOX=1 uv run laai-agents` and keep it running while judges try the agent.
+
+`uv run laai-register --dry-run` lists the names and addresses without registering anything.
 
 ## ASI:One flow (coordinator)
 
