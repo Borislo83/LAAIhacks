@@ -474,3 +474,12 @@ async def test_a_known_contact_from_the_pattern_beats_a_renamed_model_recipient(
     monkeypatch.setattr(imessage.llm, "complete", complete)
     result = await draft("Text sam. I'm testing the voice flow.")
     assert (result.status, result.recipient_name, result.text) == ("ready", "Sam", "I'm testing the voice flow.")
+
+
+async def test_a_run_of_linking_words_and_punctuation_is_dropped(monkeypatch):
+    async def no_llm(system, user):
+        return None
+
+    monkeypatch.setattr(imessage.llm, "complete", no_llm)
+    result = await draft("Text Sam to say: testing the message screen.")
+    assert (result.status, result.recipient_name, result.text) == ("ready", "Sam", "Testing the message screen.")

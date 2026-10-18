@@ -1088,7 +1088,7 @@ function openRecent() {
 // Both ways in use the same card; voice search by hand also shows the gestures,
 // since the user started it with a tap and may want to send early.
 const VOICE_HINT = 'Tap: try again   Swipe: back'
-const LISTEN_HINT = 'Listening...   Tap: send   Swipe: cancel'
+const LISTEN_HINT = 'Listening...   Tap: done   Swipe: cancel'
 const WAKE_LISTEN_HINT = 'Listening...   Swipe: cancel'
 /** How often the audio so far is re-sent for a live transcript. */
 const PARTIAL_MS = 1200
