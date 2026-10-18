@@ -137,13 +137,15 @@ class GlassesWorkflow:
                 actions_request_id=str(uuid4()),
             )
             expires = (datetime.now(UTC) + timedelta(minutes=30)).isoformat()
+            # The display orders actions by (proposed_at, action_id), and one proposal
+            # shares proposed_at, so the index prefix keeps the G2 menu in this order.
             self.state["actions"] = {
-                "act-" + str(uuid4()): {
+                f"act-{index}-{uuid4()}": {
                     "handler": handler,
                     "page_id": page["page_id"],
                     "expires_at": expires,
                 }
-                for handler in ("compare_prices", "find_reviews")
+                for index, handler in enumerate(("compare_prices", "find_reviews"), 1)
             }
             self.save()
         await self.api(
