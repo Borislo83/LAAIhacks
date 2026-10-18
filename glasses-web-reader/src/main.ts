@@ -13,10 +13,10 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import { pxTruncate } from '@evenrealities/pretext'
 import type { CondensedPage, MangaStrip, Screen } from '../shared/types'
-import { condense, fetchStrip, report, searchPage, sendVoice, type MangaStyle } from './api'
+import { condense, fetchStrip, report, searchPage, sendVoice } from './api'
 import type { VoiceCommand } from '../shared/types'
 import {
-  FLOW_LINES, FLOW_STEP, flowLines, flowSpec, isFlowable, progressBar, renderScreen, screenTitle,
+  FLOW_LINES, FLOW_STEP, flowLines, flowSpec, isFlowable, renderScreen, screenTitle,
   type PageSpec, type TextBox,
 } from './screens'
 import { mountCompanion, type Companion, type HeardLine, type VoiceUi } from './companion'
@@ -45,7 +45,6 @@ const IMAGE_TIMEOUT_MS = 10_000
 const STATE_KEY = 'webreader.v2.state'
 const RECENT_KEY = 'webreader.v1.recent'
 const BOOKMARKS_KEY = 'webreader.v1.bookmarks'
-const MANGA_STYLE_KEY = 'webreader.v1.mangaStyle'
 // Start with the chosen bottom strip, replacing preferences from the layout trial.
 const RECOMMENDATION_LAYOUT_KEY = 'webreader.v2.recommendationLayout'
 const SESSION_KEY = 'webreader.lensos.session'
@@ -117,6 +116,17 @@ let rollStart = 0
 let deckLoading = false
 let loadAbort: AbortController | null = null
 const selected = new Map<number, number>()
+/** The page as it was before the load in progress, put back if that load is cancelled. */
+let beforeLoad: {
+  doc: CondensedPage | null
+  screens: Screen[]
+  screenIdx: number
+  flowOffset: number
+  selected: [number, number][]
+  mangaPage: number
+  mangaStrip: number
+  history: HistoryEntry[]
+} | null = null
 // Manga: position within the chapter. `mangaStrips` is 0 while the current
 // page's strip count is still loading.
 let mangaPage = 0
@@ -129,7 +139,6 @@ const strips = new Map<string, Promise<MangaStrip>>()
 // sent), so a turn only re-sends tiles that changed: blank gutters, page ends
 // and repeated panels cost nothing.
 let shownTiles: (string | undefined)[] = []
-let mangaStyle: MangaStyle = 'natural'
 let status: string | null = null
 let recent: Recent[] = []
 let bookmarks: Bookmark[] = []
@@ -307,7 +316,7 @@ async function showText(body: string, footer: string) {
 
 // Loading screen: capture layer (1), title (2), step (3), spinner image (4).
 // Built once, then the spinner frame and the two text lines are swapped in place.
-const SPINNER_ID = 4
+const SPINNER_ID = 5
 let spinTimes: number[] = []
 
 async function renderLoading() {
@@ -398,6 +407,26 @@ function stopLoading() {
   clearInterval(spinTimer)
 }
 
+/** Swipe, double-tap, the menu or the phone's Back while a page or voice search loads: drop it. */
+function cancelLoading() {
+  if (loading?.host === ASSISTANT) voiceUi = { phase: 'idle', text: '' }
+  voiceSeq++
+  loadSeq++
+  loadAbort?.abort()
+  stopLoading()
+  deckLoading = false
+  if (beforeLoad) {
+    ;({ doc, screens, screenIdx, flowOffset, mangaPage, mangaStrip, history } = beforeLoad)
+    flowTarget = flowOffset
+    mangaStrips = 0
+    selected.clear()
+    for (const [k, v] of beforeLoad.selected) selected.set(k, v)
+    beforeLoad = null
+  }
+  companion.setBusy(false)
+  void showContent()
+}
+
 function textContainer(t: TextBox, id: number) {
   return new TextContainerProperty({
     xPosition: t.x, yPosition: t.y, width: t.w, height: t.h,
@@ -418,7 +447,8 @@ function base64ToBytes(b64: string) {
 
 function deckContext() {
   return {
-    position: progressBar(screenIdx, screens.length),
+    position: `${screenIdx + 1}/${screens.length}`,
+    title: doc?.title ?? '',
     selected: selected.get(screenIdx) ?? 0,
     upcoming: screens.slice(screenIdx + 1).map(s => screenTitle(s)),
   }
@@ -436,8 +466,13 @@ function flowRun(i: number): [number, number] | null {
 
 const flowMax = (lines: string[]) => Math.max(0, lines.length - FLOW_LINES)
 
-/** Index within the run of the section at the top of the window. */
-function flowTop(starts: number[], offset: number) {
+/**
+ * Index within the run of the section the counter shows: the one at the top
+ * of the window, or the last once the stream has scrolled to its end (the
+ * last section is in view but can never reach the top).
+ */
+function flowTop(starts: number[], offset: number, max: number) {
+  if (offset > 0 && offset >= max) return starts.length - 1
   let k = 0
   while (k + 1 < starts.length && starts[k + 1] <= offset) k++
   return k
@@ -450,7 +485,7 @@ function enterScreen(index: number, fromEnd = false) {
   if (!run) return
   const { lines, starts } = flowLines(screens.slice(...run))
   flowOffset = flowTarget = fromEnd ? flowMax(lines) : Math.min(starts[index - run[0]], flowMax(lines))
-  if (fromEnd) screenIdx = run[0] + flowTop(starts, flowOffset)
+  if (fromEnd) screenIdx = run[0] + flowTop(starts, flowOffset, flowMax(lines))
 }
 
 function currentSpec(): PageSpec {
@@ -511,8 +546,8 @@ async function flowRoll() {
         continue
       }
       flowOffset = want
-      const { starts } = flowLines(screens.slice(...run))
-      screenIdx = run[0] + flowTop(starts, flowOffset)
+      const { lines, starts } = flowLines(screens.slice(...run))
+      screenIdx = run[0] + flowTop(starts, flowOffset, flowMax(lines))
       await refreshDeck()
     }
   } finally {
@@ -640,14 +675,13 @@ const TILE_POS = [[0, 0], [288, 0], [0, 144], [288, 144]] as const
 
 function getStrip(pageIndex: number, strip: number): Promise<MangaStrip> {
   const chapter = doc!.manga!.chapterId
-  const style = mangaStyle
-  const key = `${style}:${chapter}:${pageIndex}:${strip}`
+  const key = `${chapter}:${pageIndex}:${strip}`
   let hit = strips.get(key)
   if (!hit) {
-    hit = fetchStrip(chapter, pageIndex, strip, style)
+    hit = fetchStrip(chapter, pageIndex, strip)
     strips.set(key, hit)
     hit.then(
-      r => strips.set(`${style}:${chapter}:${pageIndex}:${r.strip}`, hit!),
+      r => strips.set(`${chapter}:${pageIndex}:${r.strip}`, hit!),
       () => strips.delete(key),
     )
     if (strips.size > 40) strips.delete(strips.keys().next().value!)
@@ -747,7 +781,7 @@ async function showStrip(pageIndex: number, strip: number) {
   }
   await sendTiles()
   report({
-    ev: 'strip', page: pageIndex, strip: r.strip, style: mangaStyle, cancelled: seq !== renderSeq,
+    ev: 'strip', page: pageIndex, strip: r.strip, cancelled: seq !== renderSeq,
     ...timing, total: Math.round(performance.now() - t0),
     pngKB: r.tiles.map(t => Math.round((t.png.length * 3) / 4 / 1024)),
   })
@@ -778,18 +812,7 @@ function mangaMenuItems(): MenuItem[] {
   if (m.prev) items.push({ label: 'Previous chapter', run: () => void load(m.prev!) })
   if (m.pages > 1) items.push({ label: `Go to page (${m.pages})`, run: openPages })
   items.push({ label: 'All chapters', run: () => void load(m.seriesUrl, 0, true) })
-  items.push(
-    mangaStyle === 'natural'
-      ? { label: 'Style: linework (less glare)', run: () => setMangaStyle('lines') }
-      : { label: 'Style: natural tones', run: () => setMangaStyle('natural') },
-  )
   return items
-}
-
-function setMangaStyle(style: MangaStyle) {
-  mangaStyle = style
-  scheduleSave()
-  void showStrip(mangaPage, mangaStrip)
 }
 
 /** Native lists hold 20 rows, so long chapters offer evenly spaced pages. */
@@ -851,11 +874,6 @@ function goToScreen(index: number, fromEnd = false) {
   renderDeck().catch(console.error)
 }
 
-function goTo(index: number) {
-  if (isManga()) void showStrip(index, 0)
-  else goToScreen(index)
-}
-
 /** Swipe: through list items, then onto the next screen once you pass the last one. */
 function step(delta: 1 | -1) {
   if (view === 'recommendations') {
@@ -864,7 +882,7 @@ function step(delta: 1 | -1) {
     return
   }
   if (view === 'actions') { actionCards.get(actionGroup)?.dispatch(delta > 0 ? 'down' : 'up'); return }
-  if (loading && !status) return
+  if (loading && !status) return cancelLoading()
   if (isManga() && !status) return mangaStep(delta)
   if (stepList(delta) || flowStep(delta)) return
   goToScreen(screenIdx + delta, delta < 0)
@@ -896,14 +914,10 @@ function openMenu() {
   const ready = doc && !status && !loading
   if (loading && !status) {
     items.push({ label: `Keep loading ${loading.host}`, run: () => void showContent() })
+    items.push({ label: 'Cancel', run: cancelLoading })
   } else if (ready) {
-    if (glassRecommendations) items.push({ label: 'Recommendations (3)', run: () => { companion.reopenRecommendations() } })
     items.push({ label: 'Resume', run: () => void showContent() })
-    if (recommendationsOn) {
-      items.push({ label: `Recommendation layout: ${RECOMMENDATION_LAYOUTS.find(layout => layout.id === recommendationLayout)!.label}`,
-        run: openRecommendationLayouts })
-    }
-    if (isManga()) items.push(...mangaMenuItems())
+    if (glassRecommendations) items.push({ label: 'Recommendations (3)', run: () => { companion.reopenRecommendations() } })
   } else {
     items.push({
       label: doc ? `Back to ${doc.title}` : 'Back',
@@ -914,28 +928,6 @@ function openMenu() {
     })
   }
   items.push({ label: 'Voice search', run: startVoice })
-  items.push({
-    label: `Recommendations: ${recommendationsOn ? 'on' : 'off'}`,
-    run: () => {
-      setRecommendations(!recommendationsOn)
-      openMenu()
-    },
-  })
-  items.push({
-    label: `Action popups: ${actionPopup.enabled ? 'on' : 'off'}`,
-    run: () => {
-      actionPopup.setEnabled(!actionPopup.enabled)
-      void enqueue(() => bridge.setLocalStorage(ACTION_POPUPS_KEY, actionPopup.enabled ? '1' : '0')).catch(() => {})
-      openMenu()
-    },
-  })
-  items.push({
-    label: handsFree ? `Hands-free "${WAKE_PHRASE}": on` : `Hands-free "${WAKE_PHRASE}": off`,
-    run: () => {
-      setHandsFree(!handsFree)
-      openMenu()
-    },
-  })
   const prev = history[history.length - 1]
   if (prev) {
     items.push({
@@ -946,12 +938,12 @@ function openMenu() {
       },
     })
   }
-  if (ready && doc && !isManga()) {
-    if (screens.length > 1) items.push({ label: `Contents (${screens.length})`, run: openContents })
-    if (doc.links.length) items.push({ label: `Links on page (${doc.links.length})`, run: openLinks })
-    if (position() > 0) items.push({ label: 'Back to start', run: () => goTo(0) })
-  }
   if (ready && doc) {
+    if (isManga()) items.push(...mangaMenuItems())
+    else {
+      if (screens.length > 1) items.push({ label: `Contents (${screens.length})`, run: openContents })
+      if (doc.links.length) items.push({ label: `Links on page (${doc.links.length})`, run: openLinks })
+    }
     items.push({
       label: bookmarkOf(doc.url) ? 'Remove bookmark' : 'Bookmark this page',
       run: () => {
@@ -961,15 +953,45 @@ function openMenu() {
     })
   }
   if (bookmarks.length) items.push({ label: `Bookmarks (${bookmarks.length})`, run: openBookmarks })
-  if (ready && isManga() && position() > 0) items.push({ label: 'Back to first page', run: () => goTo(0) })
   if (recent.length) items.push({ label: `Recent pages (${recent.length})`, run: openRecent })
-  if (backend.state.connected) {
-    items.push({ label: `Saved suggestions (${backend.state.tasks.length})`, run: () => openActions('tasks') })
-    items.push({ label: `Session actions (${backend.state.display?.actions.length ?? 0})`, run: () => openActions('session') })
-    items.push({ label: 'Saved task history', run: () => openActions('history') })
-  }
+  if (backend.state.connected) items.push({ label: 'Agent ▸', run: openAgentMenu })
+  items.push({ label: 'Settings ▸', run: openSettings })
   items.push({ label: 'Exit', run: () => void bridge.shutDownPageContainer(1) })
   renderList('menu', doc ? `Menu · ${doc.site}` : 'Menu', items).catch(console.error)
+}
+
+const backToMenu: MenuItem = { label: '< Back to menu', run: openMenu }
+
+function openSettings() {
+  const items: MenuItem[] = [backToMenu]
+  items.push({
+    label: `Recommendations: ${recommendationsOn ? 'on' : 'off'}`,
+    run: () => {
+      setRecommendations(!recommendationsOn)
+      openSettings()
+    },
+  })
+  if (recommendationsOn) {
+    items.push({ label: `Recommendation layout: ${RECOMMENDATION_LAYOUTS.find(layout => layout.id === recommendationLayout)!.label}`,
+      run: openRecommendationLayouts })
+  }
+  items.push({
+    label: handsFree ? `Hands-free "${WAKE_PHRASE}": on` : `Hands-free "${WAKE_PHRASE}": off`,
+    run: () => {
+      setHandsFree(!handsFree)
+      openSettings()
+    },
+  })
+  renderList('menu', 'Settings', items).catch(console.error)
+}
+
+function openAgentMenu() {
+  renderList('menu', 'Agent', [
+    backToMenu,
+    { label: `Saved suggestions (${backend.state.tasks.length})`, run: () => openActions('tasks') },
+    { label: `Session actions (${backend.state.display?.actions.length ?? 0})`, run: () => openActions('session') },
+    { label: 'Saved task history', run: () => openActions('history') },
+  ]).catch(console.error)
 }
 
 function openContents() {
@@ -984,10 +1006,10 @@ function openRecommendationLayouts() {
     run: () => {
       recommendationLayout = layout.id
       void enqueue(() => bridge.setLocalStorage(RECOMMENDATION_LAYOUT_KEY, layout.id)).catch(console.error)
-      if (!companion.reopenRecommendations()) openMenu()
+      if (!companion.reopenRecommendations()) openSettings()
     },
   }))
-  items.push({ label: '< Back to menu', run: openMenu })
+  items.push({ label: '< Back to settings', run: openSettings })
   void renderList('recommendation-layout', 'Choose recommendation layout', items).catch(console.error)
 }
 
@@ -1048,6 +1070,7 @@ function openRecent() {
 // since the user started it with a tap and may want to send early.
 const VOICE_HINT = 'Tap: try again   Swipe: back'
 const LISTEN_HINT = 'Listening...   Tap: send   Swipe: cancel'
+const WAKE_LISTEN_HINT = 'Listening...   Swipe: cancel'
 /** How often the audio so far is re-sent for a live transcript. */
 const PARTIAL_MS = 1200
 /** A hands-free result stays on the glasses this long, then the page comes back. */
@@ -1258,7 +1281,7 @@ async function capture(seed: Uint8Array[], fromWake: boolean) {
   const rec = (recorder = new VoiceRecorder(reason => void stopVoice(reason !== 'no-speech'), seed))
   wakeCapture = fromWake
   voiceUi = { phase: 'listening', text: '' }
-  await renderAssistant(GREETING, fromWake ? 'Listening...' : LISTEN_HINT)
+  await renderAssistant(GREETING, fromWake ? WAKE_LISTEN_HINT : LISTEN_HINT)
   if (await setMic(true)) {
     if (seq === voiceSeq) void livePreview(rec, seq)
   } else if (seq === voiceSeq) {
@@ -1280,7 +1303,7 @@ async function livePreview(rec: VoiceRecorder, seq: number) {
       const { command } = await sendVoice(rec.pcm(), 'partial')
       if (seq !== voiceSeq || !command) continue
       voiceUi = { phase: 'listening', text: command }
-      await renderAssistant(`"${command}"`, wakeCapture ? 'Listening...' : LISTEN_HINT)
+      await renderAssistant(`"${command}"`, wakeCapture ? WAKE_LISTEN_HINT : LISTEN_HINT)
     } catch (err) {
       if (seq !== voiceSeq) return
       voiceUi = { ...voiceUi, note: err instanceof Error ? err.message : String(err) }
@@ -1451,6 +1474,7 @@ async function confirmDraft(card: AgentCard) {
 // ── Loading ─────────────────────────────────────────────────────────────────
 async function load(url: string, restore = 0, pushHistory = false, fromVoice = false) {
   const seq = ++loadSeq
+  beforeLoad ??= { doc, screens, screenIdx, flowOffset, selected: [...selected], mangaPage, mangaStrip, history }
   companion.resetRecommendations()
   backend.beginPage()
   loadAbort?.abort()
@@ -1471,6 +1495,7 @@ async function load(url: string, restore = 0, pushHistory = false, fromVoice = f
   let shown = false
   const reveal = () => {
     shown = true
+    beforeLoad = null
     stopLoading()
     status = null
     companion.setBusy(false)
@@ -1531,6 +1556,7 @@ async function load(url: string, restore = 0, pushHistory = false, fromVoice = f
     companion.setError(failed)
   } finally {
     if (seq === loadSeq) {
+      beforeLoad = null
       companion.setBusy(false)
       stopLoading()
     }
@@ -1562,7 +1588,6 @@ async function flushSave() {
   await enqueue(() => bridge.setLocalStorage(STATE_KEY, JSON.stringify(state))).catch(() => {})
   await enqueue(() => bridge.setLocalStorage(BOOKMARKS_KEY, JSON.stringify(bookmarks))).catch(() => {})
   await enqueue(() => bridge.setLocalStorage(RECENT_KEY, JSON.stringify(recent))).catch(() => {})
-  await enqueue(() => bridge.setLocalStorage(MANGA_STYLE_KEY, mangaStyle)).catch(() => {})
 }
 
 async function restore() {
@@ -1579,7 +1604,6 @@ async function restore() {
       if (Array.isArray(saved)) bookmarks = saved.filter(b => typeof b?.url === 'string' && typeof b?.title === 'string')
     } catch {}
     const saved = JSON.parse((await enqueue(() => bridge.getLocalStorage(STATE_KEY))) || 'null')
-    if ((await enqueue(() => bridge.getLocalStorage(MANGA_STYLE_KEY)).catch(() => '')) === 'lines') mangaStyle = 'lines'
     const savedLayout = await enqueue(() => bridge.getLocalStorage(RECOMMENDATION_LAYOUT_KEY)).catch(() => '')
     if (RECOMMENDATION_LAYOUTS.some(layout => layout.id === savedLayout)) recommendationLayout = savedLayout as RecommendationLayout
     if ((await enqueue(() => bridge.getLocalStorage(HANDS_FREE_KEY)).catch(() => '')) === '0') handsFree = false
@@ -1627,6 +1651,8 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
     if (view === 'recommendations') { companion.closeRecommendations(); return }
     if (view === 'actions') { actionBack(); return }
     if (view === 'action-popup') { actionPopupGesture('back'); return }
+    if (view === 'voice') { voiceBack(); return }
+    if (loading && !status && isContentView()) { cancelLoading(); return }
     // Don't clean up here: the user may cancel the system dialog.
     bridge.shutDownPageContainer(1)
     return
@@ -1740,6 +1766,7 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
     else if (view === 'recommendations') companion.closeRecommendations()
     else if (view === 'actions') actionBack()
     else if (view === 'action-popup') actionPopupGesture('back')
+    else if (loading && !status && isContentView()) cancelLoading()
     else void showContent()
   },
   onMenu: () => {

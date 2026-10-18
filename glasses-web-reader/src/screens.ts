@@ -38,8 +38,10 @@ export interface PageSpec {
 }
 
 export interface ScreenContext {
-  /** Progress bar, e.g. "━━━───". */
+  /** Page counter, e.g. "2/5". */
   position: string
+  /** Page title, for the bar above flowing text. */
+  title: string
   /** Selected item on list screens. */
   selected: number
   /** Headings of the screens after this one, for "▼ next" hints. */
@@ -135,29 +137,32 @@ function hang(entries: { marker: string; text: string }[], width: number): strin
 
 const fitsOneLine = (text: string, width: number) => measureTextWrap(clean(text), width).lineCount <= 1
 
-/** Title and position in one box, for layouts that need every container. */
+// The screen counter ("2/5") always sits in the top-right corner, so every
+// layout keeps x >= COUNTER_X clear in the top 34px row.
+const COUNTER_X = 492
+const ROW_H = 34
+
+/** Pads `text` with spaces so it ends at the right edge of width `w` (G2 text is left-aligned). */
+const flushRight = (text: string, w: number) =>
+  ' '.repeat(Math.max(0, Math.floor((w - getTextWidth(text)) / getTextWidth(' ')))) + text
+
+const counter = (position: string): TextBox =>
+  box({ x: COUNTER_X, y: 0, w: 576 - COUNTER_X, h: ROW_H, text: '', pad: 3 }, w => flushRight(position, w))
+
+/** Title and counter in one box, for layouts that need every container. */
 const compactHeader = (title: string, position: string): TextBox =>
-  box({ x: 0, y: 0, w: 576, h: 34, text: '', pad: 3 }, w => `${line(title, w - 90)}   ${position}`)
+  box({ x: 0, y: 0, w: 576, h: ROW_H, text: '', pad: 3 }, w => {
+    const left = line(title, w - (576 - COUNTER_X))
+    return left + flushRight(position, w - getTextWidth(left))
+  })
 
-const header = (title: string, position?: string): TextBox[] => {
-  const head = box({ x: 0, y: 0, w: position ? 480 : 576, h: 34, text: '', pad: 3 }, w => line(title, w))
-  return position ? [head, { x: 488, y: 0, w: 88, h: 34, text: position, pad: 3 }] : [head]
-}
+const header = (title: string, position: string): TextBox[] => [
+  box({ x: 0, y: 0, w: COUNTER_X - 4, h: ROW_H, text: '', pad: 3 }, w => line(title, w)),
+  counter(position),
+]
 
-const footer = (text: string, y = 256, position?: string): TextBox =>
-  box({ x: 0, y, w: 576, h: 288 - y, text: '', pad: 2 }, w =>
-    position ? `${line(text, w - 90)}   ${position}` : line(text, w),
-  )
-
-/**
- * Reading progress as a thin bar instead of "2 / 5", so the deck reads as one
- * continuous scroll. Sized to the 88px slot headers and footers keep for it.
- */
-export function progressBar(index: number, total: number, width = 78): string {
-  const cells = Math.max(4, Math.floor(width / Math.max(getTextWidth('━'), getTextWidth('─'))))
-  const filled = Math.max(1, Math.round(((index + 1) / Math.max(1, total)) * cells))
-  return '━'.repeat(filled) + '─'.repeat(cells - filled)
-}
+const footer = (text: string, y = 256): TextBox =>
+  box({ x: 0, y, w: 576, h: 288 - y, text: '', pad: 2 }, w => line(text, w))
 
 const nextHint = (ctx: ScreenContext) =>
   ctx.upcoming.length ? `▼ ${ctx.upcoming.slice(0, 3).join(' · ')}` : ''
@@ -168,9 +173,10 @@ const nextHint = (ctx: ScreenContext) =>
 // scrolling instead of flipping. Screens with images, grids or a selection
 // stay slides.
 
-export const FLOW_LINES = 9
+// Title bar 0..34, 8 lines of stream 34..256, "next" hint 256..288.
+export const FLOW_LINES = 8
 export const FLOW_STEP = 6
-const FLOW_PAD = 4
+const FLOW_PAD = 3
 
 export const isFlowable = (s: Screen) =>
   (s.layout === 'headline' && !s.image) || s.layout === 'points' || s.layout === 'timeline' || s.layout === 'tagged'
@@ -213,8 +219,9 @@ export function flowSpec(lines: string[], offset: number, ctx: ScreenContext): P
   const text = lines.slice(offset, offset + FLOW_LINES).join('\n')
   return {
     texts: [
-      { x: 0, y: 0, w: 576, h: FLOW_LINES * LINE + 2 * FLOW_PAD, text: text || ' ', pad: FLOW_PAD },
-      footer(nextHint(ctx), 256, ctx.position),
+      ...header(ctx.title, ctx.position),
+      { x: 0, y: ROW_H, w: 576, h: FLOW_LINES * LINE + 2 * FLOW_PAD, text: text || ' ', pad: FLOW_PAD },
+      footer(nextHint(ctx)),
     ],
     images: [],
   }
@@ -241,14 +248,15 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
 
   switch (s.layout) {
     case 'headline': {
+      texts.push(counter(ctx.position))
       if (s.image) {
         images.push({ x: 0, y: 0, image: s.image })
-        texts.push(box({ x: 292, y: 0, w: 284, h: 144, text: '' }, w => `${fit(s.headline, w, 4)}\n${line(s.source, w)}`))
+        texts.push(box({ x: 292, y: ROW_H, w: 284, h: 144 - ROW_H, text: '', pad: 1 }, w => `${fit(s.headline, w, 3)}\n${line(s.source, w)}`))
       } else {
-        texts.push(box({ x: 0, y: 0, w: 576, h: 144, text: '', pad: 6 }, w => `${fit(s.headline, w, 3)}\n${line(s.source, w)}`))
+        texts.push(box({ x: 0, y: 0, w: COUNTER_X - 4, h: 144, text: '', pad: 6 }, w => `${fit(s.headline, w, 3)}\n${line(s.source, w)}`))
       }
       texts.push(scrollBox({ x: 0, y: 150, w: 576, lines: 3, pad: 8, border: 2, color: BRIGHT, radius: 10 }, () => clean(s.summary)))
-      texts.push(footer(nextHint(ctx), 256, ctx.position))
+      texts.push(footer(nextHint(ctx)))
       break
     }
 
@@ -275,7 +283,7 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
       const withThumbs = s.items.some(it => it.image)
       const vis = listVisible(s)
       const start = listWindowStart(s, sel)
-      texts.push(compactHeader(s.heading, n ? `${sel + 1}/${n}` : ''))
+      texts.push(compactHeader(n > 1 ? `${s.heading} (${sel + 1} of ${n})` : s.heading, ctx.position))
       const rowH = withThumbs ? 82 : 48
       s.items.slice(start, start + vis).forEach((it, i) => {
         const y = 34 + i * (rowH + 3)
@@ -299,9 +307,10 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
     }
 
     case 'product': {
-      const x = s.image ? 128 : 0
+      const x = s.image ? 212 : 0
       if (s.image) images.push({ x: 0, y: 0, image: s.image })
-      texts.push(box({ x, y: 0, w: 576 - x, h: 62, text: '', pad: 2 }, w => `${line(s.title, w)}\n${line(s.subtitle, w)}`))
+      texts.push(counter(ctx.position))
+      texts.push(box({ x, y: 0, w: COUNTER_X - 4 - x, h: 62, text: '', pad: 2 }, w => `${line(s.title, w)}\n${line(s.subtitle, w)}`))
       const half = Math.floor((576 - x - 8) / 2)
       texts.push(box({ x, y: 64, w: half, h: 80, text: '', pad: 6, border: 2, color: BRIGHT, radius: 10 }, w => `PRICE\n${line(s.price, w)}`))
       texts.push(
@@ -310,7 +319,7 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
         ),
       )
       texts.push(scrollBox({ x: 0, y: 150, w: 576, lines: 3, pad: 4 }, () => clean(s.description)))
-      texts.push(footer(nextHint(ctx), 256, ctx.position))
+      texts.push(footer(nextHint(ctx)))
       break
     }
 
@@ -319,7 +328,8 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
       let tileH: number
       if (s.image) {
         images.push({ x: 0, y: 0, image: s.image })
-        texts.push(scrollBox({ x: 292, y: 0, w: 284, lines: 5, pad: 2 }, () => `${clean(s.heading)}\n${clean(s.intro)}`))
+        texts.push(counter(ctx.position))
+        texts.push(scrollBox({ x: 292, y: ROW_H, w: 284, lines: 4, pad: 2 }, () => `${clean(s.heading)}\n${clean(s.intro)}`))
         // Two wide rows of two, so labels and values each stay on one line.
         tileY = 150
         tileH = 66
@@ -369,7 +379,8 @@ export function renderScreen(s: Screen, ctx: ScreenContext): PageSpec {
     case 'stat': {
       if (s.valueImage) images.push({ x: 0, y: 0, image: s.valueImage })
       else texts.push({ x: 0, y: 0, w: 200, h: 100, text: s.value, pad: 8 })
-      texts.push(scrollBox({ x: 212, y: 4, w: 364, lines: 3 }, w => hang(s.lines.map(l => ({ marker: '', text: l })), w)))
+      texts.push(counter(ctx.position))
+      texts.push(scrollBox({ x: 212, y: 4, w: COUNTER_X - 4 - 212, lines: 3 }, w => hang(s.lines.map(l => ({ marker: '', text: l })), w)))
       let tilesY = 108
       if (s.alert) {
         texts.push(
