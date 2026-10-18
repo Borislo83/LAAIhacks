@@ -1,5 +1,7 @@
 export interface DisplayAction {
   action_id: string; label: string; description: string; status: string; requires_approval: boolean
+  /** The watcher's handler: compare_prices, find_reviews, add_to_amazon_cart... */
+  type?: string
   result?: { message?: string; result_url?: string } | null
   source?: 'task' | 'session'
 }

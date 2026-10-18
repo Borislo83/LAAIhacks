@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { ActionPopup, POPUP_DISMISS, POPUP_HEADING, popupAllowed, popupLabel } from '../src/lensos/action-popup'
+import { ActionPopup, POPUP_DISMISS, popupAllowed, popupLabel } from '../src/lensos/action-popup'
+import { mergeSessionActions, STRIP_HEADING } from '../shared/recommendations'
 import { apiActionCards, type DecisionIntent } from '../src/lensos/action-cards'
 import { glassesRecommendationSpec } from '../src/glasses-recommendations'
 import type { DisplayAction, DisplayState } from '../src/lensos/types'
@@ -11,60 +12,45 @@ const action = (id: string, label: string, status = 'proposed'): DisplayAction =
 const display = (actions: DisplayAction[], revision = 2, pageId = 'page-one', mode = 'actions'): DisplayState => ({
   schema_version: '1.0', session_id: 'session', revision, mode, notice: null,
   page: { page_id: pageId, title: 'Headphones', kind: 'product', summary: [], facts: [] }, actions })
-const compare = action('a-compare', 'Compare prices'), reviews = action('a-reviews', 'Find reviews')
+const compare = { ...action('a-compare', 'Compare prices and alternatives'), type: 'compare_prices' }
+const reviews = { ...action('a-reviews', 'Check independent reviews'), type: 'find_reviews' }
+const cart = { ...action('a-cart', 'Add to Amazon cart'), type: 'add_to_amazon_cart' }
 const base: PageSpec = { texts: [{ x: 0, y: 0, w: 576, h: 252, text: 'Page content' }, { x: 0, y: 252, w: 576, h: 36, text: 'Footer' }], images: [] }
 const reader = { view: 'reader', loading: false, status: false, recording: false, card: false, page: true }
 
-test('new proposed actions pop up once, with a Dismiss item and clipped labels on the bottom strip', () => {
+test('proposed actions never open a second popup; they are options on the one strip', () => {
   const popup = new ActionPopup()
-  assert.equal(popup.update(display([compare, reviews])), true)
-  assert.equal(popup.view?.heading, POPUP_HEADING)
-  assert.deepEqual(popup.labels(), ['Compare prices', 'Find reviews', POPUP_DISMISS])
-  // The same set on the next poll (or a new revision of it) does not pop up again.
-  popup.gesture('back')
-  assert.equal(popup.update(display([compare, reviews], 3)), false)
+  assert.equal(popup.update(display([compare, reviews, cart])), false)
   assert.equal(popup.view, null)
+  assert.deepEqual(popup.labels(), [])
+  const options = mergeSessionActions([], display([compare, reviews, cart]).actions, true)
+  assert.deepEqual(options.map(o => [o.title, o.session_action_id]),
+    [['Compare prices', 'a-compare'], ['Add to Amazon cart', 'a-cart'], ['Review summary', 'a-reviews']])
+  const spec = glassesRecommendationSpec(base, options.map(o => o.title), 0)
+  const text = spec.texts.map(t => t.text).join('\n')
+  assert.match(text, new RegExp(STRIP_HEADING))
+  assert.match(text, /> Compare prices/)
+  assert.match(text, /Add to Amazon cart/)
+  assert.equal((text.match(/Focal can help/g) ?? []).length, 1)
   assert.equal(popupLabel('x'.repeat(80) + '\n'), 'x'.repeat(46))
   assert.ok(new TextEncoder().encode(popupLabel('é'.repeat(80))).length <= 63)
-  const spec = glassesRecommendationSpec(base, ['Compare prices', 'Find reviews'], 0, false, 'bottom', { heading: POPUP_HEADING, close: POPUP_DISMISS })
-  const text = spec.texts.map(t => t.text).join('\n')
-  assert.match(text, /Focal can help/)
-  assert.match(text, /> Compare prices/)
-  assert.match(text, /Dismiss/)
-  assert.ok(spec.texts.length <= 7 && spec.texts.every(b => b.x + b.w <= 576 && b.y + b.h <= 288 && !b.scroll))
 })
 
-test('a newly proposed action pops up again, but not after Dismiss on that page; a new page starts over', () => {
-  const popup = new ActionPopup()
-  popup.update(display([compare]))
-  popup.view = null
-  assert.equal(popup.update(display([compare, reviews], 3)), true)
-  popup.gesture('down'); popup.gesture('down')
-  assert.deepEqual(popup.gesture('tap'), { kind: 'close' }) // Dismiss
-  assert.equal(popup.update(display([compare, reviews, action('a-news', 'Summarize news')], 4)), false)
-  assert.equal(popup.update(display([compare], 5, 'page-two')), true)
-})
-
-test('tapping an action opens review; approval still needs the last review page, confirm and a tap', () => {
-  const popup = new ActionPopup()
-  const state = display([compare, reviews], 7)
-  popup.update(state)
-  popup.gesture('down')
-  const step = popup.gesture('tap')
-  assert.deepEqual(step, { kind: 'review', action_id: 'a-reviews' })
-  assert.equal(popup.view, null)
+test('choosing the cart option opens its review; approval still needs the last review page, confirm and a tap', () => {
+  const state = display([compare, reviews, cart], 7)
+  const option = mergeSessionActions([], state.actions, true).find(o => o.capability === 'add_to_amazon_cart')!
   const sent: DecisionIntent[] = []
   const cards = apiActionCards(intent => sent.push(intent))
   cards.show(state); cards.setEnabled(true); cards.open()
-  cards.focus('a-reviews')
+  cards.focus(option.session_action_id!)
   assert.match(cards.view().title, /Review/)
-  assert.ok(cards.view().lines.join(' ').includes('Find reviews'))
+  assert.ok(cards.view().lines.join(' ').includes('Add to Amazon cart'))
   cards.dispatch('tap') // review -> confirm
   assert.equal(sent.length, 0)
   assert.equal(cards.view().title, 'Confirm action')
   cards.dispatch('tap') // confirm -> approve
   assert.equal(sent.length, 1)
-  assert.deepEqual({ ...sent[0], request_id: '' }, { request_id: '', action_id: 'a-reviews', expected_revision: 7, operation: 'approve' })
+  assert.deepEqual({ ...sent[0], request_id: '' }, { request_id: '', action_id: 'a-cart', expected_revision: 7, operation: 'approve' })
 })
 
 test('popups wait while voice, an answer card, a menu, loading or another popup is on screen', () => {
@@ -74,12 +60,14 @@ test('popups wait while voice, an answer card, a menu, loading or another popup 
     { loading: true }, { recording: true }, { card: true }, { status: true }, { page: false }]) {
     assert.equal(popupAllowed({ ...reader, ...busy }), false, JSON.stringify(busy))
   }
-  // Queued while busy: the popup keeps its list until the reader is back, minus anything no longer proposed.
+  // A result queued while busy waits for the reader.
   const popup = new ActionPopup()
-  popup.update(display([compare, reviews]))
-  popup.update(display([compare, { ...reviews, status: 'invalidated' }], 3))
-  assert.deepEqual(popup.labels(), ['Compare prices', POPUP_DISMISS])
-  popup.update(display([{ ...compare, status: 'invalidated' }], 4))
+  popup.update(display([compare]))
+  popup.expect('a-compare')
+  assert.equal(popup.update(display([{ ...compare, status: 'completed' }], 3, 'page-one', 'result')), true)
+  assert.deepEqual(popup.labels(), ['View: Compare prices and alternatives', POPUP_DISMISS])
+  // A new page drops it.
+  popup.update(display([], 4, 'page-two'))
   assert.equal(popup.view, null)
 })
 
@@ -101,9 +89,11 @@ test('the result of an approved action pops up on its page; the toggle turns pop
   assert.equal(off.view, null)
 })
 
-test('popup cursor stays on its items and Dismiss, and never approves', () => {
+test('result popup cursor stays on its item and Dismiss, and never approves', () => {
   const popup = new ActionPopup()
   popup.update(display([compare]))
+  popup.expect('a-compare')
+  popup.update(display([{ ...compare, status: 'failed' }], 3, 'page-one', 'error'))
   for (let i = 0; i < 5; i++) popup.gesture('down')
   assert.equal(popup.cursor, 1)
   for (let i = 0; i < 5; i++) popup.gesture('up')

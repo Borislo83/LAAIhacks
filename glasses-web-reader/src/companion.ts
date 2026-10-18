@@ -2,9 +2,10 @@ import type { CondensedPage, SiteKind } from '../shared/types'
 import type { PageSpec } from './screens'
 import { mountBackendPanel } from './lensos/panel'
 import type { ActionGroup, BackendState } from './lensos/session'
-import type { Preferences } from './lensos/types'
+import type { DisplayState, Preferences } from './lensos/types'
 import { mountRecommendations, type RecommendationEvents } from './recommendations'
 import { recommendActions } from './api'
+import { shoppingActions, type RecommendationBatch, type RecommendationContext } from '../shared/recommendations'
 import { toContext } from './lensos/page'
 import './recommendations.css'
 
@@ -24,7 +25,7 @@ interface CompanionState {
   kind?: SiteKind
   voice: VoiceUi
   handsFree: boolean
-  /** Claude suggests next steps after each page loads. */
+  /** Focal suggests next steps (its real capabilities) after each page loads. */
   recommendations: boolean
   /** Item labels when the glasses show a list (menu, contents, links...). */
   list: string[] | null
@@ -100,6 +101,8 @@ export interface Companion {
   setError(message: string): void
   resetRecommendations(): void
   recommend(page: CondensedPage): void
+  /** The watcher's session actions for the page on the glasses (null: none / no page). */
+  sessionActions(page: CondensedPage | null, display: DisplayState | null): void
   selectRecommendation(index: number): void
   closeRecommendations(): void
   reopenRecommendations(): boolean
@@ -272,7 +275,7 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
       </section>
       <section>
         <div class="card">
-          <label class="hf" style="margin-bottom:0"><span>Suggest next steps after each page</span><input type="checkbox" id="recs" /></label>
+          <label class="hf" style="margin-bottom:0"><span>Focal can help: suggest next steps after each page</span><input type="checkbox" id="recs" /></label>
         </div>
       </section>
       <section id="backend"></section>
@@ -328,7 +331,17 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
   const vmsg = $<HTMLParagraphElement>('vmsg')
   let listenNote = ''
   const backendPanel = mountBackendPanel($('backend'), opts.backend)
-  const recommendations = mountRecommendations($('recommendations'), recommendActions, opts.recommendations)
+  // Product/purchase pages get the shopping capabilities without a model call.
+  const options = (context: RecommendationContext, signal: AbortSignal): Promise<RecommendationBatch> => {
+    const shopping = shoppingActions(context)
+    return shopping ? Promise.resolve({ source: 'catalog', page: { url: context.url, title: context.title }, actions: shopping })
+      : recommendActions(context, signal)
+  }
+  const recommendations = mountRecommendations($('recommendations'), options, opts.recommendations)
+  const contextOf = (page: CondensedPage): RecommendationContext => {
+    const { url, title, text, product } = toContext(page)
+    return { url, title: title || url, text, ...(page.deck?.kind ? { kind: page.deck.kind } : {}), ...(product ? { product } : {}) }
+  }
 
   const glass = $<HTMLDivElement>('glass')
   const mirror = $<HTMLDivElement>('mirror')
@@ -387,8 +400,12 @@ export function mountCompanion(root: HTMLElement, opts: CompanionOptions): Compa
     reopenRecommendations() { return recommendations.reopen() },
     recommend(page) {
       if (opts.backend.state().preferences?.proactive_enabled === false) return
-      const context = toContext(page)
-      if (context.text.trim()) void recommendations.show({ url: context.url, title: context.title, text: context.text })
+      const context = contextOf(page)
+      if (context.text.trim() || shoppingActions(context)) void recommendations.show(context)
+    },
+    sessionActions(page, display) {
+      if (!page || !display?.page) return recommendations.session(null, [], false)
+      recommendations.session(contextOf(page), display.actions, display.page.kind === 'product')
     },
     update() {
       backendPanel.update()

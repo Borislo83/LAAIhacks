@@ -28,7 +28,7 @@ import { apiActionCards } from './lensos/action-cards'
 import { ActionPopup, POPUP_TAP_GRACE_MS, popupAllowed } from './lensos/action-popup'
 import { AgentCard, askAgents, compareSpec, paginate, sendDraft, type AgentAnswer, type CardGesture } from './lensos/agents'
 import { glassesRecommendationSpec, recommendationCursor, RECOMMENDATION_LAYOUTS, type RecommendationLayout } from './glasses-recommendations'
-import type { RecommendationBatch, RecommendationContext, RecommendedAction } from '../shared/recommendations'
+import { capabilityCommand, STRIP_HEADING, type RecommendationBatch, type RecommendationContext, type RecommendedAction } from '../shared/recommendations'
 
 // ── Layout (576x288) ────────────────────────────────────────────────────────
 // Status:  body 0..252 (9 lines at 27px)  +  footer 252..288 (1 line)
@@ -179,7 +179,7 @@ const wakeChecks = new WeakMap<
 >()
 let glassRecommendations: RecommendationBatch | undefined
 let recommendationsOpen = false
-/** Whether Claude suggests next steps after each page loads. */
+/** Whether the "Focal can help" strip offers next steps after each page loads. */
 let recommendationsOn = true
 let recommendationLayout: RecommendationLayout = 'bottom'
 let recommendationIndex = 0
@@ -189,7 +189,8 @@ let actionGroup: ActionGroup = 'tasks'
 /** An agent answer or iMessage draft on the lens, paged with swipes. */
 let agentCard: AgentCard | null = null
 let agentFade: ReturnType<typeof setTimeout> | undefined
-/** Proposed session actions (and their results) popping up over the reader. */
+/** Results of session actions approved on this page, popping up over the reader. Proposed
+ *  actions are options on the "Focal can help" strip instead (no second popup). */
 const actionPopup = new ActionPopup()
 let actionPopupAt = 0
 let actionPopupShown: object | null = null
@@ -206,7 +207,8 @@ const backend = new BackendSession({
       cards.show(backend.actionDisplay(group))
       cards.setEnabled(backend.state.connected && backend.state.online)
     }
-    // New proposals pop up now if only the page is on screen, else when it's back.
+    // Proposed actions join the one "Focal can help" strip; results pop up on their own.
+    if (recommendationsOn) companion.sessionActions(doc && !loading ? doc : null, backend.state.display)
     if (actionPopup.update(backend.state.display) && popupFree()) void showActionPopup()
     else if (view === 'action-popup' && !actionPopup.view) void showContent()
     companion.update()
@@ -879,7 +881,7 @@ function goToScreen(index: number, fromEnd = false) {
 /** Swipe: through list items, then onto the next screen once you pass the last one. */
 function step(delta: 1 | -1) {
   if (view === 'recommendations') {
-    recommendationIndex = recommendationCursor(recommendationIndex, delta)
+    recommendationIndex = recommendationCursor(recommendationIndex, delta, glassRecommendations?.actions.length ?? 3)
     void renderGlassesRecommendations()
     return
   }
@@ -893,7 +895,7 @@ function step(delta: 1 | -1) {
 /** Tap: open the selected list item, otherwise the menu. */
 function select() {
   if (view === 'recommendations') {
-    if (recommendationIndex === 3) companion.closeRecommendations()
+    if (recommendationIndex >= (glassRecommendations?.actions.length ?? 0)) companion.closeRecommendations()
     else companion.selectRecommendation(recommendationIndex)
     return
   }
@@ -919,7 +921,9 @@ function openMenu() {
     items.push({ label: 'Cancel', run: cancelLoading })
   } else if (ready) {
     items.push({ label: 'Resume', run: () => void showContent() })
-    if (glassRecommendations) items.push({ label: 'Recommendations (3)', run: () => { companion.reopenRecommendations() } })
+    if (glassRecommendations?.actions.length) {
+      items.push({ label: `${STRIP_HEADING} (${glassRecommendations.actions.length})`, run: () => { companion.reopenRecommendations() } })
+    }
   } else {
     items.push({
       label: doc ? `Back to ${doc.title}` : 'Back',
@@ -1395,12 +1399,28 @@ async function stopVoice(send: boolean) {
   }
 }
 
-// A chosen next step runs like a spoken command: the Focal agents first when
-// signed in, otherwise (or when no agent fits) a web search that opens a page.
+// A chosen option runs the capability it names. A watcher session action opens its
+// review → confirm → approve cards (nothing runs without approval; the cart only this
+// way). Otherwise its chat command goes to the Focal agents when signed in, else (or when
+// no agent fits) a web search opens a page. The page summary is the reader's own deck.
 let suggestionSeq = 0
 async function runSuggestion(action: RecommendedAction, context: RecommendationContext) {
   const seq = ++suggestionSeq
-  const command = `${action.instruction}\nPage: ${context.title} (${context.url})`
+  if (action.session_action_id) {
+    // The cards take the lens first, so closing the strip doesn't redraw the page.
+    openActions('session', action.session_action_id)
+    companion.closeRecommendations()
+    return
+  }
+  if (action.capability === 'add_to_amazon_cart') return companion.closeRecommendations()
+  if (action.capability === 'page_summary') {
+    if (isDeck() && !status) { enterScreen(0); scheduleSave() }
+    companion.closeRecommendations()
+    if (isContentView()) void showContent()
+    return
+  }
+  const command = capabilityCommand(action, context)
+  if (!command) return companion.closeRecommendations()
   const client = backend.agents
   // The spinner takes the lens first, so closing the overlay doesn't redraw the page.
   void renderThinking(action.title, client ? 'Asking the agents' : 'Searching the web')
@@ -1414,7 +1434,7 @@ async function runSuggestion(action: RecommendedAction, context: RecommendationC
     }
     void renderThinking(action.title, 'Searching the web')
     const searching = loading
-    const page = await searchPage(`${action.title}: ${context.title}`)
+    const page = await searchPage(command)
     if (seq !== suggestionSeq || loading !== searching) return
     void load(page.url, 0, true, true)
   } catch (err) {
@@ -1817,9 +1837,20 @@ const companion: Companion = mountCompanion(document.querySelector<HTMLDivElemen
       recommendationBase = undefined
       if (isContentView() && !loading && !status) void renderGlassesRecommendations()
     },
+    changed(batch) {
+      // Session actions arrived, ran or expired: same strip, updated in place.
+      if (batch.page.url !== doc?.url || cleanedUp) return
+      glassRecommendations = batch
+      recommendationIndex = Math.min(recommendationIndex, batch.actions.length)
+      if (!batch.actions.length) {
+        recommendationsOpen = false
+        recommendationBase = undefined
+        if (view === 'recommendations') void showContent()
+      } else if (view === 'recommendations') void renderGlassesRecommendations()
+    },
     selected(selection) {
       if (!glassRecommendations) return
-      recommendationIndex = glassRecommendations.actions.findIndex(action => action.id === selection.action.id)
+      recommendationIndex = Math.max(0, glassRecommendations.actions.findIndex(action => action.id === selection.action.id))
       recommendationSelected = true
       void runSuggestion(selection.action, selection.context)
     },
@@ -1855,9 +1886,10 @@ async function renderGlassesRecommendations() {
   const spec = glassesRecommendationSpec(recommendationBase,
     glassRecommendations.actions.map(action => action.title), recommendationIndex, recommendationSelected, recommendationLayout)
   view = 'recommendations'
-  if (!alreadyVisible) return renderPageSpec(spec).catch(console.error)
-  // Swiping only updates the small text panel; do not resend images over BLE.
   const previous = mirror
+  // A changed number of options changes the cells, so that redraws in full.
+  if (!alreadyVisible || previous.texts.length !== spec.texts.length) return renderPageSpec(spec).catch(console.error)
+  // Swiping only updates the small text panel; do not resend images over BLE.
   mirror = spec
   companion.update()
   for (const [index, box] of spec.texts.entries()) {
@@ -1907,7 +1939,7 @@ function openActions(group: ActionGroup, focus?: string) {
 
 /** Only the page is on screen: no voice, answer card, menu, list, loading or other popup. */
 function popupFree() {
-  // Claude's recommendation strip goes first; the popup follows when it closes.
+  // The "Focal can help" strip goes first; a result popup follows when it closes.
   // A strip that just closed still has view === 'recommendations' while the page redraws.
   const shown = glassRecommendations && recommendationsOpen ? 'recommendations'
     : view === 'action-popup' || view === 'recommendations' ? 'reader' : view
