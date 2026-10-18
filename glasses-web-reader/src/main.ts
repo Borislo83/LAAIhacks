@@ -91,7 +91,7 @@ Type or paste a URL in the Even app on your phone. Each site gets screens built 
 Swipe: next / previous
 Tap: open item or menu
 Say "${WAKE_PHRASE}", then your question
-Double-tap: exit`
+Double-tap: menu`
 
 // ── State ───────────────────────────────────────────────────────────────────
 let view: View = 'reader'
@@ -1653,8 +1653,11 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
     if (view === 'action-popup') { actionPopupGesture('back'); return }
     if (view === 'voice') { voiceBack(); return }
     if (loading && !status && isContentView()) { cancelLoading(); return }
-    // Don't clean up here: the user may cancel the system dialog.
-    bridge.shutDownPageContainer(1)
+    // Nothing to back out of: a double-tap never exits or tears down the page (a stray one
+    // left the lens with no event container). Reading opens the menu, which has Exit;
+    // any other list goes back to the page.
+    if (isContentView()) openMenu()
+    else void showContent()
     return
   }
   if (sysType === OsEventTypeList.FOREGROUND_EXIT_EVENT) {
