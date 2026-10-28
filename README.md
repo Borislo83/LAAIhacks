@@ -1,5 +1,7 @@
 # Focal (LAAIhacks)
 
+**[▶ Demo video](https://youtu.be/QMstCAfIiOg)** · **[Devpost](https://devpost.com/software/focal-pi2qfe)** · Winner, Even Realities Smart Glasses Challenge at LA Hacks 2026
+
 Smart glasses that read the web page you're looking at and run Fetch.ai agents to act on it:
 compare prices, summarise reviews, add to an Amazon cart, play YouTube or Spotify, send an
 iMessage, search the web and read the news, all by voice ("Hey Focal, ...") on Even Realities
